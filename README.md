@@ -1,1 +1,149 @@
 # coastal-crawler
+
+Discovery and extraction pipeline for coastal-ecosystem papers.
+
+Papers are discovered from one or more APIs, deduplicated by DOI, and queued for PDF extraction via the `scholarlm` library.
+
+---
+
+## Setup
+
+```bash
+uv sync
+cp .env.example .env
+$EDITOR .env
+alembic upgrade head
+```
+
+---
+
+## Configuring discovery sources
+
+Set `ENABLED_SOURCES` to a comma-separated list of the sources you want to use. Each source has its own required config.
+
+### OpenAlex (default)
+
+Requires an API key for production use. Register at `https://openalex.org/register` to obtain one. Without a key the API still responds but at a lower rate limit.
+
+Filter papers by **topic** — find topic IDs at `https://api.openalex.org/topics` (search by name, copy the `T`-prefixed ID).
+
+```env
+ENABLED_SOURCES=openalex
+OPENALEX_API_KEY=your-key-here
+OPENALEX_TOPIC_IDS=T10022,T10023    # comma-separated T-prefixed IDs
+```
+
+### Semantic Scholar
+
+No API key required, but adding one raises the rate limit from 1 to 100 req/s. Register at `https://www.semanticscholar.org/product/api`.
+
+Filter papers by **keyword query** — the same strings you'd type into the Semantic Scholar search box.
+
+```env
+ENABLED_SOURCES=semantic_scholar
+SEMANTIC_SCHOLAR_API_KEY=           # optional
+SEMANTIC_SCHOLAR_QUERIES=coastal ecosystem,mangrove,salt marsh
+```
+
+### Wiley TDM
+
+API key required. Apply at `https://onlinelibrary.wiley.com/library-info/resources/text-and-data-mining`.
+
+Filter papers by **subject code** and/or **ISSN**. Both are optional — omitting them returns all Wiley content you have TDM access to.
+
+```env
+ENABLED_SOURCES=wiley
+WILEY_API_KEY=your-key-here
+WILEY_SUBJECTS=Earth and Environmental Sciences   # optional
+WILEY_ISSNS=1365-2486,0028-0836                  # optional
+```
+
+### Using multiple sources together
+
+```env
+ENABLED_SOURCES=openalex,semantic_scholar,wiley
+```
+
+All three sources write into the same `papers` table. Papers that appear in more than one source are deduplicated by DOI — only one row is kept.
+
+---
+
+## Running the pipeline
+
+### Discover papers
+
+Queries all enabled sources and inserts new papers with `status='discovered'`. Safe to re-run — duplicates are silently skipped.
+
+```bash
+coastal-crawler discover
+
+# Back-fill from a specific date (overrides the stored watermark for this run):
+coastal-crawler discover --since 2024-01-01
+```
+
+Each source tracks its own watermark, so if one source fails mid-run, the others are unaffected and the failed source resumes from where it left off on the next run.
+
+### Extract papers
+
+Claims a batch of discovered papers, downloads the open-access PDF, runs `scholarlm` extraction, and writes results to the `extractions` table.
+
+```bash
+coastal-crawler extract
+coastal-crawler extract --batch-size 20
+```
+
+Multiple workers can run in parallel safely — each worker uses `SELECT ... FOR UPDATE SKIP LOCKED` so the same paper is never claimed twice.
+
+### Retry failures
+
+Papers that fail extraction are preserved with `status='failed'` and the error message stored. Re-queue them:
+
+```bash
+coastal-crawler requeue-failed
+```
+
+### Running discovery and extraction together
+
+```bash
+coastal-crawler discover && coastal-crawler extract --batch-size 20
+```
+
+Or with a scheduler (example cron — discover daily, extract hourly):
+
+```cron
+0 6 * * *  coastal-crawler discover
+0 * * * *  coastal-crawler extract --batch-size 20
+```
+
+---
+
+## Environment variables
+
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `DATABASE_URL` | yes | — | `postgresql://user:pass@host/dbname` |
+| `BATCH_SIZE` | no | `10` | Papers claimed per extraction run |
+| `ENABLED_SOURCES` | no | `openalex` | Comma-separated: `openalex`, `semantic_scholar`, `wiley` |
+| `OPENALEX_API_KEY` | no | — | API key for higher rate limits (register at openalex.org) |
+| `OPENALEX_TOPIC_IDS` | no | — | Comma-separated topic IDs, e.g. `T10022,T10023` |
+| `SEMANTIC_SCHOLAR_API_KEY` | if using S2 | — | Required for bulk search endpoint |
+| `SEMANTIC_SCHOLAR_QUERY` | no | — | Boolean search query (`+` AND, `\|` OR, `"phrases"`, `*` prefix) |
+| `WILEY_API_KEY` | if using Wiley | — | Required to enable the Wiley source |
+| `WILEY_SUBJECTS` | no | — | Comma-separated subject codes |
+| `WILEY_ISSNS` | no | — | Comma-separated ISSNs to restrict queries |
+
+---
+
+## Development
+
+```bash
+# Run tests (requires a test database)
+TEST_DATABASE_URL=postgresql://user:pass@localhost/crawler_test uv run --with pytest --with pytest-mock pytest
+
+# Type-check
+mypy src/
+
+# Generate a migration after changing models
+alembic revision --autogenerate -m "describe change"
+alembic upgrade head
+```
