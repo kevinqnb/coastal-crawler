@@ -1,4 +1,4 @@
-# coastal-crawler
+# coastal-crawler :octopus:
 
 Discovery and extraction pipeline for coastal-ecosystem papers.
 
@@ -11,7 +11,7 @@ Papers are discovered from one or more APIs, deduplicated by DOI, and queued for
 ```bash
 uv sync
 cp .env.example .env
-$EDITOR .env
+$EDITOR .env # modify the .env file with keys and task specifications
 alembic upgrade head
 ```
 
@@ -131,7 +131,6 @@ Or with a scheduler (example cron — discover daily, extract hourly):
 | `WILEY_API_KEY` | if using Wiley | — | Required to enable the Wiley source |
 | `WILEY_SUBJECTS` | no | — | Comma-separated subject codes |
 | `WILEY_ISSNS` | no | — | Comma-separated ISSNs to restrict queries |
-
 ---
 
 ## Development
