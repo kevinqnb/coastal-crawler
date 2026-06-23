@@ -220,3 +220,6 @@ __marimo__/
 # Claude
 CLAUDE.md
 memory/*
+
+# Experiments
+scripts/out/*

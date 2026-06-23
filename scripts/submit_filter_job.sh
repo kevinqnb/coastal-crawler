@@ -11,13 +11,15 @@
 #
 # Customise the #$ directives below for your cluster.
 #
-#$ -N coastal-filter
-#$ -l h_rt=12:00:00
-#$ -l gpu=1                 # adjust to your cluster's GPU resource flag
-#$ -cwd                     # run from the directory where qsub is called
-#$ -j y                     # merge stdout and stderr
-#$ -o logs/filter_job.log
-#$ -V                       # inherit environment (picks up HF_HOME, etc.)
+#$ -P mcnet
+#$ -l h_rt=2:00:00
+#$ -pe omp 8
+#$ -l gpus=1
+#$ -l gpu_memory=8G
+#$ -l gpu_c=7.0
+#$ -o out/filter_out.txt
+#$ -e out/filter_error.txt
+#$ -m e
 
 set -euo pipefail
 mkdir -p logs
