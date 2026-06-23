@@ -2,7 +2,7 @@
 
 Discovery and extraction pipeline for coastal-ecosystem papers.
 
-Papers are discovered from one or more APIs, deduplicated by DOI, and queued for PDF extraction via the `scholarlm` library.
+Papers are discovered from one or more APIs, deduplicated by DOI, screened for relevance by an LLM abstract filter, and then queued for PDF extraction via the `scholarlm` library.
 
 ---
 
@@ -83,9 +83,22 @@ coastal-crawler discover --since 2024-01-01
 
 Each source tracks its own watermark, so if one source fails mid-run, the others are unaffected and the failed source resumes from where it left off on the next run.
 
+### Filter papers
+
+After discovery, run the LLM relevance filter to classify each paper's abstract as relevant or irrelevant before committing to expensive PDF extraction.
+
+```bash
+coastal-crawler filter
+coastal-crawler filter --batch-size 100
+```
+
+The filter calls an OpenAI-compatible chat endpoint (local vLLM or cloud) with `max_tokens=1` and reads the token logprobs to produce a calibrated confidence score: `p_true / (p_true + p_false)`. This score is stored in the `filter_confidence` column. Papers with no abstract are auto-rejected. Papers where the model fails to emit a boolean token are conservatively rejected and logged as warnings.
+
+Configure the endpoint and criteria prompt in `.env` — see the **Environment variables** table and the example prompt in `.env.example`.
+
 ### Extract papers
 
-Claims a batch of discovered papers, downloads the open-access PDF, runs `scholarlm` extraction, and writes results to the `extractions` table.
+Claims a batch of relevant papers, downloads the open-access PDF, runs `scholarlm` extraction, and writes results to the `extractions` table.
 
 ```bash
 coastal-crawler extract
@@ -96,23 +109,30 @@ Multiple workers can run in parallel safely — each worker uses `SELECT ... FOR
 
 ### Retry failures
 
-Papers that fail extraction are preserved with `status='failed'` and the error message stored. Re-queue them:
+Papers that fail extraction are preserved with `status='failed'` and the error message stored. Re-queue them for extraction retry (the filter result is preserved — they go straight back to `relevant`, not re-filtered):
 
 ```bash
 coastal-crawler requeue-failed
 ```
 
-### Running discovery and extraction together
+To re-run the relevance filter on papers that were previously rejected (e.g. after updating the criteria prompt):
 
 ```bash
-coastal-crawler discover && coastal-crawler extract --batch-size 20
+coastal-crawler requeue-irrelevant
 ```
 
-Or with a scheduler (example cron — discover daily, extract hourly):
+### Running the full pipeline
+
+```bash
+coastal-crawler discover && coastal-crawler filter && coastal-crawler extract --batch-size 20
+```
+
+Or with a scheduler (example cron — discover daily, filter and extract hourly):
 
 ```cron
-0 6 * * *  coastal-crawler discover
-0 * * * *  coastal-crawler extract --batch-size 20
+0 6  * * *  coastal-crawler discover
+0 *  * * *  coastal-crawler filter --batch-size 100
+15 * * * *  coastal-crawler extract --batch-size 20
 ```
 
 ---
@@ -131,6 +151,10 @@ Or with a scheduler (example cron — discover daily, extract hourly):
 | `WILEY_API_KEY` | if using Wiley | — | Required to enable the Wiley source |
 | `WILEY_SUBJECTS` | no | — | Comma-separated subject codes |
 | `WILEY_ISSNS` | no | — | Comma-separated ISSNs to restrict queries |
+| `FILTER_BASE_URL` | no | — | OpenAI-compatible endpoint base URL (e.g. `http://localhost:8000/v1`). Omit to use the OpenAI cloud API. |
+| `FILTER_API_KEY` | if using filter | `EMPTY` | API key for the filter endpoint. Use `EMPTY` for local vLLM. |
+| `FILTER_MODEL` | if using filter | — | Model name/path to serve (e.g. `meta-llama/Llama-3.1-8B-Instruct`) |
+| `FILTER_RELEVANCE_PROMPT` | if using filter | — | System prompt describing inclusion/exclusion criteria. See `.env.example` for a full draft. |
 ---
 
 ## Development

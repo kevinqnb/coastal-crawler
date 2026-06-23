@@ -31,11 +31,22 @@ def discover(
     typer.echo(f"Inserted {count} new paper(s).")
 
 
+@app.command(name="filter")
+def filter_papers(
+    batch_size: int = typer.Option(50, "--batch-size", help="Papers to filter per run."),
+) -> None:
+    """Classify a batch of discovered papers as relevant or irrelevant using an LLM."""
+    from coastal_crawler.relevance_filter import run_filter
+
+    relevant, irrelevant, errors = run_filter(batch_size=batch_size)
+    typer.echo(f"Relevant: {relevant}, irrelevant: {irrelevant}, errors (reset for retry): {errors}.")
+
+
 @app.command()
 def extract(
     batch_size: int = typer.Option(10, "--batch-size", help="Papers to process per run."),
 ) -> None:
-    """Claim and extract a batch of discovered papers."""
+    """Claim and extract a batch of relevant papers."""
     from coastal_crawler.worker import run_worker
 
     extracted, failed = run_worker(batch_size=batch_size)
@@ -55,9 +66,9 @@ def status(
 
         total = sum(counts.values())
         typer.echo(f"\nTotal papers: {total}")
-        for s in ("discovered", "processing", "extracted", "failed"):
+        for s in ("discovered", "filtering", "relevant", "irrelevant", "processing", "extracted", "failed"):
             n = counts.get(s, 0)
-            if n or s in ("discovered", "extracted"):
+            if n or s in ("discovered", "relevant", "extracted"):
                 typer.echo(f"  {s:<12} {n}")
 
         if not papers:
@@ -80,11 +91,22 @@ def status(
 
 @app.command()
 def requeue_failed() -> None:
-    """Reset failed papers back to 'discovered' so they can be retried."""
+    """Reset failed papers back to 'relevant' so extraction is retried (skips re-filter)."""
     from coastal_crawler.worker import requeue_failed as _requeue
 
     count = _requeue()
-    typer.echo(f"Requeued {count} failed paper(s).")
+    typer.echo(f"Requeued {count} failed paper(s) for extraction retry.")
+
+
+@app.command()
+def requeue_irrelevant() -> None:
+    """Reset irrelevant papers back to 'discovered' so they can be re-filtered."""
+    from coastal_crawler.db import store
+    from coastal_crawler.db.engine import get_session
+
+    with get_session() as session:
+        count = store.requeue_irrelevant(session)
+    typer.echo(f"Requeued {count} irrelevant paper(s) for re-filtering.")
 
 
 if __name__ == "__main__":

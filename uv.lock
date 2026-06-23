@@ -274,6 +274,7 @@ source = { editable = "." }
 dependencies = [
     { name = "alembic" },
     { name = "httpx" },
+    { name = "openai" },
     { name = "psycopg2-binary" },
     { name = "pydantic-settings" },
     { name = "scholarlm" },
@@ -294,6 +295,7 @@ requires-dist = [
     { name = "alembic", specifier = ">=1.13" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.10" },
+    { name = "openai", specifier = ">=1.0" },
     { name = "psycopg2-binary", specifier = ">=2.9" },
     { name = "pydantic-settings", specifier = ">=2.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },

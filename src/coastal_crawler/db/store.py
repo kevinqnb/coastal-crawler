@@ -81,8 +81,77 @@ def upsert_papers(records: list[dict[str, Any]], session: Session) -> int:
     return inserted
 
 
+def claim_batch_for_filter(batch_size: int, session: Session) -> list[Paper]:
+    """Atomically claim up to *batch_size* discovered papers for relevance filtering.
+
+    Uses ``SELECT … FOR UPDATE SKIP LOCKED`` so concurrent filter workers never
+    claim the same row.  Claimed papers are set to ``status='filtering'``.
+
+    Returns:
+        List of claimed Paper objects.
+    """
+    stmt = (
+        select(Paper)
+        .where(Paper.status == "discovered")
+        .with_for_update(skip_locked=True)
+        .limit(batch_size)
+    )
+    papers = list(session.scalars(stmt).all())
+    for paper in papers:
+        paper.status = "filtering"
+    session.flush()
+    return papers
+
+
+def mark_relevant(paper_id: int, confidence: float | None, session: Session) -> None:
+    """Flip a filtered paper to ``status='relevant'`` and store the confidence score."""
+    session.execute(
+        update(Paper)
+        .where(Paper.id == paper_id)
+        .values(status="relevant", filter_confidence=confidence)
+    )
+
+
+def mark_irrelevant(paper_id: int, confidence: float | None, session: Session) -> None:
+    """Flip a filtered paper to ``status='irrelevant'`` and store the confidence score."""
+    session.execute(
+        update(Paper)
+        .where(Paper.id == paper_id)
+        .values(status="irrelevant", filter_confidence=confidence)
+    )
+
+
+def reset_to_discovered(paper_id: int, session: Session) -> None:
+    """Reset a paper from ``status='filtering'`` back to ``status='discovered'``.
+
+    Used when the filter API call fails — the paper will be retried on the
+    next filter run rather than being permanently rejected.
+    """
+    session.execute(
+        update(Paper)
+        .where(Paper.id == paper_id)
+        .values(status="discovered")
+    )
+
+
+def requeue_irrelevant(session: Session) -> int:
+    """Reset all ``irrelevant`` papers back to ``discovered`` for re-filtering.
+
+    Clears ``filter_confidence`` so the next run scores them fresh.
+
+    Returns:
+        Count of papers requeued.
+    """
+    result = session.execute(
+        update(Paper)
+        .where(Paper.status == "irrelevant")
+        .values(status="discovered", filter_confidence=None)
+    )
+    return result.rowcount
+
+
 def claim_batch(batch_size: int, session: Session) -> list[Paper]:
-    """Atomically claim up to *batch_size* discovered papers for extraction.
+    """Atomically claim up to *batch_size* relevant papers for extraction.
 
     Uses ``SELECT … FOR UPDATE SKIP LOCKED`` so multiple worker processes can
     call this concurrently without ever claiming the same row.  Claimed papers
@@ -92,11 +161,11 @@ def claim_batch(batch_size: int, session: Session) -> list[Paper]:
 
     Returns:
         List of claimed Paper objects (may be shorter than batch_size if fewer
-        discovered papers exist).
+        relevant papers exist).
     """
     stmt = (
         select(Paper)
-        .where(Paper.status == "discovered")
+        .where(Paper.status == "relevant")
         .with_for_update(skip_locked=True)
         .limit(batch_size)
     )
@@ -126,7 +195,10 @@ def mark_failed(paper_id: int, error: str, session: Session) -> None:
 
 
 def requeue_failed(session: Session) -> int:
-    """Reset all ``failed`` papers back to ``discovered`` for retry.
+    """Reset all ``failed`` papers back to ``relevant`` for extraction retry.
+
+    Resets to 'relevant' (not 'discovered') so papers skip re-filtering —
+    they were already deemed relevant and only failed during PDF extraction.
 
     Returns:
         Count of papers requeued.
@@ -134,7 +206,7 @@ def requeue_failed(session: Session) -> int:
     result = session.execute(
         update(Paper)
         .where(Paper.status == "failed")
-        .values(status="discovered", error=None)
+        .values(status="relevant", error=None)
     )
     return result.rowcount
 

@@ -49,6 +49,7 @@ class Paper(Base):
         DateTime(timezone=True), server_default=func.now()
     )
     extracted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    filter_confidence: Mapped[float | None] = mapped_column(REAL)
     error: Mapped[str | None] = mapped_column(Text)
 
     extractions: Mapped[list[Extraction]] = relationship(

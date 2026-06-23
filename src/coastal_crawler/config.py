@@ -80,6 +80,24 @@ class Settings(BaseSettings):
         description="Boolean search query for Semantic Scholar bulk search",
     )
 
+    # -------------------------------------------------- Abstract filter
+    filter_base_url: str | None = Field(
+        default=None,
+        description="Base URL for the OpenAI-compatible LLM endpoint (e.g. vLLM). None = OpenAI cloud.",
+    )
+    filter_api_key: str = Field(
+        default="EMPTY",
+        description="API key for the filter LLM endpoint. Use 'EMPTY' for local vLLM servers.",
+    )
+    filter_model: str | None = Field(
+        default=None,
+        description="Model name to use for abstract relevance filtering.",
+    )
+    filter_relevance_prompt: str | None = Field(
+        default=None,
+        description="System prompt describing relevance criteria. Model responds true/false.",
+    )
+
     # ------------------------------------------------------- Wiley TDM
     wiley_api_key: str | None = Field(
         default=None,
