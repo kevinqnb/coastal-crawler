@@ -177,6 +177,18 @@ class Settings(BaseSettings):
             return [x.strip() for x in v.split(",") if x.strip()]
         return v
 
+    @field_validator(
+        "filter_max_model_len",
+        "filter_quantization",
+        "filter_sif_path",
+        mode="before",
+    )
+    @classmethod
+    def _empty_str_to_none(cls, v: object) -> object:
+        if v == "":
+            return None
+        return v
+
     @classmethod
     def settings_customise_sources(
         cls,
