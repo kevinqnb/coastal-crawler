@@ -31,21 +31,32 @@ class AbstractFilter:
     """Classifies a paper abstract via an OpenAI-compatible chat endpoint.
 
     Sends one chat completion request per paper with max_tokens=1 and
-    top_logprobs=20, then extracts a calibrated confidence score from the
+    top_logprobs, then extracts a calibrated confidence score from the
     returned logprobs.
     """
 
-    def __init__(self, client: OpenAI, model: str, system_prompt: str) -> None:
+    def __init__(
+        self,
+        client: OpenAI,
+        model: str,
+        system_prompt: str,
+        seed: int = 0,
+        temperature: float = 0.0,
+        top_logprobs: int = 20,
+    ) -> None:
         self.client = client
         self.model = model
         self._system_prompt = system_prompt + _FORMAT_INSTRUCTION
+        self._seed = seed
+        self._temperature = temperature
+        self._top_logprobs = top_logprobs
 
     def classify(
         self, title: str | None, abstract: str | None
     ) -> tuple[bool, float | None]:
         """Return (is_relevant, confidence) for one paper.
 
-        confidence is None when the model's top-20 logprobs contained no
+        confidence is None when the model's top-N logprobs contained no
         boolean token — caller should treat as irrelevant (conservative).
         """
         if not abstract:
@@ -61,8 +72,9 @@ class AbstractFilter:
             ],
             max_tokens=1,
             logprobs=True,
-            top_logprobs=20,
-            temperature=0.0,
+            top_logprobs=self._top_logprobs,
+            temperature=self._temperature,
+            seed=self._seed,
         )
 
         choice = response.choices[0]
@@ -83,6 +95,7 @@ class AbstractFilter:
             log.warning(
                 "filter_no_boolean_token",
                 top_tokens=[t.token for t in top[:5]],
+                top_logprobs_n=self._top_logprobs,
             )
             return False, None
 
@@ -120,6 +133,9 @@ def run_filter(batch_size: int = 50) -> tuple[int, int, int]:
         client=client,
         model=settings.filter_model,
         system_prompt=settings.filter_relevance_prompt,
+        seed=settings.filter_seed,
+        temperature=settings.filter_temperature,
+        top_logprobs=settings.filter_top_logprobs,
     )
 
     with get_session() as session:

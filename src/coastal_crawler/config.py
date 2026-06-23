@@ -98,6 +98,52 @@ class Settings(BaseSettings):
         description="System prompt describing relevance criteria. Model responds true/false.",
     )
 
+    # Inference parameters — passed to every API call and should match the
+    # values used when the server was launched for full reproducibility.
+    filter_seed: int = Field(
+        default=0,
+        description="RNG seed passed to the API (and to vLLM --seed). Set both to the same value.",
+    )
+    filter_temperature: float = Field(
+        default=0.0,
+        description="Sampling temperature. 0.0 = greedy decoding (recommended for classification).",
+    )
+    filter_top_logprobs: int = Field(
+        default=20,
+        description="Number of top token logprobs to request. Must be high enough to capture true/false variants.",
+    )
+
+    # Serving parameters — used only by scripts/serve_filter_model.sh.
+    # Stored here so they are tracked alongside inference params.
+    filter_port: int = Field(
+        default=8000,
+        description="Port vLLM listens on. Must match the port in FILTER_BASE_URL.",
+    )
+    filter_tensor_parallel_size: int = Field(
+        default=1,
+        description="Number of GPUs for tensor parallelism (vLLM --tensor-parallel-size).",
+    )
+    filter_gpu_memory_utilization: float = Field(
+        default=0.90,
+        description="Fraction of GPU memory vLLM may use (vLLM --gpu-memory-utilization).",
+    )
+    filter_dtype: str = Field(
+        default="auto",
+        description="Compute dtype: auto, bfloat16, float16, float32 (vLLM --dtype).",
+    )
+    filter_quantization: str | None = Field(
+        default=None,
+        description="Quantization scheme: awq, gptq, fp8, etc. None = no quantization (vLLM --quantization).",
+    )
+    filter_max_model_len: int | None = Field(
+        default=None,
+        description="Override the model's maximum context length (vLLM --max-model-len). None = model default.",
+    )
+    filter_sif_path: str | None = Field(
+        default=None,
+        description="Path to a vLLM Singularity .sif image. If set, scripts/serve_filter_model.sh runs inside the container.",
+    )
+
     # ------------------------------------------------------- Wiley TDM
     wiley_api_key: str | None = Field(
         default=None,
