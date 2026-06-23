@@ -83,7 +83,7 @@ if [ -n "${FILTER_SIF_PATH:-}" ]; then
     fi
 
     HF_CACHE="${HF_HOME:-$HOME/.cache/huggingface}"
-    BIND_ARGS=(--bind "$HF_CACHE:/root/.cache/huggingface")
+    BIND_ARGS=(--bind "$HF_CACHE:$HF_CACHE")
 
     if [[ "$FILTER_MODEL" = /* ]]; then
         MODEL_DIR="$(dirname "$FILTER_MODEL")"
