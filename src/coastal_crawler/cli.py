@@ -33,12 +33,14 @@ def discover(
 
 @app.command(name="filter")
 def filter_papers(
-    batch_size: int = typer.Option(50, "--batch-size", help="Papers to filter per run."),
+    batch_size: int = typer.Option(None, "--batch-size", help="Papers to filter per run. Defaults to FILTER_BATCH_SIZE in .env."),
 ) -> None:
     """Classify a batch of discovered papers as relevant or irrelevant using an LLM."""
+    from coastal_crawler.config import get_settings
     from coastal_crawler.relevance_filter import run_filter
 
-    relevant, irrelevant, errors = run_filter(batch_size=batch_size)
+    size = batch_size if batch_size is not None else get_settings().filter_batch_size
+    relevant, irrelevant, errors = run_filter(batch_size=size)
     typer.echo(f"Relevant: {relevant}, irrelevant: {irrelevant}, errors (reset for retry): {errors}.")
 
 

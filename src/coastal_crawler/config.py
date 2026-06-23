@@ -143,6 +143,10 @@ class Settings(BaseSettings):
         default=None,
         description="Path to a vLLM Singularity .sif image. If set, scripts/serve_filter_model.sh runs inside the container.",
     )
+    filter_batch_size: int = Field(
+        default=50,
+        description="Papers claimed per filter run.",
+    )
 
     # ------------------------------------------------------- Wiley TDM
     wiley_api_key: str | None = Field(

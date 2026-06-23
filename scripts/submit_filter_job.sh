@@ -60,4 +60,4 @@ done
 echo "Server ready after ${ELAPSED}s."
 
 # ---- Run filter -------------------------------------------------------------
-coastal-crawler filter --batch-size "${FILTER_BATCH_SIZE:-50}"
+coastal-crawler filter
