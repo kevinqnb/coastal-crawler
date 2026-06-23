@@ -223,4 +223,4 @@ memory/*
 
 # Experiments
 scripts/out/*
-scripts/submit_filter_job.sh
+scripts/filter.sh
