@@ -58,8 +58,8 @@ if [ -n "${FILTER_MAX_MODEL_LEN:-}" ]; then
     EXTRA_ARGS+=(--max-model-len "$FILTER_MAX_MODEL_LEN")
 fi
 
-VLLM_CMD=(
-    vllm serve "$FILTER_MODEL"
+# Shared server flags (same regardless of launch mode).
+SERVER_FLAGS=(
     --host 0.0.0.0
     --port "$FILTER_PORT"
     --served-model-name "$FILTER_MODEL"
@@ -73,20 +73,18 @@ VLLM_CMD=(
 # ---- Launch -----------------------------------------------------------------
 if [ -n "${FILTER_SIF_PATH:-}" ]; then
     # ---- Singularity mode ---------------------------------------------------
+    # The vllm/vllm-openai container's entrypoint is the API server directly
+    # (python3 -m vllm.entrypoints.openai.api_server), so we pass --model and
+    # flags straight through — NOT "vllm serve MODEL".
     if [ ! -f "$FILTER_SIF_PATH" ]; then
         echo "Error: FILTER_SIF_PATH=$FILTER_SIF_PATH does not exist." >&2
         echo "Build it with: singularity pull <path>.sif docker://vllm/vllm-openai:<tag>" >&2
         exit 1
     fi
 
-    # Resolve the HuggingFace cache from the standard environment variable,
-    # falling back to the default location. Bind it into the container at the
-    # path vLLM expects inside the image.
     HF_CACHE="${HF_HOME:-$HOME/.cache/huggingface}"
     BIND_ARGS=(--bind "$HF_CACHE:/root/.cache/huggingface")
 
-    # If FILTER_MODEL is an absolute path (pre-downloaded weights), also bind
-    # the containing directory at the same path so the model path is unchanged.
     if [[ "$FILTER_MODEL" = /* ]]; then
         MODEL_DIR="$(dirname "$FILTER_MODEL")"
         BIND_ARGS+=(--bind "$MODEL_DIR:$MODEL_DIR")
@@ -97,19 +95,18 @@ if [ -n "${FILTER_SIF_PATH:-}" ]; then
     echo "  port=$FILTER_PORT  tp=$FILTER_TENSOR_PARALLEL_SIZE  dtype=$FILTER_DTYPE  seed=$FILTER_SEED"
     [ ${#EXTRA_ARGS[@]} -gt 0 ] && echo "  extra: ${EXTRA_ARGS[*]}"
 
-    # Singularity shares the host network namespace by default, so the port
-    # is reachable on the host without any explicit port mapping.
-    # Environment variables sourced from .env above are inherited by the container.
     exec singularity run \
         --nv \
         "${BIND_ARGS[@]}" \
         "$FILTER_SIF_PATH" \
-        "${VLLM_CMD[@]}"
+        --model "$FILTER_MODEL" \
+        "${SERVER_FLAGS[@]}"
 else
     # ---- Direct mode --------------------------------------------------------
+    # Uses the vllm CLI: "vllm serve MODEL [flags]"
     echo "Serving (direct): $FILTER_MODEL"
     echo "  port=$FILTER_PORT  tp=$FILTER_TENSOR_PARALLEL_SIZE  dtype=$FILTER_DTYPE  seed=$FILTER_SEED"
     [ ${#EXTRA_ARGS[@]} -gt 0 ] && echo "  extra: ${EXTRA_ARGS[*]}"
 
-    exec "${VLLM_CMD[@]}"
+    exec vllm serve "$FILTER_MODEL" "${SERVER_FLAGS[@]}"
 fi
