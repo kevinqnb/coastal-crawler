@@ -99,6 +99,17 @@ def requeue_failed() -> None:
 
 
 @app.command()
+def requeue_filtering() -> None:
+    """Reset papers stuck in 'filtering' back to 'discovered' (use after a killed job)."""
+    from coastal_crawler.db import store
+    from coastal_crawler.db.engine import get_session
+
+    with get_session() as session:
+        count = store.requeue_filtering(session)
+    typer.echo(f"Requeued {count} stranded paper(s) back to 'discovered'.")
+
+
+@app.command()
 def requeue_irrelevant() -> None:
     """Reset irrelevant papers back to 'discovered' so they can be re-filtered."""
     from coastal_crawler.db import store

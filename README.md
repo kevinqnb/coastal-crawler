@@ -115,6 +115,13 @@ Papers that fail extraction are preserved with `status='failed'` and the error m
 coastal-crawler requeue-failed
 ```
 
+To rescue papers stranded in `'filtering'` by a killed job (e.g. walltime limit), then resubmit:
+
+```bash
+coastal-crawler requeue-filtering
+qsub scripts/submit_filter_job.sh
+```
+
 To re-run the relevance filter on papers that were previously rejected (e.g. after updating the criteria prompt):
 
 ```bash

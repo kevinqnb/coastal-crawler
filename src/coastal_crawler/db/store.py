@@ -134,6 +134,24 @@ def reset_to_discovered(paper_id: int, session: Session) -> None:
     )
 
 
+def requeue_filtering(session: Session) -> int:
+    """Reset all ``filtering`` papers back to ``discovered``.
+
+    Papers are left in ``status='filtering'`` if a filter job is killed
+    mid-batch (e.g. walltime limit). Call this before resubmitting to rescue
+    those stranded papers.
+
+    Returns:
+        Count of papers requeued.
+    """
+    result = session.execute(
+        update(Paper)
+        .where(Paper.status == "filtering")
+        .values(status="discovered")
+    )
+    return result.rowcount
+
+
 def requeue_irrelevant(session: Session) -> int:
     """Reset all ``irrelevant`` papers back to ``discovered`` for re-filtering.
 
