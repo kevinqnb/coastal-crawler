@@ -86,8 +86,8 @@ class SemanticScholarSource:
 
         total_fetched = 0
         total_with_pdf = 0
-        total_inserted = 0
         page = 0
+        all_papers = []
         with httpx.Client(timeout=30) as client:
             while True:
                 resp = get_with_retry(client, _BASE_URL, params, headers, _DELAY)
@@ -98,23 +98,28 @@ class SemanticScholarSource:
                 papers = body.get("data", [])
                 page += 1
                 total_fetched += len(papers)
+                all_papers.extend(papers)
 
-                if papers:
-                    records = [r for r in (_map_paper(p) for p in papers) if r["oa_pdf_url"]]
-                    total_with_pdf += len(records)
-                    n = store.upsert_papers(records, session)
-                    total_inserted += n
-
-                    max_date = _max_pub_date(papers)
-                    if max_date:
-                        store.set_watermark(self.source_name, max_date, session)
-                    session.commit()
+                if not papers:
+                    break
 
                 token = body.get("token")
                 if not token:
                     break
                 params["token"] = token
                 time.sleep(_DELAY)
+
+        # Process all collected papers at once
+        records = [r for r in (_map_paper(p) for p in all_papers) if r["oa_pdf_url"]]
+        total_with_pdf = len(records)
+        total_inserted = store.upsert_papers(records, session)
+
+        # Set watermark only after all pages have been processed
+        if all_papers:
+            max_date = _max_pub_date(all_papers)
+            if max_date:
+                store.set_watermark(self.source_name, max_date, session)
+        session.commit()
 
         log.info(
             "s2_query_done",
