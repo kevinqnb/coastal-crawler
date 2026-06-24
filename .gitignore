@@ -224,3 +224,4 @@ memory/*
 # Experiments
 scripts/out/*
 scripts/filter.sh
+scripts/time_ocr.sh
