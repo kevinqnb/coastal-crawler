@@ -30,8 +30,9 @@ def crossref_tdm_url(doi: str) -> str | None:
         print(f"  {link.get('intended-application'):30s} {link.get('URL')}")
     for link in links:
         if link.get("intended-application") == "text-mining":
-            url = link.get("URL")
-            return normalize_pdf_url(url) if url else None
+            url = link.get("URL") or ""
+            if "api.wiley.com/onlinelibrary/tdm/" in url:
+                return normalize_pdf_url(url)
     return None
 
 
