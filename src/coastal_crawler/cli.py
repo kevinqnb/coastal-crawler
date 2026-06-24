@@ -57,21 +57,56 @@ def extract(
 
 @app.command()
 def show(
-    paper_ids: list[int] = typer.Argument(..., help="One or more paper IDs to inspect."),
+    paper_ids: Optional[list[int]] = typer.Argument(default=None, help="Paper IDs to inspect. Omit to list by filter."),
+    status_filter: Optional[str] = typer.Option(None, "--status", "-s", help="Filter by status (e.g. relevant, irrelevant, extracted)."),
+    inaccessible: Optional[bool] = typer.Option(None, "--inaccessible/--accessible", help="Filter by PDF accessibility."),
+    limit: int = typer.Option(20, "--limit", "-n", help="Max papers to show when listing by filter (default: 20)."),
 ) -> None:
-    """Show filter status, accessibility, and PDF URL for specific papers."""
+    """Inspect papers by ID, status, and/or PDF accessibility.
+
+    Examples:
+
+      coastal-crawler show 42 107          # look up specific papers\n
+      coastal-crawler show --status irrelevant\n
+      coastal-crawler show --status relevant --inaccessible\n
+      coastal-crawler show --status relevant --accessible\n
+      coastal-crawler show --inaccessible -n 50
+    """
     from coastal_crawler.db.engine import get_session
     from coastal_crawler.db.models import Paper
-    from sqlalchemy import select
+    from sqlalchemy import func, select
+
+    if not paper_ids and status_filter is None and inaccessible is None:
+        raise typer.BadParameter("Provide at least one paper ID or a --status/--inaccessible filter.")
 
     with get_session() as session:
-        papers = session.scalars(select(Paper).where(Paper.id.in_(paper_ids))).all()
-        found = {p.id: p for p in papers}
+        stmt = select(Paper)
+        if paper_ids:
+            stmt = stmt.where(Paper.id.in_(paper_ids))
+        if status_filter is not None:
+            stmt = stmt.where(Paper.status == status_filter)
+        if inaccessible is not None:
+            stmt = stmt.where(Paper.pdf_inaccessible.is_(inaccessible))
 
-    for paper_id in paper_ids:
-        p = found.get(paper_id)
+        if not paper_ids:
+            count_stmt = select(func.count()).select_from(stmt.subquery())
+            total = session.scalar(count_stmt) or 0
+            stmt = stmt.order_by(Paper.discovered_at.desc()).limit(limit)
+
+        papers = session.scalars(stmt).all()
+
+    if paper_ids:
+        found = {p.id: p for p in papers}
+        ordered = [found.get(pid) for pid in paper_ids]
+    else:
+        showing = len(papers)
+        if total > showing:
+            typer.echo(f"Showing {showing} of {total:,} papers (use --limit to see more)\n")
+        ordered = list(papers)
+
+    for p in ordered:
         if p is None:
-            typer.echo(f"[{paper_id}] not found\n")
+            typer.echo("not found\n")
             continue
 
         confidence = f"{p.filter_confidence:.3f}" if p.filter_confidence is not None else "n/a"
