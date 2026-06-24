@@ -95,30 +95,30 @@ def show(
 
         papers = session.scalars(stmt).all()
 
-    if paper_ids:
-        found = {p.id: p for p in papers}
-        ordered = [found.get(pid) for pid in paper_ids]
-    else:
-        showing = len(papers)
-        if total > showing:
-            typer.echo(f"Showing {showing} of {total:,} papers (use --limit to see more)\n")
-        ordered = list(papers)
+        if paper_ids:
+            found = {p.id: p for p in papers}
+            ordered = [found.get(pid) for pid in paper_ids]
+        else:
+            showing = len(papers)
+            if total > showing:
+                typer.echo(f"Showing {showing} of {total:,} papers (use --limit to see more)\n")
+            ordered = list(papers)
 
-    for p in ordered:
-        if p is None:
-            typer.echo("not found\n")
-            continue
+        for p in ordered:
+            if p is None:
+                typer.echo("not found\n")
+                continue
 
-        confidence = f"{p.filter_confidence:.3f}" if p.filter_confidence is not None else "n/a"
-        accessible = "inaccessible" if p.pdf_inaccessible else "accessible"
-        doi_str = f"doi:{p.doi}" if p.doi else (f"oalex:{p.openalex_id}" if p.openalex_id else "no-id")
+            confidence = f"{p.filter_confidence:.3f}" if p.filter_confidence is not None else "n/a"
+            accessible = "inaccessible" if p.pdf_inaccessible else "accessible"
+            doi_str = f"doi:{p.doi}" if p.doi else (f"oalex:{p.openalex_id}" if p.openalex_id else "no-id")
 
-        typer.echo(f"[{p.id}] {(p.title or 'untitled')[:80]}")
-        typer.echo(f"  {doi_str}")
-        typer.echo(f"  status:      {p.status}  (confidence: {confidence})")
-        typer.echo(f"  pdf:         {accessible}")
-        typer.echo(f"  url:         {p.oa_pdf_url or 'none'}")
-        typer.echo("")
+            typer.echo(f"[{p.id}] {(p.title or 'untitled')[:80]}")
+            typer.echo(f"  {doi_str}")
+            typer.echo(f"  status:      {p.status}  (confidence: {confidence})")
+            typer.echo(f"  pdf:         {accessible}")
+            typer.echo(f"  url:         {p.oa_pdf_url or 'none'}")
+            typer.echo("")
 
 
 @app.command()
