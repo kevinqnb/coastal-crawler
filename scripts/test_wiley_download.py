@@ -50,6 +50,21 @@ def main() -> None:
 
     print(f"\nURL: {url}")
 
+    from coastal_crawler.pdf import pdf_headers
+    headers = pdf_headers("wiley", url)
+    print(f"Request headers: {headers}")
+
+    print("\nRaw GET (diagnostic) ...")
+    try:
+        resp = httpx.get(url, headers=headers, timeout=60, follow_redirects=True)
+        print(f"  Status:       {resp.status_code}")
+        print(f"  Content-Type: {resp.headers.get('content-type')}")
+        print(f"  Bytes:        {len(resp.content)}")
+        if resp.status_code not in (200, 206):
+            print(f"  Body:         {resp.text[:500]}")
+    except Exception as exc:
+        print(f"  Exception: {exc}")
+
     print("\ncheck_pdf_accessible() ...")
     accessible = check_pdf_accessible(url, "wiley")
     print(f"Result: {accessible}")
