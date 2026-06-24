@@ -2,16 +2,12 @@
 
 from __future__ import annotations
 
-import tempfile
-from pathlib import Path
-
-import httpx
 import structlog
 
 from coastal_crawler.adapter import ExtractionAdapter, StubAdapter
-from coastal_crawler.config import get_settings
 from coastal_crawler.db import store
 from coastal_crawler.db.engine import get_session
+from coastal_crawler.pdf import download_pdf
 
 log = structlog.get_logger(__name__)
 
@@ -20,7 +16,7 @@ def run_worker(
     batch_size: int = 10,
     adapter: ExtractionAdapter | None = None,
 ) -> tuple[int, int]:
-    """Claim a batch of discovered papers and run extraction.
+    """Claim a batch of relevant papers and run extraction.
 
     Uses SELECT ... FOR UPDATE SKIP LOCKED so multiple worker processes can
     run concurrently without claiming the same paper.
@@ -59,7 +55,7 @@ def run_worker(
 
 
 def requeue_failed() -> int:
-    """Reset all papers with status='failed' back to 'discovered'.
+    """Reset all papers with status='failed' back to 'relevant'.
 
     Returns:
         Count of papers requeued.
@@ -87,15 +83,7 @@ def _process_paper(
             if not oa_pdf_url:
                 raise ValueError("No open-access PDF URL available")
 
-            try:
-                pdf_path = _download_pdf(oa_pdf_url, discovered_from)
-            except httpx.HTTPStatusError as exc:
-                if exc.response.status_code in (401, 403):
-                    log.warning("paper_pdf_inaccessible", paper_id=paper_id, status_code=exc.response.status_code)
-                    store.mark_pdf_inaccessible(paper_id, session)
-                    return False
-                raise
-
+            pdf_path = download_pdf(oa_pdf_url, discovered_from)
             try:
                 results = adapter.extract(pdf_path)
                 for result in results:
@@ -114,24 +102,3 @@ def _process_paper(
             session.rollback()
             store.mark_failed(paper_id, str(exc)[:2000], session)
             return False
-
-
-def _pdf_headers(discovered_from: str | None, url: str) -> dict[str, str]:
-    headers: dict[str, str] = {"User-Agent": "coastal-crawler/1.0"}
-    if discovered_from == "wiley" or "wiley" in url.lower():
-        key = get_settings().wiley_api_key
-        if key:
-            headers["Authorization"] = f"Bearer {key}"
-    return headers
-
-
-def _download_pdf(url: str, discovered_from: str | None = None) -> Path:
-    """Download *url* to a temporary file and return its Path."""
-    tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
-    pdf_path = Path(tmp.name)
-    tmp.close()
-
-    resp = httpx.get(url, headers=_pdf_headers(discovered_from, url), timeout=60, follow_redirects=True)
-    resp.raise_for_status()
-    pdf_path.write_bytes(resp.content)
-    return pdf_path

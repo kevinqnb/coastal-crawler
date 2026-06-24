@@ -6,7 +6,6 @@ from datetime import date, datetime
 from typing import Any
 
 from sqlalchemy import (
-    Boolean,
     Date,
     DateTime,
     Double,
@@ -51,7 +50,6 @@ class Paper(Base):
     )
     extracted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     filter_confidence: Mapped[float | None] = mapped_column(REAL)
-    pdf_inaccessible: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     error: Mapped[str | None] = mapped_column(Text)
 
     extractions: Mapped[list[Extraction]] = relationship(

@@ -35,13 +35,16 @@ def discover(
 def filter_papers(
     batch_size: int = typer.Option(None, "--batch-size", help="Papers to filter per run. Defaults to FILTER_BATCH_SIZE in .env."),
 ) -> None:
-    """Classify a batch of discovered papers as relevant or irrelevant using an LLM."""
+    """Check PDF accessibility then classify papers as relevant or irrelevant using an LLM."""
     from coastal_crawler.config import get_settings
     from coastal_crawler.relevance_filter import run_filter
 
     size = batch_size if batch_size is not None else get_settings().filter_batch_size
-    relevant, irrelevant, errors = run_filter(batch_size=size)
-    typer.echo(f"Relevant: {relevant}, irrelevant: {irrelevant}, errors (reset for retry): {errors}.")
+    relevant, irrelevant, inaccessible, errors = run_filter(batch_size=size)
+    typer.echo(
+        f"Relevant: {relevant}, irrelevant: {irrelevant}, "
+        f"inaccessible: {inaccessible}, errors (reset for retry): {errors}."
+    )
 
 
 @app.command()
@@ -58,18 +61,19 @@ def extract(
 @app.command()
 def show(
     paper_ids: Optional[list[int]] = typer.Argument(default=None, help="Paper IDs to inspect. Omit to list by filter."),
-    status_filter: Optional[str] = typer.Option(None, "--status", "-s", help="Filter by status (e.g. relevant, irrelevant, extracted)."),
-    inaccessible: Optional[bool] = typer.Option(None, "--inaccessible/--accessible", help="Filter by PDF accessibility."),
+    status_filter: Optional[str] = typer.Option(None, "--status", "-s", help="Filter by status (e.g. relevant, irrelevant, inaccessible, extracted)."),
+    inaccessible: Optional[bool] = typer.Option(None, "--inaccessible/--accessible", help="Filter by PDF accessibility (shorthand for --status inaccessible / --status != inaccessible)."),
     limit: int = typer.Option(20, "--limit", "-n", help="Max papers to show when listing by filter (default: 20)."),
 ) -> None:
     """Inspect papers by ID, status, and/or PDF accessibility.
 
     Examples:
 
-      coastal-crawler show 42 107          # look up specific papers\n
+      coastal-crawler show 42 107              # look up specific papers\n
       coastal-crawler show --status irrelevant\n
-      coastal-crawler show --status relevant --inaccessible\n
-      coastal-crawler show --status relevant --accessible\n
+      coastal-crawler show --status inaccessible\n
+      coastal-crawler show --inaccessible\n
+      coastal-crawler show --accessible --status relevant\n
       coastal-crawler show --inaccessible -n 50
     """
     from coastal_crawler.db.engine import get_session
@@ -85,8 +89,10 @@ def show(
             stmt = stmt.where(Paper.id.in_(paper_ids))
         if status_filter is not None:
             stmt = stmt.where(Paper.status == status_filter)
-        if inaccessible is not None:
-            stmt = stmt.where(Paper.pdf_inaccessible.is_(inaccessible))
+        if inaccessible is True:
+            stmt = stmt.where(Paper.status == "inaccessible")
+        elif inaccessible is False:
+            stmt = stmt.where(Paper.status != "inaccessible")
 
         if not paper_ids:
             count_stmt = select(func.count()).select_from(stmt.subquery())
@@ -110,13 +116,11 @@ def show(
                 continue
 
             confidence = f"{p.filter_confidence:.3f}" if p.filter_confidence is not None else "n/a"
-            accessible = "inaccessible" if p.pdf_inaccessible else "accessible"
             doi_str = f"doi:{p.doi}" if p.doi else (f"oalex:{p.openalex_id}" if p.openalex_id else "no-id")
 
             typer.echo(f"[{p.id}] {(p.title or 'untitled')[:80]}")
             typer.echo(f"  {doi_str}")
             typer.echo(f"  status:      {p.status}  (confidence: {confidence})")
-            typer.echo(f"  pdf:         {accessible}")
             typer.echo(f"  url:         {p.oa_pdf_url or 'none'}")
             typer.echo("")
 
@@ -132,16 +136,12 @@ def status(
         counts = store.count_by_status(session)
         papers = store.recent_papers(limit, session)
 
-        inaccessible_count = store.count_pdf_inaccessible(session)
-
         total = sum(counts.values())
         typer.echo(f"\nTotal papers: {total}")
-        for s in ("discovered", "filtering", "relevant", "irrelevant", "processing", "extracted", "failed"):
+        for s in ("discovered", "filtering", "relevant", "irrelevant", "inaccessible", "processing", "extracted", "failed"):
             n = counts.get(s, 0)
             if n or s in ("discovered", "relevant", "extracted"):
                 typer.echo(f"  {s:<12} {n}")
-        if inaccessible_count:
-            typer.echo(f"  {'(inaccessible pdf)':<20} {inaccessible_count}  [subset of relevant]")
 
         if not papers:
             typer.echo("\nNo papers yet.")
@@ -194,13 +194,13 @@ def requeue_filtered() -> None:
 
 @app.command()
 def requeue_inaccessible() -> None:
-    """Clear pdf_inaccessible flag so extraction retries previously unreachable PDFs."""
+    """Reset inaccessible papers back to 'discovered' so the filter retries the PDF check."""
     from coastal_crawler.db import store
     from coastal_crawler.db.engine import get_session
 
     with get_session() as session:
         count = store.requeue_inaccessible(session)
-    typer.echo(f"Requeued {count} inaccessible paper(s) for extraction retry.")
+    typer.echo(f"Requeued {count} inaccessible paper(s) for re-filtering.")
 
 
 @app.command()

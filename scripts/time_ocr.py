@@ -1,7 +1,8 @@
 """Time OCR on a sample of relevant papers.
 
 Downloads PDFs from the DB and times DocumentLM.fit() one paper at a time.
-Papers that return 401/403 are marked pdf_inaccessible in the DB.
+Does NOT write to the DB — relevant papers are pre-checked for accessibility
+during the filter stage.
 
 Usage:
     uv run python scripts/time_ocr.py
@@ -12,18 +13,15 @@ from __future__ import annotations
 import argparse
 import statistics
 import sys
-import tempfile
 import time
-from pathlib import Path
 
-import httpx
 from olmocr.prompts import build_no_anchoring_v4_yaml_prompt as olmocr_prompt
 from sqlalchemy import func, select
 
 from coastal_crawler.config import get_settings
-from coastal_crawler.db import store
 from coastal_crawler.db.engine import get_session
 from coastal_crawler.db.models import Paper
+from coastal_crawler.pdf import download_pdf
 from scholarlm import DocumentLM
 
 
@@ -39,23 +37,6 @@ def _fetch_paper_urls(n: int) -> list[tuple[int, str, str | None]]:
     return [(row.id, row.oa_pdf_url, row.discovered_from) for row in rows]
 
 
-def _pdf_headers(discovered_from: str | None, url: str) -> dict[str, str]:
-    headers: dict[str, str] = {"User-Agent": "coastal-crawler/1.0"}
-    if discovered_from == "wiley" or "wiley" in url.lower():
-        key = get_settings().wiley_api_key
-        if key:
-            headers["Authorization"] = f"Bearer {key}"
-    return headers
-
-
-def _download_pdf(url: str, discovered_from: str | None = None) -> Path:
-    tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
-    pdf_path = Path(tmp.name)
-    tmp.close()
-    resp = httpx.get(url, headers=_pdf_headers(discovered_from, url), timeout=60, follow_redirects=True)
-    resp.raise_for_status()
-    pdf_path.write_bytes(resp.content)
-    return pdf_path
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -89,16 +70,7 @@ def main(argv: list[str] | None = None) -> None:
     for i, (paper_id, url, discovered_from) in enumerate(papers, 1):
         print(f"[{i}/{len(papers)}] paper_id={paper_id}", end=" ", flush=True)
         try:
-            pdf_path = _download_pdf(url, discovered_from)
-        except httpx.HTTPStatusError as exc:
-            if exc.response.status_code in (401, 403):
-                print(f"SKIP (inaccessible {exc.response.status_code}, marked in DB)")
-                with get_session() as session:
-                    store.mark_pdf_inaccessible(paper_id, session)
-            else:
-                print(f"SKIP (download failed: {exc})")
-            skipped += 1
-            continue
+            pdf_path = download_pdf(url, discovered_from)
         except Exception as exc:
             print(f"SKIP (download failed: {exc})")
             skipped += 1

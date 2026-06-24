@@ -16,6 +16,7 @@ from openai import OpenAI
 
 from coastal_crawler.db import store
 from coastal_crawler.db.engine import get_session
+from coastal_crawler.pdf import check_pdf_accessible
 
 log = structlog.get_logger(__name__)
 
@@ -104,18 +105,24 @@ class AbstractFilter:
         return confidence >= 0.5, confidence
 
 
-def run_filter(batch_size: int = 50) -> tuple[int, int, int]:
+def run_filter(batch_size: int = 50) -> tuple[int, int, int, int]:
     """Claim a batch of discovered papers and classify each as relevant or irrelevant.
 
+    Each paper is checked in order:
+      1. No abstract → irrelevant (skips LLM call)
+      2. PDF inaccessible → inaccessible (skips LLM call)
+      3. LLM judge → relevant or irrelevant
+
     Status transitions:
-      discovered → filtering  (claimed)
-      filtering  → relevant   (passed)
-      filtering  → irrelevant (failed or no abstract)
-      filtering  → discovered (API error — reset for retry next run)
+      discovered  → filtering     (claimed)
+      filtering   → inaccessible  (PDF unreachable)
+      filtering   → relevant      (PDF accessible + LLM says yes)
+      filtering   → irrelevant    (no abstract, or PDF accessible + LLM says no)
+      filtering   → discovered    (API error — reset for retry next run)
 
     Returns:
-        (relevant, irrelevant, errors) where errors are papers reset to
-        'discovered' due to API failures.
+        (relevant, irrelevant, inaccessible, errors) where errors are papers
+        reset to 'discovered' due to LLM API failures.
     """
     from coastal_crawler.config import get_settings
 
@@ -141,18 +148,28 @@ def run_filter(batch_size: int = 50) -> tuple[int, int, int]:
 
     with get_session() as session:
         papers = store.claim_batch_for_filter(batch_size, session)
-        paper_data = [(p.id, p.title, p.abstract) for p in papers]
+        paper_data = [
+            (p.id, p.title, p.abstract, p.oa_pdf_url, p.discovered_from)
+            for p in papers
+        ]
 
     log.info("filter_batch_claimed", count=len(paper_data))
 
-    relevant = irrelevant = errors = 0
+    relevant = irrelevant = inaccessible = errors = 0
 
-    for paper_id, title, abstract in paper_data:
+    for paper_id, title, abstract, oa_pdf_url, discovered_from in paper_data:
         if not abstract:
             with get_session() as session:
                 store.mark_irrelevant(paper_id, None, session)
             irrelevant += 1
             log.info("paper_irrelevant", paper_id=paper_id, reason="no_abstract")
+            continue
+
+        if not oa_pdf_url or not check_pdf_accessible(oa_pdf_url, discovered_from):
+            with get_session() as session:
+                store.mark_inaccessible(paper_id, session)
+            inaccessible += 1
+            log.info("paper_inaccessible", paper_id=paper_id, url=oa_pdf_url)
             continue
 
         try:
@@ -176,5 +193,11 @@ def run_filter(batch_size: int = 50) -> tuple[int, int, int]:
                 store.reset_to_discovered(paper_id, session)
             errors += 1
 
-    log.info("filter_batch_done", relevant=relevant, irrelevant=irrelevant, errors=errors)
-    return relevant, irrelevant, errors
+    log.info(
+        "filter_batch_done",
+        relevant=relevant,
+        irrelevant=irrelevant,
+        inaccessible=inaccessible,
+        errors=errors,
+    )
+    return relevant, irrelevant, inaccessible, errors

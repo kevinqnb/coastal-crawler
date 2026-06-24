@@ -2,7 +2,7 @@
 
 Discovery and extraction pipeline for coastal-ecosystem papers.
 
-Papers are discovered from one or more APIs, deduplicated by DOI, screened for relevance by an LLM abstract filter, and then queued for PDF extraction via the `scholarlm` library.
+Papers are discovered from one or more APIs, deduplicated by DOI, screened for relevance by a two-stage filter (PDF accessibility check then LLM abstract classification), and then queued for PDF extraction via the `scholarlm` library.
 
 ---
 
@@ -85,14 +85,20 @@ Each source tracks its own watermark, so if one source fails mid-run, the others
 
 ### Filter papers
 
-After discovery, run the LLM relevance filter to classify each paper's abstract as relevant or irrelevant before committing to expensive PDF extraction.
+After discovery, run the two-stage filter to classify papers before committing to expensive PDF extraction.
 
 ```bash
 coastal-crawler filter
 coastal-crawler filter --batch-size 100
 ```
 
-The filter calls an OpenAI-compatible chat endpoint (local vLLM or cloud) with `max_tokens=1` and reads the token logprobs to produce a calibrated confidence score: `p_true / (p_true + p_false)`. This score is stored in the `filter_confidence` column. Papers with no abstract are auto-rejected. Papers where the model fails to emit a boolean token are conservatively rejected and logged as warnings.
+Each paper is processed in order:
+
+1. **No abstract** → marked `irrelevant` immediately (no network call).
+2. **PDF accessibility check** → a lightweight range GET (`Range: bytes=0-1023`) is sent to the paper's open-access URL. Papers whose PDFs are unreachable (auth failure, connection error, etc.) are marked `inaccessible` and skipped. Wiley TDM URLs automatically include the API key.
+3. **LLM relevance filter** → an OpenAI-compatible chat endpoint is called with `max_tokens=1`; token logprobs produce a calibrated confidence score `p_true / (p_true + p_false)` stored in `filter_confidence`. Papers where the model emits no boolean token are conservatively rejected.
+
+Papers that pass both checks are marked `relevant` and queued for extraction.
 
 Configure the endpoint and criteria prompt in `.env` — see the **Environment variables** table and the example prompt in `.env.example`.
 
@@ -126,6 +132,12 @@ To re-run the relevance filter on papers that were previously rejected (e.g. aft
 
 ```bash
 coastal-crawler requeue-irrelevant
+```
+
+To retry papers whose PDFs were previously unreachable (e.g. after adding a new API key or when publisher access has changed):
+
+```bash
+coastal-crawler requeue-inaccessible
 ```
 
 ### Running the full pipeline
