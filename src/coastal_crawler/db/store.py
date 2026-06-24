@@ -152,6 +152,23 @@ def requeue_filtering(session: Session) -> int:
     return result.rowcount
 
 
+def requeue_filtered(session: Session) -> int:
+    """Reset all ``relevant`` and ``irrelevant`` papers back to ``discovered``.
+
+    Clears ``filter_confidence`` so the next run scores them fresh.
+    Use this to re-run the filter after updating the prompt or model.
+
+    Returns:
+        Count of papers requeued.
+    """
+    result = session.execute(
+        update(Paper)
+        .where(Paper.status.in_(["relevant", "irrelevant"]))
+        .values(status="discovered", filter_confidence=None)
+    )
+    return result.rowcount
+
+
 def requeue_irrelevant(session: Session) -> int:
     """Reset all ``irrelevant`` papers back to ``discovered`` for re-filtering.
 

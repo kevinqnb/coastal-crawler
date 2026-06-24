@@ -112,6 +112,17 @@ def requeue_filtering() -> None:
 
 
 @app.command()
+def requeue_filtered() -> None:
+    """Reset all previously filtered papers (relevant + irrelevant) back to 'discovered' for re-filtering."""
+    from coastal_crawler.db import store
+    from coastal_crawler.db.engine import get_session
+
+    with get_session() as session:
+        count = store.requeue_filtered(session)
+    typer.echo(f"Requeued {count} paper(s) for re-filtering.")
+
+
+@app.command()
 def requeue_irrelevant() -> None:
     """Reset irrelevant papers back to 'discovered' so they can be re-filtered."""
     from coastal_crawler.db import store
