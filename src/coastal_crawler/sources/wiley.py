@@ -142,12 +142,19 @@ def _map_item(item: dict[str, Any]) -> dict[str, Any]:
 
 
 def _extract_tdm_url(links: list[dict[str, Any]], doi: str | None) -> str | None:
-    """Return the text-mining link from CrossRef, falling back to constructing the TDM URL."""
+    """Return the Wiley TDM API URL for this article.
+
+    CrossRef text-mining links often point to the regular Wiley Online Library
+    site rather than the TDM API, which rejects the TDM token with 403.  Only
+    trust a CrossRef link if it's already on the TDM API host; otherwise
+    construct the canonical TDM URL directly from the DOI.
+    """
     from coastal_crawler.pdf import normalize_pdf_url
     for link in links:
         if link.get("intended-application") == "text-mining":
-            url = link.get("URL")
-            return normalize_pdf_url(url) if url else None
+            url = link.get("URL") or ""
+            if "api.wiley.com/onlinelibrary/tdm/" in url:
+                return normalize_pdf_url(url)
     if doi:
         return f"{_WILEY_TDM_URL}/{doi}"
     return None
