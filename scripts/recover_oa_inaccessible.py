@@ -79,13 +79,13 @@ def main(dry_run: bool = False) -> None:
                 recovered += 1
 
             if i % 100 == 0:
-                log.info("progress", done=i, total=len(papers), recovered=recovered)
+                log.info("progress", done=i, total=len(rows), recovered=recovered)
 
             time.sleep(_DELAY)
 
     log.info(
         "done",
-        total=len(papers),
+        total=len(rows),
         recovered=recovered,
         no_oa_pdf=no_pdf,
         dry_run=dry_run,
