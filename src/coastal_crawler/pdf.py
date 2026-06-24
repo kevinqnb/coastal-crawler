@@ -16,21 +16,18 @@ def pdf_headers(discovered_from: str | None, url: str) -> dict[str, str]:
     if discovered_from == "wiley" or "wiley" in url.lower():
         key = get_settings().wiley_api_key
         if key:
-            headers["Authorization"] = f"Bearer {key}"
+            headers["Wiley-TDM-Client-Token"] = key
     return headers
 
 
 def check_pdf_accessible(url: str, discovered_from: str | None = None) -> bool:
-    """Return True if the PDF URL is reachable (200 or 206) via a range GET.
+    """Return True if the PDF URL returns 200 or 206.
 
-    Uses Range: bytes=0-1023 to minimise transfer.  Some servers ignore the
-    Range header and return 200 with the full file — that is still treated as
-    accessible.  Any exception (timeout, connection error) returns False.
+    Performs a full (uncached) download so redirect chains are followed to
+    completion.  Content is discarded.  Any exception returns False.
     """
-    headers = pdf_headers(discovered_from, url)
-    headers["Range"] = "bytes=0-1023"
     try:
-        resp = httpx.get(url, headers=headers, timeout=15, follow_redirects=True)
+        resp = httpx.get(url, headers=pdf_headers(discovered_from, url), timeout=60, follow_redirects=True)
         return resp.status_code in (200, 206)
     except Exception:
         return False

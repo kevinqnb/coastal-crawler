@@ -28,7 +28,7 @@ from coastal_crawler.sources.http import get_with_retry
 log = structlog.get_logger(__name__)
 
 _CROSSREF_URL = "https://api.crossref.org/works"
-_WILEY_TDM_URL = "https://api.wiley.com/onlinelibrary/tdm/v2/articles"
+_WILEY_TDM_URL = "https://api.wiley.com/onlinelibrary/tdm/v1/articles"
 _PAGE_SIZE = 200
 _SELECT = "DOI,title,abstract,published,link"
 _DELAY = 0.5  # seconds between requests (~2 req/s, well within CrossRef polite pool)
