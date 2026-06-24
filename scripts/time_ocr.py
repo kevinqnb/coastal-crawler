@@ -63,7 +63,7 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--n", type=int, default=100, help="Number of papers to sample (default: 100)")
     p.add_argument("--api-base", default="http://localhost:8081/v1", help="vLLM server URL")
     p.add_argument("--api-key", default="EMPTY")
-    p.add_argument("--model-id", default="allenai/olmOCR-7B-0225-preview")
+    p.add_argument("--model-id", default="allenai/olmOCR-2-7B-1025")
     args = p.parse_args(argv)
 
     _ = get_settings()  # validates .env is loadable
