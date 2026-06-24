@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Recover inaccessible Wiley papers that have an OA PDF via Unpaywall.
+"""Recover inaccessible Wiley papers by finding a downloadable PDF URL.
 
-For each inaccessible paper with a DOI, queries the Unpaywall API.  If a PDF
-URL is found, updates oa_pdf_url and resets status to 'discovered' so the
-normal filter run will retry it.
+For each inaccessible paper with a DOI, tries in order:
+  1. Unpaywall best OA PDF URL (if accessible)
+  2. Constructed Wiley TDM URL (api.wiley.com/onlinelibrary/tdm/v1/articles/{doi})
+
+If either is downloadable, updates oa_pdf_url and resets status to 'discovered'.
 
 Usage:
     uv run scripts/recover_oa_inaccessible.py [--dry-run]
@@ -20,10 +22,12 @@ from sqlalchemy import select, update
 
 from coastal_crawler.db.engine import get_session
 from coastal_crawler.db.models import Paper
+from coastal_crawler.pdf import check_pdf_accessible
 
 log = structlog.get_logger(__name__)
 
 _UNPAYWALL_URL = "https://api.unpaywall.org/v2"
+_WILEY_TDM_URL = "https://api.wiley.com/onlinelibrary/tdm/v1/articles"
 _EMAIL = "quinnk@bu.edu"
 _DELAY = 0.1  # 10 req/s — well within Unpaywall's limit
 
@@ -45,8 +49,21 @@ def unpaywall_pdf_url(doi: str, client: httpx.Client) -> str | None:
         best = data.get("best_oa_location") or {}
         return best.get("url_for_pdf")
     except Exception as exc:
-        log.warning("unpaywall_error", doi=doi, error=str(exc))
+        log.debug("unpaywall_error", doi=doi, error=str(exc))
         return None
+
+
+def find_accessible_url(doi: str, client: httpx.Client) -> tuple[str, str] | None:
+    """Return (url, source) for the first accessible PDF, or None if neither works."""
+    unpaywall_url = unpaywall_pdf_url(doi, client)
+    if unpaywall_url and check_pdf_accessible(unpaywall_url):
+        return unpaywall_url, "unpaywall"
+
+    tdm_url = f"{_WILEY_TDM_URL}/{doi}"
+    if check_pdf_accessible(tdm_url, "wiley"):
+        return tdm_url, "tdm"
+
+    return None
 
 
 def main(dry_run: bool = False) -> None:
@@ -58,17 +75,16 @@ def main(dry_run: bool = False) -> None:
 
     log.info("inaccessible_papers_found", count=len(rows))
 
-    recovered = not_oa = no_pdf = errors = 0
+    recovered = still_inaccessible = 0
 
     with httpx.Client(follow_redirects=True) as client:
         for i, (paper_id, doi) in enumerate(rows, 1):
-            pdf_url = unpaywall_pdf_url(doi, client)
+            result = find_accessible_url(doi, client)
 
-            if pdf_url is None:
-                no_pdf += 1
-                log.debug("no_oa_pdf", doi=doi)
+            if result is None:
+                still_inaccessible += 1
             else:
-                log.info("oa_pdf_found", doi=doi, url=pdf_url)
+                pdf_url, source = result
                 if not dry_run:
                     with get_session() as session:
                         session.execute(
@@ -87,7 +103,7 @@ def main(dry_run: bool = False) -> None:
         "done",
         total=len(rows),
         recovered=recovered,
-        no_oa_pdf=no_pdf,
+        still_inaccessible=still_inaccessible,
         dry_run=dry_run,
     )
 
