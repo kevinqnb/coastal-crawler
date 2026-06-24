@@ -45,6 +45,7 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--api-base", default="http://localhost:8081/v1", help="vLLM server URL")
     p.add_argument("--api-key", default="EMPTY")
     p.add_argument("--model-id", default="allenai/olmOCR-2-7B-1025")
+    p.add_argument("--quality", default="fast", choices=["fast", "accurate"], help="OCR quality (default: fast)")
     args = p.parse_args(argv)
 
     _ = get_settings()  # validates .env is loadable
@@ -59,6 +60,7 @@ def main(argv: list[str] | None = None) -> None:
 
     doclm = DocumentLM(
         model_name=args.model_id,
+        quality=args.quality,
         ocr_prompt=olmocr_prompt(),
         api_base=args.api_base,
         api_key=args.api_key,

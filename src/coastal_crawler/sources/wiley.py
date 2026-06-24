@@ -143,9 +143,11 @@ def _map_item(item: dict[str, Any]) -> dict[str, Any]:
 
 def _extract_tdm_url(links: list[dict[str, Any]], doi: str | None) -> str | None:
     """Return the text-mining link from CrossRef, falling back to constructing the TDM URL."""
+    from coastal_crawler.pdf import normalize_pdf_url
     for link in links:
         if link.get("intended-application") == "text-mining":
-            return link.get("URL")
+            url = link.get("URL")
+            return normalize_pdf_url(url) if url else None
     if doi:
         return f"{_WILEY_TDM_URL}/{doi}"
     return None
