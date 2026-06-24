@@ -56,6 +56,37 @@ def extract(
 
 
 @app.command()
+def show(
+    paper_ids: list[int] = typer.Argument(..., help="One or more paper IDs to inspect."),
+) -> None:
+    """Show filter status, accessibility, and PDF URL for specific papers."""
+    from coastal_crawler.db.engine import get_session
+    from coastal_crawler.db.models import Paper
+    from sqlalchemy import select
+
+    with get_session() as session:
+        papers = session.scalars(select(Paper).where(Paper.id.in_(paper_ids))).all()
+        found = {p.id: p for p in papers}
+
+    for paper_id in paper_ids:
+        p = found.get(paper_id)
+        if p is None:
+            typer.echo(f"[{paper_id}] not found\n")
+            continue
+
+        confidence = f"{p.filter_confidence:.3f}" if p.filter_confidence is not None else "n/a"
+        accessible = "inaccessible" if p.pdf_inaccessible else "accessible"
+        doi_str = f"doi:{p.doi}" if p.doi else (f"oalex:{p.openalex_id}" if p.openalex_id else "no-id")
+
+        typer.echo(f"[{p.id}] {(p.title or 'untitled')[:80]}")
+        typer.echo(f"  {doi_str}")
+        typer.echo(f"  status:      {p.status}  (confidence: {confidence})")
+        typer.echo(f"  pdf:         {accessible}")
+        typer.echo(f"  url:         {p.oa_pdf_url or 'none'}")
+        typer.echo("")
+
+
+@app.command()
 def status(
     limit: int = typer.Option(10, "--limit", "-n", help="Number of recent papers to show."),
 ) -> None:
