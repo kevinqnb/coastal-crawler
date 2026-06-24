@@ -66,12 +66,16 @@ def status(
         counts = store.count_by_status(session)
         papers = store.recent_papers(limit, session)
 
+        inaccessible_count = store.count_pdf_inaccessible(session)
+
         total = sum(counts.values())
         typer.echo(f"\nTotal papers: {total}")
         for s in ("discovered", "filtering", "relevant", "irrelevant", "processing", "extracted", "failed"):
             n = counts.get(s, 0)
             if n or s in ("discovered", "relevant", "extracted"):
                 typer.echo(f"  {s:<12} {n}")
+        if inaccessible_count:
+            typer.echo(f"  {'(inaccessible pdf)':<20} {inaccessible_count}  [subset of relevant]")
 
         if not papers:
             typer.echo("\nNo papers yet.")
@@ -120,6 +124,17 @@ def requeue_filtered() -> None:
     with get_session() as session:
         count = store.requeue_filtered(session)
     typer.echo(f"Requeued {count} paper(s) for re-filtering.")
+
+
+@app.command()
+def requeue_inaccessible() -> None:
+    """Clear pdf_inaccessible flag so extraction retries previously unreachable PDFs."""
+    from coastal_crawler.db import store
+    from coastal_crawler.db.engine import get_session
+
+    with get_session() as session:
+        count = store.requeue_inaccessible(session)
+    typer.echo(f"Requeued {count} inaccessible paper(s) for extraction retry.")
 
 
 @app.command()

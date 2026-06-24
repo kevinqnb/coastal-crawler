@@ -201,6 +201,7 @@ def claim_batch(batch_size: int, session: Session) -> list[Paper]:
     stmt = (
         select(Paper)
         .where(Paper.status == "relevant")
+        .where(Paper.pdf_inaccessible.is_(False))
         .with_for_update(skip_locked=True)
         .limit(batch_size)
     )
@@ -227,6 +228,33 @@ def mark_failed(paper_id: int, error: str, session: Session) -> None:
         .where(Paper.id == paper_id)
         .values(status="failed", error=error)
     )
+
+
+def mark_pdf_inaccessible(paper_id: int, session: Session) -> None:
+    """Mark a paper's PDF as inaccessible (401/403) and reset to 'relevant'.
+
+    The paper remains relevant but is excluded from future claim_batch calls
+    until pdf_inaccessible is cleared (e.g. by requeue-inaccessible).
+    """
+    session.execute(
+        update(Paper)
+        .where(Paper.id == paper_id)
+        .values(status="relevant", pdf_inaccessible=True)
+    )
+
+
+def requeue_inaccessible(session: Session) -> int:
+    """Clear pdf_inaccessible on all flagged papers so extraction retries them.
+
+    Returns:
+        Count of papers requeued.
+    """
+    result = session.execute(
+        update(Paper)
+        .where(Paper.pdf_inaccessible.is_(True))
+        .values(pdf_inaccessible=False)
+    )
+    return result.rowcount
 
 
 def requeue_failed(session: Session) -> int:
@@ -319,6 +347,13 @@ def count_by_status(session: Session) -> dict[str, int]:
         select(Paper.status, func.count(Paper.id)).group_by(Paper.status)
     ).all()
     return {status: count for status, count in rows}
+
+
+def count_pdf_inaccessible(session: Session) -> int:
+    """Return count of relevant papers flagged as pdf_inaccessible."""
+    return session.scalar(
+        select(func.count(Paper.id)).where(Paper.pdf_inaccessible.is_(True))
+    ) or 0
 
 
 def recent_papers(limit: int, session: Session) -> list[Paper]:
