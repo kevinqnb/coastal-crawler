@@ -75,6 +75,7 @@ class AbstractFilter:
             top_logprobs=self._top_logprobs,
             temperature=self._temperature,
             seed=self._seed,
+            extra_body={"chat_template_kwargs": {"enable_thinking": False}},
         )
 
         choice = response.choices[0]
