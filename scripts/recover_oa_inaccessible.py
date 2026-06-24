@@ -51,29 +51,29 @@ def unpaywall_pdf_url(doi: str, client: httpx.Client) -> str | None:
 
 def main(dry_run: bool = False) -> None:
     with get_session() as session:
-        papers = list(session.scalars(
-            select(Paper)
+        rows = session.execute(
+            select(Paper.id, Paper.doi)
             .where(Paper.status == "inaccessible", Paper.doi.isnot(None))
-        ).all())
+        ).all()
 
-    log.info("inaccessible_papers_found", count=len(papers))
+    log.info("inaccessible_papers_found", count=len(rows))
 
     recovered = not_oa = no_pdf = errors = 0
 
     with httpx.Client(follow_redirects=True) as client:
-        for i, paper in enumerate(papers, 1):
-            pdf_url = unpaywall_pdf_url(paper.doi, client)  # type: ignore[arg-type]
+        for i, (paper_id, doi) in enumerate(rows, 1):
+            pdf_url = unpaywall_pdf_url(doi, client)
 
             if pdf_url is None:
                 no_pdf += 1
-                log.debug("no_oa_pdf", doi=paper.doi)
+                log.debug("no_oa_pdf", doi=doi)
             else:
-                log.info("oa_pdf_found", doi=paper.doi, url=pdf_url)
+                log.info("oa_pdf_found", doi=doi, url=pdf_url)
                 if not dry_run:
                     with get_session() as session:
                         session.execute(
                             update(Paper)
-                            .where(Paper.id == paper.id)
+                            .where(Paper.id == paper_id)
                             .values(oa_pdf_url=pdf_url, status="discovered")
                         )
                 recovered += 1
