@@ -7,9 +7,12 @@ Swap in ``StubAdapter`` for tests; use ``ScholarlmAdapter`` for production.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from pydantic import BaseModel
+
+if TYPE_CHECKING:
+    from coastal_crawler.config import Settings
 
 
 class ExtractionResult(BaseModel):
@@ -49,26 +52,8 @@ class StubAdapter:
 
 # ---------------------------------------------------------------------------
 # ScholarlmAdapter — wires DocumentLM (OCR) + MeasurementLM (extraction).
-#
-# SETUP EXAMPLE:
-#
-#   from scholarlm import DocumentLM, MeasurementLM
-#
-#   doc_lm = DocumentLM(model_name="your-ocr-model")
-#   meas_lm = MeasurementLM(
-#       model_name="your-extraction-model",
-#       entity_identification_prompt=YOUR_ENTITY_PROMPT,
-#       entity_identification_schema=YourEntitySchema,
-#       attribute_info_dict=YOUR_ATTRIBUTE_DICT,
-#   )
-#   adapter = ScholarlmAdapter(
-#       doc_lm=doc_lm,
-#       meas_lm=meas_lm,
-#       schema_name="coastal_measurement_v1",
-#       model_version="llama3-70b-v1",
-#       lat_field="latitude",   # entity schema field name, if applicable
-#       lon_field="longitude",
-#   )
+# build_scholarlm_adapter() below constructs the production instance from
+# Settings; see that function for the real wiring.
 # ---------------------------------------------------------------------------
 class ScholarlmAdapter:
     """
@@ -126,3 +111,55 @@ class ScholarlmAdapter:
                 )
             )
         return results
+
+
+def build_scholarlm_adapter(settings: "Settings") -> ScholarlmAdapter:
+    """Construct the production ScholarlmAdapter from Settings.
+
+    Raises RuntimeError if required doc_lm_*/meas_lm_* settings are missing
+    (mirrors relevance_filter.run_filter()'s guard for FILTER_MODEL/
+    FILTER_RELEVANCE_PROMPT).
+    """
+    missing = [
+        name
+        for name, val in (
+            ("DOC_LM_MODEL", settings.doc_lm_model),
+            ("MEAS_LM_MODEL", settings.meas_lm_model),
+            ("MEAS_LM_ENTITY_IDENTIFICATION_PROMPT", settings.meas_lm_entity_identification_prompt),
+        )
+        if not val
+    ]
+    if missing:
+        raise RuntimeError(f"{', '.join(missing)} must be configured to run extraction.")
+
+    from scholarlm import DocumentLM, MeasurementLM
+
+    from coastal_crawler.measurement_schema import ATTRIBUTE_INFO_DICT, EntitySchema
+
+    doc_lm = DocumentLM(
+        model_name=settings.doc_lm_model,
+        api_base=settings.doc_lm_base_url,
+        api_key=settings.doc_lm_api_key,
+    )
+    meas_lm = MeasurementLM(
+        model_name=settings.meas_lm_model,
+        entity_identification_prompt=settings.meas_lm_entity_identification_prompt,
+        entity_identification_schema=EntitySchema,
+        attribute_info_dict=ATTRIBUTE_INFO_DICT,
+        api_base=settings.meas_lm_base_url,
+        api_key=settings.meas_lm_api_key,
+        # No processed_pdf_dirs pipeline wired up (would require persisting
+        # rendered page images per PDF) — table cleaning is disabled.
+        clean_tables=False,
+    )
+    return ScholarlmAdapter(
+        doc_lm=doc_lm,
+        meas_lm=meas_lm,
+        schema_name=settings.extraction_schema_name,
+        model_version=(
+            settings.extraction_model_version
+            or f"doc_lm={settings.doc_lm_model}+meas_lm={settings.meas_lm_model}"
+        ),
+        lat_field=settings.extraction_lat_field,
+        lon_field=settings.extraction_lon_field,
+    )

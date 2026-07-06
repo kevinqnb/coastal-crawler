@@ -111,7 +111,17 @@ coastal-crawler extract
 coastal-crawler extract --batch-size 20
 ```
 
+Extraction uses two models: `DocumentLM` (OCR) and `MeasurementLM` (structured extraction). Both are thin OpenAI-compatible clients — like the filter — so each needs its own running vLLM server (`DOC_LM_BASE_URL` / `MEAS_LM_BASE_URL`). Before running `extract`, define your entity schema and attribute catalogue in `src/coastal_crawler/measurement_schema.py` and set the `DOC_LM_*`/`MEAS_LM_*` variables in `.env` (see `.env.example`).
+
 Multiple workers can run in parallel safely — each worker uses `SELECT ... FOR UPDATE SKIP LOCKED` so the same paper is never claimed twice.
+
+On an HPC cluster, submit extraction as a single self-contained job that starts both vLLM servers (pinned to separate GPUs on one node), waits for both to be healthy, runs `coastal-crawler extract`, then tears both servers down:
+
+```bash
+qsub scripts/submit_extract_job.sh
+```
+
+`scripts/serve_model.sh <FILTER|DOC_LM|MEAS_LM> [gpu_id]` (used by both this and the filter job below) can also be run directly for local/interactive use.
 
 ### Retry failures
 
@@ -174,6 +184,13 @@ Or with a scheduler (example cron — discover daily, filter and extract hourly)
 | `FILTER_API_KEY` | if using filter | `EMPTY` | API key for the filter endpoint. Use `EMPTY` for local vLLM. |
 | `FILTER_MODEL` | if using filter | — | Model name/path to serve (e.g. `meta-llama/Llama-3.1-8B-Instruct`) |
 | `FILTER_RELEVANCE_PROMPT` | if using filter | — | System prompt describing inclusion/exclusion criteria. See `.env.example` for a full draft. |
+| `DOC_LM_BASE_URL` | if using extract | — | OpenAI-compatible endpoint for the OCR/VLM model (e.g. `http://localhost:8083/v1`). |
+| `DOC_LM_MODEL` | if using extract | — | OCR/VLM model name/path to serve (e.g. `allenai/olmOCR-2-7B-1025`). |
+| `MEAS_LM_BASE_URL` | if using extract | — | OpenAI-compatible endpoint for the extraction LLM. |
+| `MEAS_LM_MODEL` | if using extract | — | Extraction LLM model name/path to serve. |
+| `MEAS_LM_ENTITY_IDENTIFICATION_PROMPT` | if using extract | — | Prompt describing what entities/measurements to identify. Entity schema/attribute catalogue live in `src/coastal_crawler/measurement_schema.py`. |
+| `EXTRACTION_SCHEMA_NAME` | no | `coastal_measurement_v1` | Schema name stored on every `ExtractionResult`. |
+| `EXTRACTION_LAT_FIELD` / `EXTRACTION_LON_FIELD` | no | — | `EntitySchema` field names holding coordinates, if any. |
 ---
 
 ## Development

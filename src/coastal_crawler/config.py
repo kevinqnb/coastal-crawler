@@ -113,7 +113,7 @@ class Settings(BaseSettings):
         description="Number of top token logprobs to request. Must be high enough to capture true/false variants.",
     )
 
-    # Serving parameters — used only by scripts/serve_filter_model.sh.
+    # Serving parameters — used only by scripts/serve_model.sh FILTER.
     # Stored here so they are tracked alongside inference params.
     filter_port: int = Field(
         default=8000,
@@ -141,11 +141,129 @@ class Settings(BaseSettings):
     )
     filter_sif_path: str | None = Field(
         default=None,
-        description="Path to a vLLM Singularity .sif image. If set, scripts/serve_filter_model.sh runs inside the container.",
+        description="Path to a vLLM Singularity .sif image. If set, scripts/serve_model.sh FILTER runs inside the container.",
     )
     filter_batch_size: int = Field(
         default=50,
         description="Papers claimed per filter run.",
+    )
+
+    # ------------------------------------------------ Document LM (OCR/VLM)
+    doc_lm_base_url: str | None = Field(
+        default=None,
+        description="Base URL for the OCR/VLM OpenAI-compatible endpoint (e.g. vLLM).",
+    )
+    doc_lm_api_key: str = Field(
+        default="EMPTY",
+        description="API key for the DocumentLM endpoint. Use 'EMPTY' for local vLLM servers.",
+    )
+    doc_lm_model: str | None = Field(
+        default=None,
+        description="Model name to use for OCR (served via vLLM OpenAI-compatible endpoint).",
+    )
+    doc_lm_seed: int = Field(
+        default=0,
+        description="RNG seed passed to vLLM --seed for the DocumentLM server.",
+    )
+
+    # Serving parameters — used only by scripts/serve_model.sh DOC_LM.
+    doc_lm_port: int = Field(
+        default=8083,
+        description="Port vLLM listens on for DocumentLM. Must match the port in DOC_LM_BASE_URL.",
+    )
+    doc_lm_tensor_parallel_size: int = Field(
+        default=1,
+        description="Number of GPUs for tensor parallelism (vLLM --tensor-parallel-size).",
+    )
+    doc_lm_gpu_memory_utilization: float = Field(
+        default=0.90,
+        description="Fraction of GPU memory vLLM may use (vLLM --gpu-memory-utilization).",
+    )
+    doc_lm_dtype: str = Field(
+        default="auto",
+        description="Compute dtype: auto, bfloat16, float16, float32 (vLLM --dtype).",
+    )
+    doc_lm_quantization: str | None = Field(
+        default=None,
+        description="Quantization scheme: awq, gptq, fp8, etc. None = no quantization (vLLM --quantization).",
+    )
+    doc_lm_max_model_len: int | None = Field(
+        default=None,
+        description="Override the model's maximum context length (vLLM --max-model-len). None = model default.",
+    )
+    doc_lm_sif_path: str | None = Field(
+        default=None,
+        description="Path to a vLLM Singularity .sif image. If set, scripts/serve_model.sh runs DocumentLM inside the container.",
+    )
+
+    # --------------------------------------- Measurement LM (extraction)
+    meas_lm_base_url: str | None = Field(
+        default=None,
+        description="Base URL for the extraction-LLM OpenAI-compatible endpoint (e.g. vLLM).",
+    )
+    meas_lm_api_key: str = Field(
+        default="EMPTY",
+        description="API key for the MeasurementLM endpoint. Use 'EMPTY' for local vLLM servers.",
+    )
+    meas_lm_model: str | None = Field(
+        default=None,
+        description="Model name to use for measurement extraction (served via vLLM OpenAI-compatible endpoint).",
+    )
+    meas_lm_entity_identification_prompt: str | None = Field(
+        default=None,
+        description="Prompt describing the entities/measurements to identify in each paper.",
+    )
+    meas_lm_seed: int = Field(
+        default=0,
+        description="RNG seed passed to vLLM --seed for the MeasurementLM server.",
+    )
+
+    # Serving parameters — used only by scripts/serve_model.sh MEAS_LM.
+    meas_lm_port: int = Field(
+        default=8084,
+        description="Port vLLM listens on for MeasurementLM. Must match the port in MEAS_LM_BASE_URL.",
+    )
+    meas_lm_tensor_parallel_size: int = Field(
+        default=1,
+        description="Number of GPUs for tensor parallelism (vLLM --tensor-parallel-size).",
+    )
+    meas_lm_gpu_memory_utilization: float = Field(
+        default=0.90,
+        description="Fraction of GPU memory vLLM may use (vLLM --gpu-memory-utilization).",
+    )
+    meas_lm_dtype: str = Field(
+        default="auto",
+        description="Compute dtype: auto, bfloat16, float16, float32 (vLLM --dtype).",
+    )
+    meas_lm_quantization: str | None = Field(
+        default=None,
+        description="Quantization scheme: awq, gptq, fp8, etc. None = no quantization (vLLM --quantization).",
+    )
+    meas_lm_max_model_len: int | None = Field(
+        default=None,
+        description="Override the model's maximum context length (vLLM --max-model-len). None = model default.",
+    )
+    meas_lm_sif_path: str | None = Field(
+        default=None,
+        description="Path to a vLLM Singularity .sif image. If set, scripts/serve_model.sh runs MeasurementLM inside the container.",
+    )
+
+    # ------------------------------------------------------- Extraction
+    extraction_schema_name: str = Field(
+        default="coastal_measurement_v1",
+        description="Schema name stored on every ExtractionResult (see measurement_schema.py).",
+    )
+    extraction_model_version: str | None = Field(
+        default=None,
+        description="Free-form version tag stored on every ExtractionResult. Defaults to a value derived from doc_lm_model/meas_lm_model if unset.",
+    )
+    extraction_lat_field: str | None = Field(
+        default=None,
+        description="Name of the EntitySchema field holding latitude, if your schema has coordinates (see measurement_schema.py). None = no coordinates.",
+    )
+    extraction_lon_field: str | None = Field(
+        default=None,
+        description="Name of the EntitySchema field holding longitude, if your schema has coordinates (see measurement_schema.py). None = no coordinates.",
     )
 
     # ------------------------------------------------------- Wiley TDM
@@ -181,6 +299,12 @@ class Settings(BaseSettings):
         "filter_max_model_len",
         "filter_quantization",
         "filter_sif_path",
+        "doc_lm_max_model_len",
+        "doc_lm_quantization",
+        "doc_lm_sif_path",
+        "meas_lm_max_model_len",
+        "meas_lm_quantization",
+        "meas_lm_sif_path",
         mode="before",
     )
     @classmethod

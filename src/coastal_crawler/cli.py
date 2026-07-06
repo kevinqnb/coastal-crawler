@@ -52,9 +52,12 @@ def extract(
     batch_size: int = typer.Option(10, "--batch-size", help="Papers to process per run."),
 ) -> None:
     """Claim and extract a batch of relevant papers."""
+    from coastal_crawler.adapter import build_scholarlm_adapter
+    from coastal_crawler.config import get_settings
     from coastal_crawler.worker import run_worker
 
-    extracted, failed = run_worker(batch_size=batch_size)
+    adapter = build_scholarlm_adapter(get_settings())
+    extracted, failed = run_worker(batch_size=batch_size, adapter=adapter)
     typer.echo(f"Extracted {extracted}, failed {failed}.")
 
 
