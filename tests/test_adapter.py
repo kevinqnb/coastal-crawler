@@ -12,7 +12,12 @@ from typing import Any
 import pytest
 
 from coastal_crawler.adapter import ScholarlmAdapter, build_scholarlm_adapter
-from coastal_crawler.measurement_schema import ATTRIBUTE_INFO_DICT, EntitySchema
+from coastal_crawler.measurement_schema import (
+    ATTRIBUTE_INFO_DICT,
+    MEASUREMENT_EVENT_PROMPT,
+    EntitySchema,
+    MeasurementEventSchema,
+)
 
 _FAKE_SETTINGS = SimpleNamespace(
     doc_lm_model="test-ocr-model",
@@ -79,6 +84,8 @@ class TestBuildScholarlmAdapterConstruction:
             entity_identification_prompt="Identify coastal sites.",
             entity_identification_schema=EntitySchema,
             attribute_info_dict=ATTRIBUTE_INFO_DICT,
+            measurement_event_schema=MeasurementEventSchema,
+            measurement_event_prompt=MEASUREMENT_EVENT_PROMPT,
             api_base="http://localhost:8084/v1",
             api_key="EMPTY",
             clean_tables=False,

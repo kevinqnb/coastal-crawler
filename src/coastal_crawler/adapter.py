@@ -134,7 +134,12 @@ def build_scholarlm_adapter(settings: "Settings") -> ScholarlmAdapter:
 
     from scholarlm import DocumentLM, MeasurementLM
 
-    from coastal_crawler.measurement_schema import ATTRIBUTE_INFO_DICT, EntitySchema
+    from coastal_crawler.measurement_schema import (
+        ATTRIBUTE_INFO_DICT,
+        MEASUREMENT_EVENT_PROMPT,
+        EntitySchema,
+        MeasurementEventSchema,
+    )
 
     doc_lm = DocumentLM(
         model_name=settings.doc_lm_model,
@@ -146,6 +151,8 @@ def build_scholarlm_adapter(settings: "Settings") -> ScholarlmAdapter:
         entity_identification_prompt=settings.meas_lm_entity_identification_prompt,
         entity_identification_schema=EntitySchema,
         attribute_info_dict=ATTRIBUTE_INFO_DICT,
+        measurement_event_schema=MeasurementEventSchema,
+        measurement_event_prompt=MEASUREMENT_EVENT_PROMPT,
         api_base=settings.meas_lm_base_url,
         api_key=settings.meas_lm_api_key,
         # No processed_pdf_dirs pipeline wired up (would require persisting
