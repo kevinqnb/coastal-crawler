@@ -31,6 +31,13 @@ from coastal_crawler.pdf import normalize_pdf_url, pdf_headers
 _DELAY_DEFAULT = 0.5
 
 
+def doi_prefix(doi: str | None) -> str:
+    """Return the DOI registrant prefix (e.g. '10.1002' from '10.1002/lno.11924')."""
+    if not doi or "/" not in doi:
+        return "unknown"
+    return doi.split("/", 1)[0]
+
+
 def classify(url: str, discovered_from: str | None) -> str:
     """Return a short bucket label for this URL's current response."""
     url = normalize_pdf_url(url)
@@ -69,10 +76,13 @@ def main() -> None:
 
     buckets: Counter[str] = Counter()
     examples: dict[str, list[str]] = defaultdict(list)
+    prefix_buckets: dict[str, Counter[str]] = defaultdict(Counter)
 
     for i, (paper_id, doi, url, discovered_from) in enumerate(rows, 1):
         label = classify(url, discovered_from)
+        prefix = doi_prefix(doi)
         buckets[label] += 1
+        prefix_buckets[prefix][label] += 1
         if len(examples[label]) < 3:
             examples[label].append(f"[{paper_id}] {doi or 'no-doi'}  {url}")
 
@@ -87,6 +97,15 @@ def main() -> None:
         print(f"{count:5d} ({pct:5.1f}%)  {label}")
         for ex in examples[label]:
             print(f"           {ex}")
+
+    print("\n--- By DOI prefix ---")
+    all_labels = sorted(buckets.keys())
+    header = f"{'prefix':<14}" + "".join(f"{label:<24}" for label in all_labels) + "total"
+    print(header)
+    for prefix, counts in sorted(prefix_buckets.items(), key=lambda kv: -sum(kv[1].values())):
+        total = sum(counts.values())
+        row = f"{prefix:<14}" + "".join(f"{counts.get(label, 0):<24}" for label in all_labels) + f"{total}"
+        print(row)
 
     print("\nInterpretation:")
     print("  HTTP 401/403     -> no TDM entitlement for this DOI/journal (check WILEY_API_KEY / TDM agreement scope)")
