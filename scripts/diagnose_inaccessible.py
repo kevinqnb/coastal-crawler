@@ -28,7 +28,11 @@ from coastal_crawler.db.engine import get_session
 from coastal_crawler.db.models import Paper
 from coastal_crawler.pdf import normalize_pdf_url, pdf_headers
 
-_DELAY_DEFAULT = 0.5
+# Wiley's TDM API allows up to 60 requests per 10 minutes (i.e. ~10s apart) —
+# the binding limit, stricter than its "3 articles/second" figure. This
+# script hits the URL directly rather than through pdf.check_pdf_accessible,
+# so it isn't covered by that module's built-in throttle and needs its own.
+_DELAY_DEFAULT = 10.0
 _BODY_PREVIEW_LEN = 300
 # Headers that would signal "this is a disguised rate/concurrency limit" or
 # otherwise tell us how long to back off, rather than a plain server error.
@@ -80,7 +84,10 @@ def classify(url: str, discovered_from: str | None) -> tuple[str, dict[str, str]
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--limit", type=int, default=200, help="Max papers to sample (default: 200)")
-    parser.add_argument("--delay", type=float, default=_DELAY_DEFAULT, help="Seconds between requests")
+    parser.add_argument(
+        "--delay", type=float, default=_DELAY_DEFAULT,
+        help="Seconds between requests (default: 10.0, Wiley's documented minimum — lowering this will trigger quota violations)",
+    )
     args = parser.parse_args()
 
     with get_session() as session:
