@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
 
+import httpx
 import pytest
 from sqlalchemy import func, select
 from sqlalchemy.engine import Engine
@@ -37,7 +38,7 @@ def _uid() -> str:
 def make_paper(
     *,
     oa_pdf_url: str | None = "https://example.com/paper.pdf",
-    status: str = "discovered",
+    status: str = "relevant",
     **kwargs: Any,
 ) -> dict[str, Any]:
     uid = _uid()
@@ -90,11 +91,16 @@ def worker_db(clean_db: Engine, mocker: Any) -> Engine:
 
 @pytest.fixture
 def mock_download(mocker: Any) -> MagicMock:
-    """Mock httpx.get so no real HTTP requests are made during PDF download."""
+    """Mock httpx.get so no real HTTP requests are made during PDF download.
+
+    Patches coastal_crawler.pdf.httpx.get, since that's where download_pdf()
+    actually issues the network request — worker.py itself only imports
+    download_pdf, not httpx.
+    """
     mock_resp = MagicMock()
     mock_resp.content = b"%PDF-1.4 fake"
     mock_resp.raise_for_status = MagicMock()
-    return mocker.patch("coastal_crawler.worker.httpx.get", return_value=mock_resp)
+    return mocker.patch("coastal_crawler.pdf.httpx.get", return_value=mock_resp)
 
 
 def _insert(engine: Engine, *paper_dicts: dict[str, Any]) -> None:
@@ -205,11 +211,11 @@ class TestRunWorkerSuccess:
             extracted = s.scalar(
                 select(func.count(Paper.id)).where(Paper.status == "extracted")
             )
-            discovered = s.scalar(
-                select(func.count(Paper.id)).where(Paper.status == "discovered")
+            unclaimed = s.scalar(
+                select(func.count(Paper.id)).where(Paper.status == "relevant")
             )
         assert extracted == 3
-        assert discovered == 2
+        assert unclaimed == 2
 
     def test_adapter_called_with_path(
         self, worker_db: Engine, mock_download: MagicMock
@@ -274,7 +280,7 @@ class TestRunWorkerFailures:
     ) -> None:
         _insert(worker_db, make_paper())
         mocker.patch(
-            "coastal_crawler.worker.httpx.get",
+            "coastal_crawler.pdf.httpx.get",
             side_effect=Exception("connection refused"),
         )
         extracted, failed = run_worker(batch_size=10, adapter=StubAdapter())
@@ -283,6 +289,51 @@ class TestRunWorkerFailures:
             paper = s.scalars(select(Paper)).one()
         assert paper.status == "failed"
         assert "connection refused" in paper.error
+
+    def test_http_status_error_includes_response_body(
+        self, worker_db: Engine, mocker: Any
+    ) -> None:
+        """A non-2xx PDF download should surface the response body in
+        paper.error, not just httpx's generic 'Server error ... for url ...'
+        summary — this is where Wiley's Apigee gateway hides the actual
+        rate-limit diagnostic."""
+        _insert(worker_db, make_paper())
+        fault_body = (
+            '{"fault":{"faultstring":"Rate limit quota violation. '
+            'Quota limit  exceeded.","detail":'
+            '{"errorcode":"policies.ratelimit.QuotaViolation"}}}'
+        )
+        request = httpx.Request("GET", "https://api.wiley.com/onlinelibrary/tdm/v1/some-doi")
+        response = httpx.Response(500, content=fault_body.encode(), request=request)
+        mocker.patch("coastal_crawler.pdf.httpx.get", return_value=response)
+
+        extracted, failed = run_worker(batch_size=10, adapter=StubAdapter())
+
+        assert (extracted, failed) == (0, 1)
+        with Session(worker_db) as s:
+            paper = s.scalars(select(Paper)).one()
+        assert paper.status == "failed"
+        assert "QuotaViolation" in paper.error
+        assert "Rate limit quota violation" in paper.error
+
+    def test_http_status_error_empty_body_still_marks_failed(
+        self, worker_db: Engine, mocker: Any
+    ) -> None:
+        """A non-2xx response with no body should still produce a clear
+        error, distinguishable from a body having been silently dropped."""
+        _insert(worker_db, make_paper())
+        request = httpx.Request("GET", "https://example.com/paper.pdf")
+        response = httpx.Response(500, content=b"", request=request)
+        mocker.patch("coastal_crawler.pdf.httpx.get", return_value=response)
+
+        extracted, failed = run_worker(batch_size=10, adapter=StubAdapter())
+
+        assert (extracted, failed) == (0, 1)
+        with Session(worker_db) as s:
+            paper = s.scalars(select(Paper)).one()
+        assert paper.status == "failed"
+        assert "500" in paper.error
+        assert "empty response body" in paper.error
 
     def test_adapter_error_marks_failed(
         self, worker_db: Engine, mock_download: MagicMock

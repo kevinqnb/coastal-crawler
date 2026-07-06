@@ -35,15 +35,15 @@ def discover(
 def filter_papers(
     batch_size: int = typer.Option(None, "--batch-size", help="Papers to filter per run. Defaults to FILTER_BATCH_SIZE in .env."),
 ) -> None:
-    """Check PDF accessibility then classify papers as relevant or irrelevant using an LLM."""
+    """Classify papers as relevant or irrelevant using an LLM."""
     from coastal_crawler.config import get_settings
     from coastal_crawler.relevance_filter import run_filter
 
     size = batch_size if batch_size is not None else get_settings().filter_batch_size
-    relevant, irrelevant, inaccessible, errors = run_filter(batch_size=size)
+    relevant, irrelevant, errors = run_filter(batch_size=size)
     typer.echo(
         f"Relevant: {relevant}, irrelevant: {irrelevant}, "
-        f"inaccessible: {inaccessible}, errors (reset for retry): {errors}."
+        f"errors (reset for retry): {errors}."
     )
 
 
@@ -194,7 +194,13 @@ def requeue_filtered() -> None:
 
 @app.command()
 def requeue_inaccessible() -> None:
-    """Reset inaccessible papers back to 'discovered' so the filter retries the PDF check."""
+    """Reset inaccessible papers back to 'discovered' for re-filtering.
+
+    Legacy command: the filter no longer performs a PDF-accessibility check
+    (see run_filter), so it won't produce new 'inaccessible' rows. PDF
+    accessibility is now discovered at extraction time (status='failed').
+    This remains useful for clearing out rows that predate that change.
+    """
     from coastal_crawler.db import store
     from coastal_crawler.db.engine import get_session
 

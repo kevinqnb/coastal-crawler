@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import httpx
 import structlog
 
 from coastal_crawler.adapter import ExtractionAdapter, StubAdapter
@@ -10,6 +11,23 @@ from coastal_crawler.db.engine import get_session
 from coastal_crawler.pdf import download_pdf
 
 log = structlog.get_logger(__name__)
+
+_ERROR_BODY_PREVIEW_LEN = 500
+
+
+def _describe_http_status_error(exc: httpx.HTTPStatusError) -> str:
+    """Build an error string that includes the HTTP response body.
+
+    str(exc) reports only the status code and URL (e.g. "Server error '500
+    Internal Server Error' for url '...'") — it never includes the response
+    body. For Wiley's TDM API, the actually useful diagnostic (e.g. a
+    disguised rate-limit violation returned as a bare HTTP 500 by Wiley's
+    Apigee gateway) lives in that body, so append a preview of it.
+    """
+    body = (exc.response.text or "").strip()
+    if body:
+        return f"{exc}: {body[:_ERROR_BODY_PREVIEW_LEN]}"
+    return f"{exc} (empty response body)"
 
 
 def run_worker(
@@ -94,6 +112,15 @@ def _process_paper(
                 pdf_path.unlink(missing_ok=True)
 
             return True
+
+        except httpx.HTTPStatusError as exc:
+            reason = _describe_http_status_error(exc)
+            log.warning("paper_failed", paper_id=paper_id, error=reason)
+            # Roll back any flushed-but-uncommitted extraction rows before
+            # recording the failure, so we don't persist partial results.
+            session.rollback()
+            store.mark_failed(paper_id, reason[:2000], session)
+            return False
 
         except Exception as exc:
             log.warning("paper_failed", paper_id=paper_id, error=str(exc))
