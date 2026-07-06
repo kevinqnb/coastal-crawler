@@ -29,6 +29,17 @@ from coastal_crawler.db.models import Paper
 from coastal_crawler.pdf import normalize_pdf_url, pdf_headers
 
 _DELAY_DEFAULT = 0.5
+_BODY_PREVIEW_LEN = 300
+# Headers that would signal "this is a disguised rate/concurrency limit" or
+# otherwise tell us how long to back off, rather than a plain server error.
+_INTERESTING_HEADERS = (
+    "retry-after",
+    "x-ratelimit-limit",
+    "x-ratelimit-remaining",
+    "x-ratelimit-reset",
+    "x-request-id",
+    "server",
+)
 
 
 def doi_prefix(doi: str | None) -> str:
@@ -38,8 +49,13 @@ def doi_prefix(doi: str | None) -> str:
     return doi.split("/", 1)[0]
 
 
-def classify(url: str, discovered_from: str | None) -> str:
-    """Return a short bucket label for this URL's current response."""
+def classify(url: str, discovered_from: str | None) -> tuple[str, dict[str, str] | None, str | None]:
+    """Return (bucket label, response headers of interest, body preview).
+
+    Headers/body are only populated for non-2xx HTTP responses — that's the
+    case where we need more than a status code to tell a genuine server
+    error apart from a disguised rate limit.
+    """
     url = normalize_pdf_url(url)
     try:
         resp = httpx.get(
@@ -49,14 +65,16 @@ def classify(url: str, discovered_from: str | None) -> str:
             follow_redirects=True,
         )
         if resp.status_code in (200, 206):
-            return "200/206 (now accessible)"
-        return f"HTTP {resp.status_code}"
+            return "200/206 (now accessible)", None, None
+        headers = {h: resp.headers[h] for h in _INTERESTING_HEADERS if h in resp.headers}
+        body = resp.text[:_BODY_PREVIEW_LEN].strip() or None
+        return f"HTTP {resp.status_code}", headers, body
     except httpx.TimeoutException:
-        return "timeout"
+        return "timeout", None, None
     except httpx.ConnectError:
-        return "connect-error"
+        return "connect-error", None, None
     except Exception as exc:
-        return f"{type(exc).__name__}"
+        return f"{type(exc).__name__}", None, None
 
 
 def main() -> None:
@@ -77,14 +95,17 @@ def main() -> None:
     buckets: Counter[str] = Counter()
     examples: dict[str, list[str]] = defaultdict(list)
     prefix_buckets: dict[str, Counter[str]] = defaultdict(Counter)
+    error_details: dict[str, list[tuple[str, dict[str, str], str | None]]] = defaultdict(list)
 
     for i, (paper_id, doi, url, discovered_from) in enumerate(rows, 1):
-        label = classify(url, discovered_from)
+        label, headers, body = classify(url, discovered_from)
         prefix = doi_prefix(doi)
         buckets[label] += 1
         prefix_buckets[prefix][label] += 1
         if len(examples[label]) < 3:
             examples[label].append(f"[{paper_id}] {doi or 'no-doi'}  {url}")
+        if headers is not None and len(error_details[label]) < 3:
+            error_details[label].append((f"[{paper_id}] {doi or 'no-doi'}", headers, body))
 
         if i % 25 == 0:
             print(f"  ...{i}/{len(rows)}")
@@ -107,11 +128,20 @@ def main() -> None:
         row = f"{prefix:<14}" + "".join(f"{counts.get(label, 0):<24}" for label in all_labels) + f"{total}"
         print(row)
 
+    print("\n--- Error detail samples (headers + body preview) ---")
+    for label in sorted(error_details.keys()):
+        print(f"\n{label}:")
+        for ident, headers, body in error_details[label]:
+            print(f"  {ident}")
+            print(f"    headers: {headers if headers else '(none of the interesting ones present)'}")
+            print(f"    body:    {body!r}")
+
     print("\nInterpretation:")
     print("  HTTP 401/403     -> no TDM entitlement for this DOI/journal (check WILEY_API_KEY / TDM agreement scope)")
     print("  HTTP 429         -> rate-limited by Wiley (check_pdf_accessible has no backoff/delay)")
     print("  HTTP 404         -> bad DOI -> TDM URL mapping")
-    print("  HTTP 5xx         -> Wiley-side error, likely transient")
+    print("  HTTP 5xx         -> Wiley-side error; check the detail samples above for a Retry-After/rate-limit")
+    print("                      header or a body message before assuming a plain retry-with-backoff will help")
     print("  timeout/connect  -> network/transient, likely transient")
     print("  200/206          -> now accessible; was probably a transient failure or rate limit at filter time")
 
