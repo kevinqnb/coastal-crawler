@@ -128,6 +128,56 @@ def show(
             typer.echo("")
 
 
+@app.command(name="show-extractions")
+def show_extractions(
+    paper_ids: Optional[list[int]] = typer.Argument(default=None, help="Paper IDs to inspect. Omit to list the most recently extracted papers."),
+    limit: int = typer.Option(20, "--limit", "-n", help="Max papers to show when listing (default: 20)."),
+) -> None:
+    """Show extracted papers together with their measurement data.
+
+    Examples:
+
+      coastal-crawler show-extractions               # most recently extracted papers\n
+      coastal-crawler show-extractions 42 107         # look up specific papers\n
+      coastal-crawler show-extractions -n 50
+    """
+    from coastal_crawler.db import store
+    from coastal_crawler.db.engine import get_session
+
+    with get_session() as session:
+        papers = store.papers_with_extractions(session, paper_ids=paper_ids, limit=limit)
+
+        if not papers:
+            typer.echo("No extracted papers found.")
+            return
+
+        for p in papers:
+            if p is None:
+                typer.echo("not found\n")
+                continue
+
+            doi_str = f"doi:{p.doi}" if p.doi else (f"oalex:{p.openalex_id}" if p.openalex_id else "no-id")
+            typer.echo(f"[{p.id}] {(p.title or 'untitled')[:80]}")
+            typer.echo(f"  {doi_str}  status:{p.status}")
+
+            if not p.extractions:
+                typer.echo("  (no extraction rows)\n")
+                continue
+
+            typer.echo(f"  {len(p.extractions)} measurement(s):")
+            for e in sorted(p.extractions, key=lambda e: e.id):
+                data = e.data or {}
+                attribute = data.get("attribute", "?")
+                value = data.get("value", "?")
+                units = data.get("units") or ""
+                entity = data.get("name") or data.get("identifiers") or "?"
+                event_date = data.get("date")
+                context = " / ".join(str(b) for b in (entity, event_date) if b)
+                confidence = f"  (confidence: {e.confidence:.3f})" if e.confidence is not None else ""
+                typer.echo(f"    - {attribute}: {value} {units}   [{context}]  model={e.model_version}{confidence}")
+            typer.echo("")
+
+
 @app.command()
 def status(
     limit: int = typer.Option(10, "--limit", "-n", help="Number of recent papers to show."),

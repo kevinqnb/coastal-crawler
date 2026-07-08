@@ -16,7 +16,7 @@ from typing import Any
 
 from sqlalchemy import func, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from coastal_crawler.adapter import ExtractionResult
 from coastal_crawler.db.models import CrawlState, Extraction, Paper
@@ -347,4 +347,28 @@ def count_by_status(session: Session) -> dict[str, int]:
 def recent_papers(limit: int, session: Session) -> list[Paper]:
     """Return the most recently discovered papers, newest first."""
     stmt = select(Paper).order_by(Paper.discovered_at.desc()).limit(limit)
+    return list(session.scalars(stmt).all())
+
+
+def papers_with_extractions(
+    session: Session,
+    paper_ids: list[int] | None = None,
+    limit: int = 20,
+) -> list[Paper | None]:
+    """Return papers together with their extraction rows, eagerly loaded.
+
+    With no ``paper_ids``, returns the most recently extracted papers
+    (``status == 'extracted'``), newest first, capped at ``limit``.
+    With ``paper_ids``, returns one entry per requested ID in that order
+    (``None`` for any ID not found), regardless of status — useful for
+    checking a paper that failed partway through extraction. ``limit`` is
+    ignored in this mode.
+    """
+    stmt = select(Paper).options(selectinload(Paper.extractions))
+    if paper_ids:
+        papers = list(session.scalars(stmt.where(Paper.id.in_(paper_ids))).all())
+        by_id = {p.id: p for p in papers}
+        return [by_id.get(pid) for pid in paper_ids]
+
+    stmt = stmt.where(Paper.status == "extracted").order_by(Paper.extracted_at.desc()).limit(limit)
     return list(session.scalars(stmt).all())
