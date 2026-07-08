@@ -3,7 +3,7 @@
 #
 # All parameters are read from .env (or environment variables already set),
 # namespaced by role: FILTER_*, DOC_LM_*, or MEAS_LM_*. The corresponding
-# client code (relevance_filter.py / adapter.py's build_scholarlm_adapter)
+# client code (relevance_filter.py / adapter.py's build_extraction_adapter)
 # reads the same file, so inference settings stay in sync automatically.
 #
 # GPU pinning: pass a GPU id as the second argument to pin this server to

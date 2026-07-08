@@ -1,4 +1,4 @@
-"""Entity schema and attribute catalogue for MeasurementLM extraction.
+"""Entity schema and attribute catalogue for ExtractionLM extraction.
 
 Tuned for a broad sweep over coastal-ecosystem field-measurement papers —
 the same target population as ``FILTER_RELEVANCE_PROMPT`` in ``.env.example``.
@@ -7,25 +7,27 @@ that prompt, so anything that passed the relevance filter has a shot at
 producing a real measurement here.
 
 `EntitySchema`, `MeasurementEventSchema`, and `ATTRIBUTE_INFO_DICT` are
-Python objects (not env vars) because `MeasurementLM` needs a real pydantic
-model and a real dict, not a string. `MEAS_LM_ENTITY_IDENTIFICATION_PROMPT`
+Python objects (not env vars) because `ExtractionLM` needs a real
+pydantic model and a real dict, not a string. `MEAS_LM_ENTITY_IDENTIFICATION_PROMPT`
 (prose describing what to identify) lives in `.env`/`Settings` instead,
 alongside `filter_relevance_prompt`, since it's free text that's reasonable
 to iterate on without a code change — see the drafted default in
-`.env.example`.
-
-See ``../scholarlm/experiments/configs/pond.py`` (sibling repo) for the
-worked example this is modeled on (a different dataset — aquatic
-ecosystems). Two things carried over from it:
+`.env.example`. `build_direct_extraction_prompt()` below combines that
+free-text prompt with ``MEASUREMENT_EVENT_PROMPT`` and ``ATTRIBUTE_INFO_DICT``
+into the single combined prompt ``ExtractionLM`` needs, since
+extraction is now one LLM call per document rather than a multi-step
+pipeline with separate entity/attribute/event prompts.
 
 - ``EntitySchema`` is the *ecosystem/site* identity — one record per
   distinct physical location, deduplicated across dates/treatments/sub-sites.
 - ``MeasurementEventSchema`` is the *event* context (date, sub-location,
   sampling conditions) that distinguishes repeat measurements of the same
-  site — this is what ``build_scholarlm_adapter()`` passes to
-  ``MeasurementLM`` as ``measurement_event_schema``/``measurement_event_prompt``
-  so date/sub-location actually get captured per measurement, not just
-  once per site.
+  site.
+- ``DirectExtractionSchema`` is the flat per-record schema
+  ``ExtractionLM`` actually extracts against: entity fields +
+  event fields + attribute/value/units, combined via pydantic multiple
+  inheritance (``EntitySchema``/``MeasurementEventSchema`` share no field
+  names, so this merges cleanly without redeclaring anything).
 """
 
 from __future__ import annotations
@@ -52,9 +54,9 @@ class EntitySchema(BaseModel):
 
 
 # entity_identification_prompt is NOT defined here — it lives in .env as
-# MEAS_LM_ENTITY_IDENTIFICATION_PROMPT (see build_scholarlm_adapter(), which
-# reads it from Settings). See .env.example for a drafted prompt tuned to
-# the EntitySchema fields above.
+# MEAS_LM_ENTITY_IDENTIFICATION_PROMPT (see build_extraction_adapter(), which
+# reads it from Settings and passes it into build_direct_extraction_prompt()).
+# See .env.example for a drafted prompt tuned to the EntitySchema fields above.
 
 
 # ---------------------------------------------------------------------------
@@ -269,3 +271,51 @@ ATTRIBUTE_INFO_DICT: dict[str, dict[str, Any]] = {
         "units": ["µmol/L", "mg/L", "µg Si/L"],
     },
 }
+
+
+# ---------------------------------------------------------------------------
+# Direct extraction schema/prompt — ExtractionLM (single LLM call
+# per document, extracting entity + event + attribute/value/units together).
+# ---------------------------------------------------------------------------
+
+
+class DirectExtractionSchema(EntitySchema, MeasurementEventSchema):
+    """Flat per-record schema for ExtractionLM.
+
+    Combines entity fields, event fields, and the measurement itself
+    (attribute/value/units) into one item per (entity, event, attribute)
+    record — the shape ExtractionLM's single extraction call
+    produces one JSON item per.
+    """
+
+    attribute: str
+    value: str | None
+    units: str | None
+
+
+def _format_attribute_list() -> str:
+    lines = []
+    for idx, (name, info) in enumerate(ATTRIBUTE_INFO_DICT.items(), 1):
+        units = ", ".join(info.get("units", []))
+        units_part = f" Units: {units}." if units else ""
+        lines.append(f"{idx}. {name} — {info['description']}{units_part}")
+    return "\n".join(lines)
+
+
+def build_direct_extraction_prompt(entity_identification_prompt: str) -> str:
+    """Combine entity/event/attribute guidance into ExtractionLM's
+    dataset-specific direct_extraction_prompt.
+
+    ``entity_identification_prompt`` is the free-text prompt from
+    ``Settings.meas_lm_entity_identification_prompt`` (``.env``). This
+    appends the event-field prompt and a numbered attribute list built from
+    ``ATTRIBUTE_INFO_DICT`` — reusing the existing descriptions/units rather
+    than duplicating them into a second hand-written prompt.
+    """
+    return (
+        f"{entity_identification_prompt}\n\n"
+        f"{MEASUREMENT_EVENT_PROMPT}\n\n"
+        "ATTRIBUTES TO EXTRACT:\n"
+        "For each entity and measurement event, extract a value for any of the "
+        f"following attributes if directly measured and reported:\n\n{_format_attribute_list()}\n"
+    )

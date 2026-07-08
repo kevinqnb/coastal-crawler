@@ -155,7 +155,7 @@ class Settings(BaseSettings):
     )
     doc_lm_api_key: str = Field(
         default="EMPTY",
-        description="API key for the DocumentLM endpoint. Use 'EMPTY' for local vLLM servers.",
+        description="API key for the OCRLM endpoint. Use 'EMPTY' for local vLLM servers.",
     )
     doc_lm_model: str | None = Field(
         default=None,
@@ -163,13 +163,13 @@ class Settings(BaseSettings):
     )
     doc_lm_seed: int = Field(
         default=0,
-        description="RNG seed passed to vLLM --seed for the DocumentLM server.",
+        description="RNG seed passed to vLLM --seed for the OCRLM server.",
     )
 
     # Serving parameters — used only by scripts/serve_model.sh DOC_LM.
     doc_lm_port: int = Field(
         default=8083,
-        description="Port vLLM listens on for DocumentLM. Must match the port in DOC_LM_BASE_URL.",
+        description="Port vLLM listens on for OCRLM. Must match the port in DOC_LM_BASE_URL.",
     )
     doc_lm_tensor_parallel_size: int = Field(
         default=1,
@@ -193,7 +193,7 @@ class Settings(BaseSettings):
     )
     doc_lm_sif_path: str | None = Field(
         default=None,
-        description="Path to a vLLM Singularity .sif image. If set, scripts/serve_model.sh runs DocumentLM inside the container.",
+        description="Path to a vLLM Singularity .sif image. If set, scripts/serve_model.sh runs OCRLM inside the container.",
     )
 
     # --------------------------------------- Measurement LM (extraction)
@@ -203,7 +203,7 @@ class Settings(BaseSettings):
     )
     meas_lm_api_key: str = Field(
         default="EMPTY",
-        description="API key for the MeasurementLM endpoint. Use 'EMPTY' for local vLLM servers.",
+        description="API key for the ExtractionLM endpoint. Use 'EMPTY' for local vLLM servers.",
     )
     meas_lm_model: str | None = Field(
         default=None,
@@ -215,13 +215,13 @@ class Settings(BaseSettings):
     )
     meas_lm_seed: int = Field(
         default=0,
-        description="RNG seed passed to vLLM --seed for the MeasurementLM server.",
+        description="RNG seed passed to vLLM --seed for the ExtractionLM server.",
     )
 
     # Serving parameters — used only by scripts/serve_model.sh MEAS_LM.
     meas_lm_port: int = Field(
         default=8084,
-        description="Port vLLM listens on for MeasurementLM. Must match the port in MEAS_LM_BASE_URL.",
+        description="Port vLLM listens on for ExtractionLM. Must match the port in MEAS_LM_BASE_URL.",
     )
     meas_lm_tensor_parallel_size: int = Field(
         default=1,
@@ -245,7 +245,7 @@ class Settings(BaseSettings):
     )
     meas_lm_sif_path: str | None = Field(
         default=None,
-        description="Path to a vLLM Singularity .sif image. If set, scripts/serve_model.sh runs MeasurementLM inside the container.",
+        description="Path to a vLLM Singularity .sif image. If set, scripts/serve_model.sh runs ExtractionLM inside the container.",
     )
 
     # ------------------------------------------------------- Extraction

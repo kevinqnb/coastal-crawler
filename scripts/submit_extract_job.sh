@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# SGE job script — start the DocumentLM (OCR) and MeasurementLM (extraction)
+# SGE job script — start the OCRLM (OCR) and ExtractionLM (extraction)
 # vLLM servers on separate GPUs of the same node, run extraction, then shut
 # both servers down.
 #

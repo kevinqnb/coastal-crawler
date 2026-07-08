@@ -2,7 +2,7 @@
 
 Discovery and extraction pipeline for coastal-ecosystem papers.
 
-Papers are discovered from one or more APIs, deduplicated by DOI, screened for relevance by a two-stage filter (PDF accessibility check then LLM abstract classification), and then queued for PDF extraction via the `scholarlm` library.
+Papers are discovered from one or more APIs, deduplicated by DOI, screened for relevance by a two-stage filter (PDF accessibility check then LLM abstract classification), and then queued for PDF extraction via a native OCR/extraction pipeline (`src/coastal_crawler/extraction/`).
 
 ---
 
@@ -14,6 +14,8 @@ cp .env.example .env
 $EDITOR .env # modify the .env file with keys and task specifications
 alembic upgrade head
 ```
+
+Extraction requires poppler-utils (`pdfinfo`/`pdftoppm`) to be installed on the system for PDF page rendering.
 
 ---
 
@@ -104,14 +106,14 @@ Configure the endpoint and criteria prompt in `.env` — see the **Environment v
 
 ### Extract papers
 
-Claims a batch of relevant papers, downloads the open-access PDF, runs `scholarlm` extraction, and writes results to the `extractions` table.
+Claims a batch of relevant papers, downloads the open-access PDF, runs extraction, and writes results to the `extractions` table.
 
 ```bash
 coastal-crawler extract
 coastal-crawler extract --batch-size 20
 ```
 
-Extraction uses two models: `DocumentLM` (OCR) and `MeasurementLM` (structured extraction). Both are thin OpenAI-compatible clients — like the filter — so each needs its own running vLLM server (`DOC_LM_BASE_URL` / `MEAS_LM_BASE_URL`). Before running `extract`, define your entity schema and attribute catalogue in `src/coastal_crawler/measurement_schema.py` and set the `DOC_LM_*`/`MEAS_LM_*` variables in `.env` (see `.env.example`).
+Extraction uses two models: `OCRLM` (OCR) and `ExtractionLM` (single-call direct measurement extraction — one LLM call per document, no intermediate provenance/attribute-detection steps). Both are thin OpenAI-compatible clients — like the filter — so each needs its own running vLLM server (`DOC_LM_BASE_URL` / `MEAS_LM_BASE_URL`). Before running `extract`, define your entity schema and attribute catalogue in `src/coastal_crawler/measurement_schema.py` and set the `DOC_LM_*`/`MEAS_LM_*` variables in `.env` (see `.env.example`).
 
 Multiple workers can run in parallel safely — each worker uses `SELECT ... FOR UPDATE SKIP LOCKED` so the same paper is never claimed twice.
 

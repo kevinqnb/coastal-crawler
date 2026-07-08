@@ -1,7 +1,9 @@
-"""Extraction adapter — thin interface between the worker and the scholarlm library.
+"""Extraction adapter — thin interface between the worker and the native
+OCR/extraction pipeline (``coastal_crawler.extraction``).
 
-The worker depends only on ``ExtractionAdapter``; the real library call lives here.
-Swap in ``StubAdapter`` for tests; use ``ScholarlmAdapter`` for production.
+The worker depends only on ``ExtractionAdapter``; the real pipeline call
+lives here. Swap in ``StubAdapter`` for tests; use ``DirectExtractionAdapter``
+for production.
 """
 
 from __future__ import annotations
@@ -10,6 +12,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from pydantic import BaseModel
+
+from coastal_crawler.extraction import ExtractionLM, OCRLM
 
 if TYPE_CHECKING:
     from coastal_crawler.config import Settings
@@ -38,7 +42,7 @@ class ExtractionAdapter(Protocol):
             pdf_path: Path to a downloaded PDF file.
 
         Returns:
-            One ``ExtractionResult`` per deduplicated measurement.
+            One ``ExtractionResult`` per extracted measurement.
         """
         ...
 
@@ -51,13 +55,13 @@ class StubAdapter:
 
 
 # ---------------------------------------------------------------------------
-# ScholarlmAdapter — wires DocumentLM (OCR) + MeasurementLM (extraction).
-# build_scholarlm_adapter() below constructs the production instance from
-# Settings; see that function for the real wiring.
+# DirectExtractionAdapter — wires OCRLM (OCR) + ExtractionLM (single-call
+# direct extraction). build_extraction_adapter() below constructs the
+# production instance from Settings; see that function for the real wiring.
 # ---------------------------------------------------------------------------
-class ScholarlmAdapter:
+class DirectExtractionAdapter:
     """
-    Calls DocumentLM then MeasurementLM and converts raw dicts to ExtractionResult.
+    Calls OCRLM then ExtractionLM and converts raw dicts to ExtractionResult.
 
     ``lat_field`` / ``lon_field`` name the entity-schema fields that hold
     geographic coordinates.  Set to None if your schema has no coordinates.
@@ -65,8 +69,8 @@ class ScholarlmAdapter:
 
     def __init__(
         self,
-        doc_lm: Any,           # scholarlm.DocumentLM
-        meas_lm: Any,          # scholarlm.MeasurementLM
+        doc_lm: OCRLM,
+        meas_lm: ExtractionLM,
         schema_name: str,
         model_version: str,
         lat_field: str | None = None,
@@ -80,12 +84,14 @@ class ScholarlmAdapter:
         self.lon_field = lon_field
 
     def extract(self, pdf_path: Path) -> list[ExtractionResult]:
-        # Step 1: OCR via DocumentLM.fit() → list of OCR strings, one per PDF.
+        # Step 1: OCR via OCRLM.fit() → list of OCR strings, one per PDF.
         ocr_texts: list[str] = self.doc_lm.fit([str(pdf_path)])
 
-        # Step 2: Extraction via MeasurementLM.fit() → list of measurement dicts.
-        # Each dict has keys: value, units, attribute, entity_id, page_number,
-        # source, context, and all entity schema fields.
+        # Step 2: Extraction via ExtractionLM.fit() → list of measurement
+        # dicts. Each dict has keys: value, units, attribute, entity_id,
+        # context, and all entity/event schema fields. No provenance fields
+        # (page_number, table_number, etc.) are produced — this ablation
+        # makes a single LLM call per document.
         raw: list[dict[str, Any]] = self.meas_lm.fit(ocr_texts)
 
         results: list[ExtractionResult] = []
@@ -103,7 +109,7 @@ class ScholarlmAdapter:
                     schema_name=self.schema_name,
                     model_version=self.model_version,
                     data=record,
-                    # STUB: wire in a real confidence score if MeasurementLM exposes one.
+                    # STUB: wire in a real confidence score if ExtractionLM exposes one.
                     confidence=None,
                     provenance=provenance,
                     latitude=record.get(self.lat_field) if self.lat_field else None,
@@ -113,8 +119,8 @@ class ScholarlmAdapter:
         return results
 
 
-def build_scholarlm_adapter(settings: "Settings") -> ScholarlmAdapter:
-    """Construct the production ScholarlmAdapter from Settings.
+def build_extraction_adapter(settings: "Settings") -> DirectExtractionAdapter:
+    """Construct the production DirectExtractionAdapter from Settings.
 
     Raises RuntimeError if required doc_lm_*/meas_lm_* settings are missing
     (mirrors relevance_filter.run_filter()'s guard for FILTER_MODEL/
@@ -131,35 +137,27 @@ def build_scholarlm_adapter(settings: "Settings") -> ScholarlmAdapter:
     ]
     if missing:
         raise RuntimeError(f"{', '.join(missing)} must be configured to run extraction.")
+    # Narrow str | None -> str for the type checker; the guard above already
+    # verified these are non-empty at runtime.
+    assert settings.doc_lm_model is not None
+    assert settings.meas_lm_model is not None
+    assert settings.meas_lm_entity_identification_prompt is not None
 
-    from scholarlm import DocumentLM, MeasurementLM
+    from coastal_crawler.measurement_schema import DirectExtractionSchema, build_direct_extraction_prompt
 
-    from coastal_crawler.measurement_schema import (
-        ATTRIBUTE_INFO_DICT,
-        MEASUREMENT_EVENT_PROMPT,
-        EntitySchema,
-        MeasurementEventSchema,
-    )
-
-    doc_lm = DocumentLM(
+    doc_lm = OCRLM(
         model_name=settings.doc_lm_model,
         api_base=settings.doc_lm_base_url,
         api_key=settings.doc_lm_api_key,
     )
-    meas_lm = MeasurementLM(
+    meas_lm = ExtractionLM(
         model_name=settings.meas_lm_model,
-        entity_identification_prompt=settings.meas_lm_entity_identification_prompt,
-        entity_identification_schema=EntitySchema,
-        attribute_info_dict=ATTRIBUTE_INFO_DICT,
-        measurement_event_schema=MeasurementEventSchema,
-        measurement_event_prompt=MEASUREMENT_EVENT_PROMPT,
+        direct_extraction_schema=DirectExtractionSchema,
+        direct_extraction_prompt=build_direct_extraction_prompt(settings.meas_lm_entity_identification_prompt),
         api_base=settings.meas_lm_base_url,
         api_key=settings.meas_lm_api_key,
-        # No processed_pdf_dirs pipeline wired up (would require persisting
-        # rendered page images per PDF) — table cleaning is disabled.
-        clean_tables=False,
     )
-    return ScholarlmAdapter(
+    return DirectExtractionAdapter(
         doc_lm=doc_lm,
         meas_lm=meas_lm,
         schema_name=settings.extraction_schema_name,

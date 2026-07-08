@@ -1,6 +1,6 @@
 """Time OCR on a sample of relevant papers.
 
-Downloads PDFs from the DB and times DocumentLM.fit() one paper at a time.
+Downloads PDFs from the DB and times OCRLM.fit() one paper at a time.
 Does NOT write to the DB — relevant papers are pre-checked for accessibility
 during the filter stage.
 
@@ -21,8 +21,8 @@ from sqlalchemy import func, select
 from coastal_crawler.config import get_settings
 from coastal_crawler.db.engine import get_session
 from coastal_crawler.db.models import Paper
+from coastal_crawler.extraction import OCRLM
 from coastal_crawler.pdf import download_pdf
-from scholarlm import DocumentLM
 
 
 def _fetch_paper_urls(n: int) -> list[tuple[int, str, str | None]]:
@@ -45,7 +45,6 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--api-base", default="http://localhost:8081/v1", help="vLLM server URL")
     p.add_argument("--api-key", default="EMPTY")
     p.add_argument("--model-id", default="allenai/olmOCR-2-7B-1025")
-    p.add_argument("--quality", default="fast", choices=["fast", "accurate"], help="OCR quality (default: fast)")
     args = p.parse_args(argv)
 
     _ = get_settings()  # validates .env is loadable
@@ -58,9 +57,8 @@ def main(argv: list[str] | None = None) -> None:
         print("No papers to process. Are papers filtered and marked relevant?")
         sys.exit(1)
 
-    doclm = DocumentLM(
+    doclm = OCRLM(
         model_name=args.model_id,
-        quality=args.quality,
         ocr_prompt=olmocr_prompt(),
         api_base=args.api_base,
         api_key=args.api_key,

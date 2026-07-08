@@ -1,7 +1,7 @@
-"""Tests for build_scholarlm_adapter() (adapter.py).
+"""Tests for build_extraction_adapter() (adapter.py).
 
-Pure construction/mocking tests — no DB fixtures needed. scholarlm.DocumentLM
-and scholarlm.MeasurementLM are patched so no real vLLM server is required.
+Pure construction/mocking tests — no DB fixtures needed. OCRLM and
+ExtractionLM are patched so no real vLLM server is required.
 """
 
 from __future__ import annotations
@@ -11,13 +11,8 @@ from typing import Any
 
 import pytest
 
-from coastal_crawler.adapter import ScholarlmAdapter, build_scholarlm_adapter
-from coastal_crawler.measurement_schema import (
-    ATTRIBUTE_INFO_DICT,
-    MEASUREMENT_EVENT_PROMPT,
-    EntitySchema,
-    MeasurementEventSchema,
-)
+from coastal_crawler.adapter import DirectExtractionAdapter, build_extraction_adapter
+from coastal_crawler.measurement_schema import DirectExtractionSchema, build_direct_extraction_prompt
 
 _FAKE_SETTINGS = SimpleNamespace(
     doc_lm_model="test-ocr-model",
@@ -38,34 +33,34 @@ def _fake_settings(**overrides: Any) -> SimpleNamespace:
     return SimpleNamespace(**{**_FAKE_SETTINGS.__dict__, **overrides})
 
 
-class TestBuildScholarlmAdapterGuards:
+class TestBuildExtractionAdapterGuards:
     def test_raises_on_missing_doc_lm_model(self) -> None:
         settings = _fake_settings(doc_lm_model=None)
         with pytest.raises(RuntimeError, match="DOC_LM_MODEL"):
-            build_scholarlm_adapter(settings)
+            build_extraction_adapter(settings)
 
     def test_raises_on_missing_meas_lm_model(self) -> None:
         settings = _fake_settings(meas_lm_model=None)
         with pytest.raises(RuntimeError, match="MEAS_LM_MODEL"):
-            build_scholarlm_adapter(settings)
+            build_extraction_adapter(settings)
 
     def test_raises_on_missing_entity_identification_prompt(self) -> None:
         settings = _fake_settings(meas_lm_entity_identification_prompt=None)
         with pytest.raises(RuntimeError, match="MEAS_LM_ENTITY_IDENTIFICATION_PROMPT"):
-            build_scholarlm_adapter(settings)
+            build_extraction_adapter(settings)
 
     def test_raises_lists_all_missing(self) -> None:
         settings = _fake_settings(doc_lm_model=None, meas_lm_model=None)
         with pytest.raises(RuntimeError, match="DOC_LM_MODEL, MEAS_LM_MODEL"):
-            build_scholarlm_adapter(settings)
+            build_extraction_adapter(settings)
 
 
-class TestBuildScholarlmAdapterConstruction:
+class TestBuildExtractionAdapterConstruction:
     def test_constructs_doc_lm_with_settings(self, mocker: Any) -> None:
-        doc_lm_cls = mocker.patch("scholarlm.DocumentLM")
-        mocker.patch("scholarlm.MeasurementLM")
+        doc_lm_cls = mocker.patch("coastal_crawler.adapter.OCRLM")
+        mocker.patch("coastal_crawler.adapter.ExtractionLM")
 
-        build_scholarlm_adapter(_fake_settings())
+        build_extraction_adapter(_fake_settings())
 
         doc_lm_cls.assert_called_once_with(
             model_name="test-ocr-model",
@@ -73,33 +68,29 @@ class TestBuildScholarlmAdapterConstruction:
             api_key="EMPTY",
         )
 
-    def test_constructs_meas_lm_with_settings_and_clean_tables_false(self, mocker: Any) -> None:
-        mocker.patch("scholarlm.DocumentLM")
-        meas_lm_cls = mocker.patch("scholarlm.MeasurementLM")
+    def test_constructs_meas_lm_with_settings(self, mocker: Any) -> None:
+        mocker.patch("coastal_crawler.adapter.OCRLM")
+        meas_lm_cls = mocker.patch("coastal_crawler.adapter.ExtractionLM")
 
-        build_scholarlm_adapter(_fake_settings())
+        build_extraction_adapter(_fake_settings())
 
         meas_lm_cls.assert_called_once_with(
             model_name="test-extraction-model",
-            entity_identification_prompt="Identify coastal sites.",
-            entity_identification_schema=EntitySchema,
-            attribute_info_dict=ATTRIBUTE_INFO_DICT,
-            measurement_event_schema=MeasurementEventSchema,
-            measurement_event_prompt=MEASUREMENT_EVENT_PROMPT,
+            direct_extraction_schema=DirectExtractionSchema,
+            direct_extraction_prompt=build_direct_extraction_prompt("Identify coastal sites."),
             api_base="http://localhost:8084/v1",
             api_key="EMPTY",
-            clean_tables=False,
         )
 
-    def test_returns_scholarlm_adapter_with_schema_and_version(self, mocker: Any) -> None:
+    def test_returns_direct_extraction_adapter_with_schema_and_version(self, mocker: Any) -> None:
         doc_lm_sentinel = mocker.sentinel.doc_lm
         meas_lm_sentinel = mocker.sentinel.meas_lm
-        mocker.patch("scholarlm.DocumentLM", return_value=doc_lm_sentinel)
-        mocker.patch("scholarlm.MeasurementLM", return_value=meas_lm_sentinel)
+        mocker.patch("coastal_crawler.adapter.OCRLM", return_value=doc_lm_sentinel)
+        mocker.patch("coastal_crawler.adapter.ExtractionLM", return_value=meas_lm_sentinel)
 
-        adapter = build_scholarlm_adapter(_fake_settings())
+        adapter = build_extraction_adapter(_fake_settings())
 
-        assert isinstance(adapter, ScholarlmAdapter)
+        assert isinstance(adapter, DirectExtractionAdapter)
         assert adapter.doc_lm is doc_lm_sentinel
         assert adapter.meas_lm is meas_lm_sentinel
         assert adapter.schema_name == "coastal_measurement_v1"
@@ -108,18 +99,18 @@ class TestBuildScholarlmAdapterConstruction:
         assert adapter.lon_field is None
 
     def test_explicit_model_version_overrides_derived_default(self, mocker: Any) -> None:
-        mocker.patch("scholarlm.DocumentLM")
-        mocker.patch("scholarlm.MeasurementLM")
+        mocker.patch("coastal_crawler.adapter.OCRLM")
+        mocker.patch("coastal_crawler.adapter.ExtractionLM")
 
-        adapter = build_scholarlm_adapter(_fake_settings(extraction_model_version="v2"))
+        adapter = build_extraction_adapter(_fake_settings(extraction_model_version="v2"))
 
         assert adapter.model_version == "v2"
 
     def test_lat_lon_fields_passed_through(self, mocker: Any) -> None:
-        mocker.patch("scholarlm.DocumentLM")
-        mocker.patch("scholarlm.MeasurementLM")
+        mocker.patch("coastal_crawler.adapter.OCRLM")
+        mocker.patch("coastal_crawler.adapter.ExtractionLM")
 
-        adapter = build_scholarlm_adapter(
+        adapter = build_extraction_adapter(
             _fake_settings(extraction_lat_field="latitude", extraction_lon_field="longitude")
         )
 
