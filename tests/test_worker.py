@@ -156,7 +156,7 @@ class TestRunWorkerSuccess:
     ) -> None:
         _insert(worker_db, make_paper())
         adapter = MagicMock()
-        adapter.extract.return_value = [make_result(), make_result()]
+        adapter.extract_batch.return_value = [[make_result(), make_result()]]
         run_worker(batch_size=10, adapter=adapter)
         assert len(_extractions(worker_db)) == 2
 
@@ -172,7 +172,7 @@ class TestRunWorkerSuccess:
             longitude=-0.1,
         )
         adapter = MagicMock()
-        adapter.extract.return_value = [result]
+        adapter.extract_batch.return_value = [[result]]
         run_worker(batch_size=10, adapter=adapter)
         with Session(worker_db) as s:
             ext = s.scalars(select(Extraction)).one()
@@ -217,16 +217,18 @@ class TestRunWorkerSuccess:
         assert extracted == 3
         assert unclaimed == 2
 
-    def test_adapter_called_with_path(
+    def test_adapter_called_with_paths(
         self, worker_db: Engine, mock_download: MagicMock
     ) -> None:
         _insert(worker_db, make_paper())
         adapter = MagicMock()
-        adapter.extract.return_value = []
+        adapter.extract_batch.return_value = [[]]
         run_worker(batch_size=10, adapter=adapter)
-        adapter.extract.assert_called_once()
-        pdf_path = adapter.extract.call_args[0][0]
-        assert isinstance(pdf_path, Path)
+        adapter.extract_batch.assert_called_once()
+        pdf_paths = adapter.extract_batch.call_args[0][0]
+        assert isinstance(pdf_paths, list)
+        assert len(pdf_paths) == 1
+        assert isinstance(pdf_paths[0], Path)
 
     def test_pdf_downloaded_from_oa_url(
         self, worker_db: Engine, mock_download: MagicMock
@@ -244,9 +246,9 @@ class TestRunWorkerSuccess:
         captured_paths: list[Path] = []
 
         class CapturingAdapter:
-            def extract(self, pdf_path: Path) -> list[ExtractionResult]:
-                captured_paths.append(pdf_path)
-                return []
+            def extract_batch(self, pdf_paths: list[Path]) -> list[list[ExtractionResult]]:
+                captured_paths.extend(pdf_paths)
+                return [[] for _ in pdf_paths]
 
         run_worker(batch_size=10, adapter=CapturingAdapter())
         assert len(captured_paths) == 1
@@ -340,7 +342,7 @@ class TestRunWorkerFailures:
     ) -> None:
         _insert(worker_db, make_paper())
         adapter = MagicMock()
-        adapter.extract.side_effect = RuntimeError("model crashed")
+        adapter.extract_batch.side_effect = RuntimeError("model crashed")
         extracted, failed = run_worker(batch_size=10, adapter=adapter)
         assert (extracted, failed) == (0, 1)
         with Session(worker_db) as s:
@@ -354,7 +356,7 @@ class TestRunWorkerFailures:
         """An adapter error must not leave orphaned extraction rows."""
         _insert(worker_db, make_paper())
         adapter = MagicMock()
-        adapter.extract.side_effect = RuntimeError("oom")
+        adapter.extract_batch.side_effect = RuntimeError("oom")
         run_worker(batch_size=10, adapter=adapter)
         assert _extractions(worker_db) == []
 
@@ -363,7 +365,7 @@ class TestRunWorkerFailures:
     ) -> None:
         _insert(worker_db, make_paper())
         adapter = MagicMock()
-        adapter.extract.side_effect = RuntimeError("x" * 5000)
+        adapter.extract_batch.side_effect = RuntimeError("x" * 5000)
         run_worker(batch_size=10, adapter=adapter)
         with Session(worker_db) as s:
             paper = s.scalars(select(Paper)).one()
@@ -386,13 +388,57 @@ class TestRunWorkerFailures:
         captured_paths: list[Path] = []
 
         class FailingAdapter:
-            def extract(self, pdf_path: Path) -> list[ExtractionResult]:
-                captured_paths.append(pdf_path)
+            def extract_batch(self, pdf_paths: list[Path]) -> list[list[ExtractionResult]]:
+                captured_paths.extend(pdf_paths)
                 raise RuntimeError("adapter exploded")
 
         run_worker(batch_size=10, adapter=FailingAdapter())
         assert len(captured_paths) == 1
         assert not captured_paths[0].exists()
+
+
+# ---------------------------------------------------------------------------
+# run_worker — chunking (cross-paper batching of the GPU calls)
+# ---------------------------------------------------------------------------
+
+class TestRunWorkerChunking:
+    def test_multiple_chunks_process_every_paper(
+        self, worker_db: Engine, mock_download: MagicMock
+    ) -> None:
+        """chunk_size smaller than the claimed batch must still process every paper."""
+        _insert(worker_db, *[make_paper() for _ in range(5)])
+        adapter = MagicMock()
+        adapter.extract_batch.side_effect = lambda pdf_paths: [[] for _ in pdf_paths]
+
+        extracted, failed = run_worker(batch_size=10, adapter=adapter, chunk_size=2)
+
+        assert (extracted, failed) == (5, 0)
+        # 5 papers at chunk_size=2 -> three extract_batch calls sized 2, 2, 1.
+        assert adapter.extract_batch.call_count == 3
+        call_sizes = sorted(len(call.args[0]) for call in adapter.extract_batch.call_args_list)
+        assert call_sizes == [1, 2, 2]
+
+    def test_chunk_failure_does_not_affect_other_chunks(
+        self, worker_db: Engine, mock_download: MagicMock
+    ) -> None:
+        """An extract_batch exception for one chunk must not fail papers in other chunks."""
+        _insert(worker_db, *[make_paper() for _ in range(4)])
+        adapter = MagicMock()
+        call_count = 0
+
+        def _side_effect(pdf_paths: list[Path]) -> list[list[Any]]:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise RuntimeError("gpu oom")
+            return [[] for _ in pdf_paths]
+
+        adapter.extract_batch.side_effect = _side_effect
+
+        extracted, failed = run_worker(batch_size=10, adapter=adapter, chunk_size=2)
+
+        assert (extracted, failed) == (2, 2)
+        assert adapter.extract_batch.call_count == 2
 
 
 # ---------------------------------------------------------------------------

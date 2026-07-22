@@ -50,14 +50,19 @@ def filter_papers(
 @app.command()
 def extract(
     batch_size: int = typer.Option(10, "--batch-size", help="Papers to process per run."),
+    chunk_size: int = typer.Option(
+        None, "--chunk-size", help="Papers per OCR+extraction GPU call. Defaults to EXTRACTION_CHUNK_SIZE in .env."
+    ),
 ) -> None:
     """Claim and extract a batch of relevant papers."""
     from coastal_crawler.adapter import build_extraction_adapter
     from coastal_crawler.config import get_settings
     from coastal_crawler.worker import run_worker
 
-    adapter = build_extraction_adapter(get_settings())
-    extracted, failed = run_worker(batch_size=batch_size, adapter=adapter)
+    settings = get_settings()
+    adapter = build_extraction_adapter(settings)
+    size = chunk_size if chunk_size is not None else settings.extraction_chunk_size
+    extracted, failed = run_worker(batch_size=batch_size, adapter=adapter, chunk_size=size)
     typer.echo(f"Extracted {extracted}, failed {failed}.")
 
 

@@ -9,13 +9,19 @@
 # CUDA_VISIBLE_DEVICES (see scripts/serve_model.sh's gpu_id argument) and are
 # started in the background, killed automatically when the job exits.
 #
-# Submit with:
-#   qsub scripts/submit_extract_job.sh
+# This script is cluster-agnostic: it expects REPO_DIR to be exported by the
+# submitter (SGE jobs land in $HOME, not the submission directory) and
+# sources scripts/cluster.local.sh for any site-specific bootstrap (module
+# loads, HF_HOME, a local Postgres, venv activation). Copy
+# scripts/cluster.local.sh.example to scripts/cluster.local.sh and edit it
+# for your environment, then submit via a small personal wrapper that also
+# carries your SGE project/account, e.g.:
+#
+#   qsub -P <your_project> -v REPO_DIR="$REPO_DIR" scripts/submit_extract_job.sh
 #
 # Customise the #$ directives below for your cluster and the resource
 # requirements of your chosen models.
 #
-#$ -P mcnet
 #$ -l h_rt=24:00:00
 #$ -pe omp 16
 #$ -l gpus=2
@@ -25,14 +31,15 @@
 #$ -e out/extract_error.txt
 #$ -m e
 
-module load python3/3.12.4
-module load cuda/12.5
-module load postgresql/18.1
-export HF_HOME=/projectnb/mcnet/kevin/cache-hf
-cd /projectnb/mcnet/kevin
-pg_ctl -D my_pgserver -l my_pgserver.log start
-cd /projectnb/mcnet/kevin/coastal/coastal-crawler
-source .venv/bin/activate
+: "${REPO_DIR:?REPO_DIR must be exported by the submitter (e.g. qsub -v REPO_DIR=...) — see scripts/cluster.local.sh.example}"
+cd "$REPO_DIR"
+
+if [ -f scripts/cluster.local.sh ]; then
+    source scripts/cluster.local.sh
+else
+    echo "scripts/cluster.local.sh not found — copy scripts/cluster.local.sh.example and edit it for your environment." >&2
+    exit 1
+fi
 
 set -euo pipefail
 mkdir -p logs
@@ -48,7 +55,7 @@ DOC_LM_PORT="${DOC_LM_PORT:-8083}"
 MEAS_LM_PORT="${MEAS_LM_PORT:-8084}"
 
 # ---- Start servers in background, pinned to distinct GPUs -------------------
-cd /projectnb/mcnet/kevin/coastal/coastal-crawler/scripts
+cd scripts
 ./serve_model.sh DOC_LM 0 &
 DOC_LM_PID=$!
 ./serve_model.sh MEAS_LM 1 &
@@ -62,5 +69,5 @@ trap 'echo "Stopping vLLM servers (PIDs $DOC_LM_PID $MEAS_LM_PID)..."; kill "$DO
 ./wait_for_health.sh "$MEAS_LM_PORT" "$MEAS_LM_PID"
 
 # ---- Run extraction -----------------------------------------------------------
-cd /projectnb/mcnet/kevin/coastal/coastal-crawler
+cd "$REPO_DIR"
 coastal-crawler extract --batch-size 100

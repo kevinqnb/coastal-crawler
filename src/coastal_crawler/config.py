@@ -165,6 +165,10 @@ class Settings(BaseSettings):
         default=0,
         description="RNG seed passed to vLLM --seed for the OCRLM server.",
     )
+    doc_lm_max_concurrent: int = Field(
+        default=32,
+        description="Maximum concurrent OCR page-image API calls the client sends at once (client-side concurrency, not a vLLM server flag).",
+    )
 
     # Serving parameters — used only by scripts/serve_model.sh DOC_LM.
     doc_lm_port: int = Field(
@@ -217,6 +221,10 @@ class Settings(BaseSettings):
         default=0,
         description="RNG seed passed to vLLM --seed for the ExtractionLM server.",
     )
+    meas_lm_max_concurrent: int = Field(
+        default=4,
+        description="Maximum concurrent extraction API calls the client sends at once (client-side concurrency, not a vLLM server flag). Was hardcoded to 1.",
+    )
 
     # Serving parameters — used only by scripts/serve_model.sh MEAS_LM.
     meas_lm_port: int = Field(
@@ -264,6 +272,15 @@ class Settings(BaseSettings):
     extraction_lon_field: str | None = Field(
         default=None,
         description="Name of the EntitySchema field holding longitude, if your schema has coordinates (see measurement_schema.py). None = no coordinates.",
+    )
+    extraction_chunk_size: int = Field(
+        default=20,
+        description=(
+            "Papers processed per OCR+extraction GPU call within one claimed extract "
+            "batch. Downloads for the next chunk run in a background thread while the "
+            "current chunk's GPU work runs, hiding PDF download / Wiley-throttle wait "
+            "time behind GPU compute."
+        ),
     )
 
     # ------------------------------------------------------- Wiley TDM

@@ -1,0 +1,24 @@
+#!/bin/bash
+#
+# Site-specific bootstrap for the SGE job scripts in this directory
+# (submit_extract_job.sh, submit_filter_job.sh).
+#
+# Copy this file to scripts/cluster.local.sh (gitignored, not tracked) and
+# edit it for your environment. It's sourced right after `cd "$REPO_DIR"`,
+# before `set -e` is turned on in the calling script — so a failing step
+# here (e.g. a Postgres server that's already running) won't kill the job.
+
+# --- Environment modules (skip if your cluster doesn't use module load) -----
+module load python3/3.12.4
+module load cuda/12.5
+module load postgresql/18.1
+
+# --- HuggingFace cache used by vLLM / serve_model.sh -------------------------
+export HF_HOME=/path/to/your/hf-cache
+
+# --- Local Postgres instance (skip/remove if you use a managed DB that's
+# already running) -------------------------------------------------------------
+pg_ctl -D /path/to/your/pgdata -l /path/to/your/pgdata.log start
+
+# --- Python environment -------------------------------------------------------
+source .venv/bin/activate

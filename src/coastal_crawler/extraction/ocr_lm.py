@@ -10,14 +10,18 @@ from __future__ import annotations
 
 import asyncio
 import re
+import time
 import warnings
 import yaml
 from itertools import count
 from typing import Any
 
+import structlog
 from openai import AsyncOpenAI
 
 from coastal_crawler.extraction.pdf_render import render_pdf_pages
+
+log = structlog.get_logger(__name__)
 
 # Fast-preset constants (the only quality mode this pipeline needs).
 _TARGET_LONGEST_DIM = 1024
@@ -97,13 +101,22 @@ class OCRLM:
             extra["repetition_penalty"] = self.sampling_params["repetition_penalty"]
         if extra:
             kwargs["extra_body"] = extra
+        t0 = time.monotonic()
         try:
             response = await self.async_client.chat.completions.create(**kwargs)
+            seconds = time.monotonic() - t0
             text = response.choices[0].message.content or ""
             completion_tokens = response.usage.completion_tokens if response.usage else 0
+            log.info(
+                "ocr_call_completed",
+                seconds=round(seconds, 2),
+                completion_tokens=completion_tokens,
+                model=self.model_name,
+            )
             return text, completion_tokens
         except Exception as e:
-            print(f"API call failed: {e}")
+            seconds = time.monotonic() - t0
+            log.warning("ocr_call_failed", seconds=round(seconds, 2), error=str(e))
             return "", 0
 
     def _call_batch_with_usage(
@@ -149,6 +162,9 @@ class OCRLM:
         Returns:
             Processed markdown text, one string per document.
         """
+        t_fit0 = time.monotonic()
+        log.info("ocr_batch_started", documents=len(filepaths))
+
         paper_images: dict[int, list[str]] = {}
         for i, filepath in enumerate(filepaths):
             try:
@@ -175,6 +191,7 @@ class OCRLM:
                 message_paper_ids.append(i)
 
         results = self._call_batch_with_usage(messages)
+        total_calls = len(messages)
 
         # Retry with higher temperature if max tokens exceeded or tables failed to be extracted.
         retry_round = 0
@@ -184,7 +201,7 @@ class OCRLM:
             retry_message_ids: list[int] = []
             for i, (text, completion_tokens) in enumerate(results):
                 if completion_tokens >= self.max_tokens:
-                    print(f"Max tokens exceeded for message {i}, retrying...")
+                    log.info("ocr_page_retry", reason="max_tokens_exceeded", message_index=i)
                     retry_messages.append(messages[i])
                     retry_message_ids.append(i)
                     continue
@@ -201,7 +218,7 @@ class OCRLM:
                     has_table_tags = "<table" in content_after_front_matter.lower()
 
                     if is_table and not has_table_tags:
-                        print(f"Model reports is_table=True but no <table> tags found for message {i}, retrying...")
+                        log.info("ocr_page_retry", reason="missing_table_tags", message_index=i)
                         retry_messages.append(
                             [
                                 {
@@ -215,10 +232,11 @@ class OCRLM:
 
             if not retry_messages:
                 break
-            print(f"Retrying {len(retry_messages)} pages with temperature {temp + 0.2:.1f}...")
+            log.info("ocr_retry_round", count=len(retry_messages), temperature=round(temp + 0.2, 1))
             temp += 0.2
             retry_round += 1
             retry_results = self._call_batch_with_usage(retry_messages, temperature=temp)
+            total_calls += len(retry_messages)
             for i, result in enumerate(retry_results):
                 results[retry_message_ids[i]] = result
 
@@ -243,5 +261,15 @@ class OCRLM:
             doc_text = re.sub(r"<table>", lambda m: f'<table number="{next(counter) + 1}">', doc_text)
 
             texts.append(doc_text)
+
+        total_completion_tokens = sum(completion_tokens for _, completion_tokens in results)
+        log.info(
+            "ocr_batch_summary",
+            documents=len(filepaths),
+            pages=len(messages),
+            calls=total_calls,
+            completion_tokens=total_completion_tokens,
+            seconds=round(time.monotonic() - t_fit0, 2),
+        )
 
         return texts

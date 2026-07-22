@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash -l
 #
 # SGE job script — start the vLLM server, run the filter, then shut down.
 #
@@ -6,12 +6,17 @@
 # connects to localhost. The server is started in the background and killed
 # automatically when the job exits (success or failure).
 #
-# Submit with:
-#   qsub scripts/submit_filter_job.sh
+# This script is cluster-agnostic: it expects REPO_DIR to be exported by the
+# submitter (SGE jobs land in $HOME, not the submission directory) and
+# sources scripts/cluster.local.sh for any site-specific bootstrap (module
+# loads, venv activation, etc). Copy scripts/cluster.local.sh.example to
+# scripts/cluster.local.sh and edit it for your environment, then submit via
+# a small personal wrapper that also carries your SGE project/account, e.g.:
+#
+#   qsub -P <your_project> -v REPO_DIR="$REPO_DIR" scripts/submit_filter_job.sh
 #
 # Customise the #$ directives below for your cluster.
 #
-#$ -P mcnet
 #$ -l h_rt=2:00:00
 #$ -pe omp 8
 #$ -l gpus=1
@@ -20,6 +25,16 @@
 #$ -o out/filter_out.txt
 #$ -e out/filter_error.txt
 #$ -m e
+
+: "${REPO_DIR:?REPO_DIR must be exported by the submitter (e.g. qsub -v REPO_DIR=...) — see scripts/cluster.local.sh.example}"
+cd "$REPO_DIR"
+
+if [ -f scripts/cluster.local.sh ]; then
+    source scripts/cluster.local.sh
+else
+    echo "scripts/cluster.local.sh not found — copy scripts/cluster.local.sh.example and edit it for your environment." >&2
+    exit 1
+fi
 
 set -euo pipefail
 mkdir -p logs

@@ -18,11 +18,15 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from functools import partial
 from typing import Any, Callable
 
+import structlog
 from openai import AsyncOpenAI
 from pydantic import BaseModel, create_model
+
+log = structlog.get_logger(__name__)
 
 DIRECT_TRIPLE_EXTRACTION_INSTRUCTIONS = """You are an expert in data extraction for systematic scientific literature reviews. Your task is to extract a complete list of measurement records from a research paper document in a single pass. Each record captures an entity, an attribute for measurement, the conditions of a specific measurement event, and its value.
 
@@ -114,6 +118,9 @@ class ExtractionLM:
         self.max_concurrent = max_concurrent
         self.use_extra_body = use_extra_body
         self.max_prompt_tokens: int = 0
+        self._call_count: int = 0
+        self._total_prompt_tokens: int = 0
+        self._total_completion_tokens: int = 0
         self.async_client = AsyncOpenAI(api_key=api_key, base_url=api_base, timeout=2400.0)
 
     # -----------------------------------------------------------------------
@@ -160,14 +167,27 @@ class ExtractionLM:
                 extra["chat_template_kwargs"] = {"enable_thinking": self.sampling_params["enable_thinking"]}
             if extra:
                 kwargs["extra_body"] = extra
+        t0 = time.monotonic()
         try:
             response = await self.async_client.chat.completions.create(**kwargs, timeout=timeout)
-            if response.usage is not None and response.usage.prompt_tokens:
-                if response.usage.prompt_tokens > self.max_prompt_tokens:
-                    self.max_prompt_tokens = response.usage.prompt_tokens
+            seconds = time.monotonic() - t0
+            prompt_tokens = response.usage.prompt_tokens if response.usage else 0
+            completion_tokens = response.usage.completion_tokens if response.usage else 0
+            if prompt_tokens > self.max_prompt_tokens:
+                self.max_prompt_tokens = prompt_tokens
+            self._call_count += 1
+            self._total_prompt_tokens += prompt_tokens
+            self._total_completion_tokens += completion_tokens
+            log.info(
+                "extraction_call_completed",
+                seconds=round(seconds, 2),
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+            )
             return response.choices[0].message.content or ""
         except Exception as e:
-            print(f"API call failed: {e}")
+            seconds = time.monotonic() - t0
+            log.warning("extraction_call_failed", seconds=round(seconds, 2), error=str(e))
             return ""
 
     def _call_batch(
@@ -214,7 +234,7 @@ class ExtractionLM:
                 if not failed:
                     break
 
-                print(f"Retrying {len(failed)} failed responses (attempt {attempt + 1}/{max_retries})...")
+                log.info("extraction_retry_round", count=len(failed), attempt=attempt + 1, max_retries=max_retries)
                 await asyncio.sleep(2**attempt)
                 retried = await asyncio.gather(*[_limited(message_sets[i]) for i in failed])
                 for local_i, global_i in enumerate(failed):
@@ -260,12 +280,15 @@ class ExtractionLM:
                 "schema": direct_extraction_list_json,
             },
         }
+        # No max_concurrent override here — let it fall back to
+        # self.max_concurrent (configurable via MEAS_LM_MAX_CONCURRENT) so
+        # documents in a batch can be extracted concurrently against vLLM's
+        # continuous batching, rather than hardcoding serial dispatch.
         response_texts = self._call_batch(
             messages,
             response_format=response_format,
             max_tokens=32768,
             max_retries=4,
-            max_concurrent=1,
             validator=partial(response_validator, DirectExtractionList),
             timeout=600.0,
         )
@@ -275,8 +298,7 @@ class ExtractionLM:
             try:
                 resp_validated = response_validator(DirectExtractionList, r)
             except Exception as e:
-                print(f"Validation error in direct extraction response: {e}")
-                print(f"Response text: {r}")
+                log.warning("extraction_validation_failed", document_index=i, error=str(e), response_preview=r[:500])
                 resp_validated = {"items": []}
 
             for j, item in enumerate(resp_validated["items"]):
@@ -301,5 +323,21 @@ class ExtractionLM:
             Measurement records extracted from the documents.
         """
         self.data: list[dict[str, Any]] = [{"document_id": i, "context": doc} for i, doc in enumerate(documents)]
+
+        t_fit0 = time.monotonic()
+        log.info("extraction_batch_started", documents=len(documents))
+        self._call_count = 0
+        self._total_prompt_tokens = 0
+        self._total_completion_tokens = 0
+
         self.data = self._extract_triples()
+
+        log.info(
+            "extraction_batch_summary",
+            documents=len(documents),
+            calls=self._call_count,
+            prompt_tokens=self._total_prompt_tokens,
+            completion_tokens=self._total_completion_tokens,
+            seconds=round(time.monotonic() - t_fit0, 2),
+        )
         return self.data

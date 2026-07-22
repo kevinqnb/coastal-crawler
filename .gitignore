@@ -223,5 +223,9 @@ memory/*
 
 # Experiments
 scripts/out/*
-scripts/filter.sh
 scripts/time_ocr.sh
+
+# Personal cluster config and job launchers (site-specific paths/accounts)
+scripts/cluster.local.sh
+scripts/filter.sh
+scripts/extract.sh

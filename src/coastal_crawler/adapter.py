@@ -35,14 +35,20 @@ class ExtractionResult(BaseModel):
 class ExtractionAdapter(Protocol):
     """Interface the worker calls. Lives in one place so it is easy to mock."""
 
-    def extract(self, pdf_path: Path) -> list[ExtractionResult]:
-        """Extract structured measurements from a PDF.
+    def extract_batch(self, pdf_paths: list[Path]) -> list[list[ExtractionResult]]:
+        """Extract structured measurements from a batch of PDFs.
+
+        Processing PDFs together (rather than one at a time) lets the OCR
+        and extraction LLM calls for different documents run concurrently
+        against vLLM's continuous batching, instead of leaving one GPU idle
+        while the other stage runs for a single document.
 
         Args:
-            pdf_path: Path to a downloaded PDF file.
+            pdf_paths: Paths to downloaded PDF files.
 
         Returns:
-            One ``ExtractionResult`` per extracted measurement.
+            One list of ``ExtractionResult`` per input path, same order and
+            length as ``pdf_paths``.
         """
         ...
 
@@ -50,8 +56,8 @@ class ExtractionAdapter(Protocol):
 class StubAdapter:
     """Returns empty results — usable in tests without a GPU or vLLM endpoint."""
 
-    def extract(self, pdf_path: Path) -> list[ExtractionResult]:
-        return []
+    def extract_batch(self, pdf_paths: list[Path]) -> list[list[ExtractionResult]]:
+        return [[] for _ in pdf_paths]
 
 
 # ---------------------------------------------------------------------------
@@ -83,40 +89,45 @@ class DirectExtractionAdapter:
         self.lat_field = lat_field
         self.lon_field = lon_field
 
-    def extract(self, pdf_path: Path) -> list[ExtractionResult]:
-        # Step 1: OCR via OCRLM.fit() → list of OCR strings, one per PDF.
-        ocr_texts: list[str] = self.doc_lm.fit([str(pdf_path)])
+    def extract_batch(self, pdf_paths: list[Path]) -> list[list[ExtractionResult]]:
+        # Step 1: OCR via OCRLM.fit() → list of OCR strings, one per PDF, in
+        # the same order as pdf_paths.
+        ocr_texts: list[str] = self.doc_lm.fit([str(p) for p in pdf_paths])
 
-        # Step 2: Extraction via ExtractionLM.fit() → list of measurement
-        # dicts. Each dict has keys: value, units, attribute, entity_id,
-        # context, and all entity/event schema fields. No provenance fields
-        # (page_number, table_number, etc.) are produced — this ablation
-        # makes a single LLM call per document.
+        # Step 2: Extraction via ExtractionLM.fit() → flat list of
+        # measurement dicts. Each dict has keys: value, units, attribute,
+        # entity_id, context, document_id, and all entity/event schema
+        # fields. No provenance fields (page_number, table_number, etc.) are
+        # produced — this ablation makes a single LLM call per document.
+        # document_id is the index into ocr_texts/pdf_paths the record came
+        # from — use it to route each record back to its source document.
         raw: list[dict[str, Any]] = self.meas_lm.fit(ocr_texts)
 
-        results: list[ExtractionResult] = []
+        grouped: list[list[dict[str, Any]]] = [[] for _ in pdf_paths]
         for record in raw:
-            provenance = {
-                "page_number": record.get("page_number"),
-                "table_number": record.get("table_number"),
-                "row_index": record.get("row_index"),
-                "column_index": record.get("column_index"),
-                "source": record.get("source"),
-                "context": record.get("context"),
-            }
-            results.append(
-                ExtractionResult(
-                    schema_name=self.schema_name,
-                    model_version=self.model_version,
-                    data=record,
-                    # STUB: wire in a real confidence score if ExtractionLM exposes one.
-                    confidence=None,
-                    provenance=provenance,
-                    latitude=record.get(self.lat_field) if self.lat_field else None,
-                    longitude=record.get(self.lon_field) if self.lon_field else None,
-                )
-            )
-        return results
+            grouped[record["document_id"]].append(record)
+
+        return [[self._to_result(record) for record in records] for records in grouped]
+
+    def _to_result(self, record: dict[str, Any]) -> ExtractionResult:
+        provenance = {
+            "page_number": record.get("page_number"),
+            "table_number": record.get("table_number"),
+            "row_index": record.get("row_index"),
+            "column_index": record.get("column_index"),
+            "source": record.get("source"),
+            "context": record.get("context"),
+        }
+        return ExtractionResult(
+            schema_name=self.schema_name,
+            model_version=self.model_version,
+            data=record,
+            # STUB: wire in a real confidence score if ExtractionLM exposes one.
+            confidence=None,
+            provenance=provenance,
+            latitude=record.get(self.lat_field) if self.lat_field else None,
+            longitude=record.get(self.lon_field) if self.lon_field else None,
+        )
 
 
 def build_extraction_adapter(settings: "Settings") -> DirectExtractionAdapter:
@@ -149,6 +160,7 @@ def build_extraction_adapter(settings: "Settings") -> DirectExtractionAdapter:
         model_name=settings.doc_lm_model,
         api_base=settings.doc_lm_base_url,
         api_key=settings.doc_lm_api_key,
+        max_concurrent=settings.doc_lm_max_concurrent,
     )
     meas_lm = ExtractionLM(
         model_name=settings.meas_lm_model,
@@ -156,6 +168,7 @@ def build_extraction_adapter(settings: "Settings") -> DirectExtractionAdapter:
         direct_extraction_prompt=build_direct_extraction_prompt(settings.meas_lm_entity_identification_prompt),
         api_base=settings.meas_lm_base_url,
         api_key=settings.meas_lm_api_key,
+        max_concurrent=settings.meas_lm_max_concurrent,
     )
     return DirectExtractionAdapter(
         doc_lm=doc_lm,
