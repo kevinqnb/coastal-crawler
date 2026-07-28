@@ -229,6 +229,27 @@ def mark_failed(paper_id: int, error: str, session: Session) -> None:
     )
 
 
+def mark_failed_if_relevant(paper_id: int, error: str, session: Session) -> bool:
+    """Flip a paper to ``failed`` only if it's still ``relevant``.
+
+    Used by scripts/wiley_download.py, which reads ``relevant`` papers
+    without claiming them (no ``FOR UPDATE``) — a GPU worker can claim the
+    same paper into ``processing`` while the download is in flight, so an
+    unconditional write here could clobber a paper that's actively being
+    extracted. The status guard makes the write a no-op if that race is
+    lost, instead of unconditional ``mark_failed``.
+
+    Returns:
+        True if the row was updated, False if it was no longer 'relevant'.
+    """
+    result = session.execute(
+        update(Paper)
+        .where(Paper.id == paper_id, Paper.status == "relevant")
+        .values(status="failed", error=error)
+    )
+    return result.rowcount > 0
+
+
 def mark_inaccessible(paper_id: int, session: Session) -> None:
     """Flip a paper to ``status='inaccessible'`` when its PDF URL cannot be reached."""
     session.execute(
@@ -267,6 +288,46 @@ def requeue_failed(session: Session) -> int:
         .values(status="relevant", error=None)
     )
     return result.rowcount
+
+
+def requeue_processing(session: Session) -> int:
+    """Reset all ``processing`` papers back to ``relevant``.
+
+    Papers are left in ``status='processing'`` if an extraction job is
+    killed mid-batch (e.g. walltime limit, OOM, node preemption). Call this
+    before resubmitting to rescue those stranded papers. Matters more once
+    multiple concurrent extraction jobs are running (see EFFICIENCY.md item
+    1) — more jobs means more chances of a stranded batch.
+
+    Returns:
+        Count of papers requeued.
+    """
+    result = session.execute(
+        update(Paper)
+        .where(Paper.status == "processing")
+        .values(status="relevant")
+    )
+    return result.rowcount
+
+
+def reset_processing_to_relevant(paper_id: int, session: Session) -> bool:
+    """Reset one claimed paper from ``processing`` back to ``relevant``.
+
+    Used when a Wiley paper is claimed for extraction but its PDF hasn't
+    been pre-downloaded yet by scripts/wiley_download.py — this isn't a real
+    extraction failure, so the paper goes back to the queue instead of
+    ``failed``. Guarded on ``status='processing'`` so it can't stomp a
+    concurrent transition (e.g. another path already marked it failed).
+
+    Returns:
+        True if the row was updated, False if it was no longer 'processing'.
+    """
+    result = session.execute(
+        update(Paper)
+        .where(Paper.id == paper_id, Paper.status == "processing")
+        .values(status="relevant")
+    )
+    return result.rowcount > 0
 
 
 # ---------------------------------------------------------------------------
@@ -342,6 +403,20 @@ def count_by_status(session: Session) -> dict[str, int]:
         select(Paper.status, func.count(Paper.id)).group_by(Paper.status)
     ).all()
     return {status: count for status, count in rows}
+
+
+def relevant_papers(session: Session) -> list[tuple[int, str | None, str | None]]:
+    """Return (id, oa_pdf_url, discovered_from) for every ``relevant`` paper.
+
+    Used by scripts/wiley_download.py to find Wiley papers awaiting a
+    pre-download. Returns plain column tuples (not ORM objects) since the
+    caller reads these fields after the session that produced them has
+    closed — mirrors the pattern in scripts/recover_oa_inaccessible.py.
+    """
+    stmt = select(Paper.id, Paper.oa_pdf_url, Paper.discovered_from).where(
+        Paper.status == "relevant"
+    )
+    return [(pid, url, discovered_from) for pid, url, discovered_from in session.execute(stmt)]
 
 
 def recent_papers(limit: int, session: Session) -> list[Paper]:

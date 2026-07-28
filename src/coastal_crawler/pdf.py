@@ -36,14 +36,20 @@ def normalize_pdf_url(url: str) -> str:
     )
 
 
-def _is_wiley_request(discovered_from: str | None, url: str) -> bool:
+def is_wiley_request(discovered_from: str | None, url: str) -> bool:
+    """Return True if this paper/URL should be treated as a Wiley TDM request.
+
+    Public (not underscore-prefixed) because it's also used by worker.py and
+    scripts/wiley_download.py to decide whether a paper's PDF should come
+    from the local pre-downloaded cache instead of a live download.
+    """
     return discovered_from == "wiley" or "wiley" in url.lower()
 
 
 def _throttle_wiley(discovered_from: str | None, url: str) -> None:
     """Sleep as needed so consecutive Wiley TDM requests stay >= 10s apart."""
     global _last_wiley_request_at
-    if not _is_wiley_request(discovered_from, url):
+    if not is_wiley_request(discovered_from, url):
         return
     if _last_wiley_request_at is not None:
         elapsed = time.monotonic() - _last_wiley_request_at

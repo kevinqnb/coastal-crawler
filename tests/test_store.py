@@ -260,6 +260,103 @@ class TestStatusTransitions:
 
 
 # ---------------------------------------------------------------------------
+# relevant_papers / mark_failed_if_relevant / reset_processing_to_relevant /
+# requeue_processing — scripts/wiley_download.py + worker.py support
+# ---------------------------------------------------------------------------
+
+class TestRelevantPapers:
+    def test_returns_only_relevant(self, db_session: Session) -> None:
+        # Separate upsert_papers() calls: a single call's rows must share
+        # the same dict keys (SQLAlchemy's multi-row VALUES compiles one
+        # column list for the whole batch), and only this one paper needs
+        # discovered_from set.
+        store.upsert_papers(
+            [
+                make_paper(
+                    status="relevant",
+                    oa_pdf_url="https://example.com/a.pdf",
+                    discovered_from="wiley",
+                ),
+            ],
+            db_session,
+        )
+        store.upsert_papers(
+            [make_paper(status="discovered"), make_paper(status="extracted")],
+            db_session,
+        )
+        rows = store.relevant_papers(db_session)
+        assert len(rows) == 1
+        _, url, discovered_from = rows[0]
+        assert url == "https://example.com/a.pdf"
+        assert discovered_from == "wiley"
+
+    def test_returns_empty_when_none_relevant(self, db_session: Session) -> None:
+        store.upsert_papers([make_paper(status="discovered")], db_session)
+        assert store.relevant_papers(db_session) == []
+
+
+class TestMarkFailedIfRelevant:
+    def test_updates_relevant_paper(self, db_session: Session) -> None:
+        store.upsert_papers([make_paper(status="relevant")], db_session)
+        paper = db_session.scalars(select(Paper)).one()
+        updated = store.mark_failed_if_relevant(paper.id, "bad pdf", db_session)
+        assert updated is True
+        db_session.expire(paper)
+        assert paper.status == "failed"
+        assert paper.error == "bad pdf"
+
+    def test_no_op_when_already_processing(self, db_session: Session) -> None:
+        """Simulates the race scripts/wiley_download.py guards against: a
+        GPU worker claimed the paper into 'processing' while the
+        pre-downloader's download was in flight."""
+        store.upsert_papers([make_paper(status="processing")], db_session)
+        paper = db_session.scalars(select(Paper)).one()
+        updated = store.mark_failed_if_relevant(paper.id, "bad pdf", db_session)
+        assert updated is False
+        db_session.expire(paper)
+        assert paper.status == "processing"
+        assert paper.error is None
+
+
+class TestResetProcessingToRelevant:
+    def test_resets_processing_paper(self, db_session: Session) -> None:
+        store.upsert_papers([make_paper(status="processing")], db_session)
+        paper = db_session.scalars(select(Paper)).one()
+        updated = store.reset_processing_to_relevant(paper.id, db_session)
+        assert updated is True
+        db_session.expire(paper)
+        assert paper.status == "relevant"
+
+    def test_no_op_when_not_processing(self, db_session: Session) -> None:
+        store.upsert_papers([make_paper(status="failed")], db_session)
+        paper = db_session.scalars(select(Paper)).one()
+        updated = store.reset_processing_to_relevant(paper.id, db_session)
+        assert updated is False
+        db_session.expire(paper)
+        assert paper.status == "failed"
+
+
+class TestRequeueProcessing:
+    def test_resets_all_processing_to_relevant(self, db_session: Session) -> None:
+        store.upsert_papers(
+            [
+                make_paper(status="processing"),
+                make_paper(status="processing"),
+                make_paper(status="extracted"),
+            ],
+            db_session,
+        )
+        n = store.requeue_processing(db_session)
+        assert n == 2
+        statuses = sorted(p.status for p in db_session.scalars(select(Paper)).all())
+        assert statuses == ["extracted", "relevant", "relevant"]
+
+    def test_returns_zero_when_nothing_processing(self, db_session: Session) -> None:
+        store.upsert_papers([make_paper(status="discovered")], db_session)
+        assert store.requeue_processing(db_session) == 0
+
+
+# ---------------------------------------------------------------------------
 # insert_extraction
 # ---------------------------------------------------------------------------
 

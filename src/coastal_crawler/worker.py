@@ -23,17 +23,27 @@ import structlog
 from coastal_crawler.adapter import ExtractionAdapter, StubAdapter
 from coastal_crawler.db import store
 from coastal_crawler.db.engine import get_session
-from coastal_crawler.pdf import download_pdf
+from coastal_crawler.pdf import download_pdf, is_wiley_request
 
 log = structlog.get_logger(__name__)
 
 _ERROR_BODY_PREVIEW_LEN = 500
 
-# One item per claimed paper, in claim order: either a successful download
-# ("downloaded", paper_id, pdf_path) or a download failure ("failed",
-# paper_id) — the paper is already marked failed in the DB by the time a
-# "failed" item is queued. `None` signals the downloader thread is done.
-_DownloadEvent = tuple[Literal["downloaded"], int, Path] | tuple[Literal["failed"], int]
+# One item per claimed paper, in claim order:
+#   ("downloaded", paper_id, pdf_path, is_temp) — is_temp is True for a
+#       freshly network-downloaded file (worker owns it, deletes it after
+#       use) and False for a file read from the Wiley pre-download cache
+#       (shared/persistent — must NOT be deleted).
+#   ("failed", paper_id) — already marked failed in the DB.
+#   ("requeued", paper_id) — a Wiley paper whose PDF hasn't been
+#       pre-downloaded yet; reset from 'processing' back to 'relevant'
+#       rather than failed, since this isn't an extraction error.
+# `None` signals the downloader thread is done.
+_DownloadEvent = (
+    tuple[Literal["downloaded"], int, Path, bool]
+    | tuple[Literal["failed"], int]
+    | tuple[Literal["requeued"], int]
+)
 
 
 def _describe_http_status_error(exc: httpx.HTTPStatusError) -> str:
@@ -55,7 +65,8 @@ def run_worker(
     batch_size: int = 10,
     adapter: ExtractionAdapter | None = None,
     chunk_size: int = 20,
-) -> tuple[int, int]:
+    wiley_pdf_dir: Path | None = None,
+) -> tuple[int, int, int]:
     """Claim a batch of relevant papers and run extraction.
 
     Uses SELECT ... FOR UPDATE SKIP LOCKED so multiple worker processes can
@@ -77,9 +88,18 @@ def run_worker(
         chunk_size: Papers per extract_batch() call. Callers reading from
             Settings should pass settings.extraction_chunk_size explicitly
             (mirrors how batch_size is threaded through from the CLI).
+        wiley_pdf_dir: If set, Wiley papers' PDFs are read from
+            ``wiley_pdf_dir/{paper_id}.pdf`` (written ahead of time by
+            scripts/wiley_download.py) instead of being downloaded live —
+            this is what makes it safe to run multiple extract jobs in
+            parallel (see EFFICIENCY.md item 1). A claimed Wiley paper whose
+            file isn't there yet is reset to 'relevant' (counted in
+            ``requeued``, not ``failed``) rather than treated as an
+            extraction failure. If None (the default), Wiley papers are
+            downloaded live exactly as before.
 
     Returns:
-        (extracted, failed) counts for the batch.
+        (extracted, failed, requeued) counts for the batch.
     """
     _adapter = adapter if adapter is not None else StubAdapter()
 
@@ -91,26 +111,28 @@ def run_worker(
     log.info("worker_batch_claimed", count=len(paper_data))
 
     if not paper_data:
-        return 0, 0
+        return 0, 0, 0
 
     t_batch0 = time.monotonic()
     result_queue: queue.Queue[_DownloadEvent | None] = queue.Queue()
     downloader = threading.Thread(
-        target=_download_all, args=(paper_data, result_queue), daemon=True
+        target=_download_all, args=(paper_data, result_queue, wiley_pdf_dir), daemon=True
     )
     downloader.start()
 
     extracted = 0
     failed = 0
-    chunk: list[tuple[int, Path]] = []
+    requeued = 0
+    chunk: list[tuple[int, Path, bool]] = []
 
     def _flush_chunk() -> None:
         nonlocal extracted, failed
         if not chunk:
             return
 
-        paper_ids = [pid for pid, _ in chunk]
-        pdf_paths = [path for _, path in chunk]
+        paper_ids = [pid for pid, _, _ in chunk]
+        pdf_paths = [path for _, path, _ in chunk]
+        is_temp_flags = [is_temp for _, _, is_temp in chunk]
 
         log.info("gpu_chunk_started", chunk_size=len(chunk))
         t0 = time.monotonic()
@@ -122,7 +144,7 @@ def run_worker(
             batch_error = exc
         log.info("gpu_chunk_done", chunk_size=len(chunk), seconds=round(time.monotonic() - t0, 2))
 
-        for paper_id, pdf_path, results in zip(paper_ids, pdf_paths, batch_results):
+        for paper_id, pdf_path, is_temp, results in zip(paper_ids, pdf_paths, is_temp_flags, batch_results):
             with get_session() as session:
                 try:
                     if batch_error is not None:
@@ -140,7 +162,11 @@ def run_worker(
                     store.mark_failed(paper_id, str(exc)[:2000], session)
                     failed += 1
                     log.warning("paper_failed", paper_id=paper_id, error=str(exc))
-            pdf_path.unlink(missing_ok=True)
+            # Only the worker's own temp downloads get cleaned up here — a
+            # file read from the Wiley pre-download cache is shared/
+            # persistent and must survive for reuse by future runs.
+            if is_temp:
+                pdf_path.unlink(missing_ok=True)
 
         chunk.clear()
 
@@ -149,12 +175,14 @@ def run_worker(
         if item is None:
             break
         if item[0] == "downloaded":
-            _, paper_id, pdf_path = item
-            chunk.append((paper_id, pdf_path))
+            _, paper_id, pdf_path, is_temp = item
+            chunk.append((paper_id, pdf_path, is_temp))
             if len(chunk) >= chunk_size:
                 _flush_chunk()
-        else:
+        elif item[0] == "failed":
             failed += 1
+        else:  # "requeued"
+            requeued += 1
     _flush_chunk()
     downloader.join()
 
@@ -165,10 +193,11 @@ def run_worker(
         "worker_batch_done",
         extracted=extracted,
         failed=failed,
+        requeued=requeued,
         seconds=seconds,
         papers_per_hour=papers_per_hour,
     )
-    return extracted, failed
+    return extracted, failed, requeued
 
 
 def requeue_failed() -> int:
@@ -181,6 +210,20 @@ def requeue_failed() -> int:
         return store.requeue_failed(session)
 
 
+def requeue_processing() -> int:
+    """Reset all papers with status='processing' back to 'relevant'.
+
+    Rescues papers stranded mid-batch by an extraction job that was killed
+    (walltime limit, OOM, node preemption) before it could mark them
+    extracted or failed.
+
+    Returns:
+        Count of papers requeued.
+    """
+    with get_session() as session:
+        return store.requeue_processing(session)
+
+
 # ---------------------------------------------------------------------------
 # Internal
 # ---------------------------------------------------------------------------
@@ -188,8 +231,9 @@ def requeue_failed() -> int:
 def _download_all(
     paper_data: list[tuple[int, str | None, str | None]],
     result_queue: queue.Queue[_DownloadEvent | None],
+    wiley_pdf_dir: Path | None = None,
 ) -> None:
-    """Download every paper's PDF in order, pushing results to a queue.
+    """Resolve every paper's PDF in order, pushing results to a queue.
 
     Runs in a background thread so downloads for later papers (including
     Wiley's ~10s/request throttle — see ``pdf.py``) overlap with GPU
@@ -197,15 +241,29 @@ def _download_all(
     marked failed in the DB immediately, from this thread, using their own
     session (SQLAlchemy sessions are safe to open per-call against a shared
     thread-safe Engine).
+
+    If ``wiley_pdf_dir`` is set, Wiley papers never hit the network here —
+    their PDF is looked up at ``wiley_pdf_dir/{paper_id}.pdf``, written
+    ahead of time by scripts/wiley_download.py. A paper whose file isn't
+    there yet is reset to 'relevant' and reported as "requeued", not
+    "failed": the pre-downloader hasn't caught up, not a real error.
     """
     for paper_id, oa_pdf_url, discovered_from in paper_data:
         t0 = time.monotonic()
         try:
             if not oa_pdf_url:
                 raise ValueError("No open-access PDF URL available")
+            if wiley_pdf_dir is not None and is_wiley_request(discovered_from, oa_pdf_url):
+                cached_path = wiley_pdf_dir / f"{paper_id}.pdf"
+                if not cached_path.exists():
+                    _requeue_undownloaded(paper_id, result_queue)
+                    continue
+                log.info("paper_pdf_found_local", paper_id=paper_id, path=str(cached_path))
+                result_queue.put(("downloaded", paper_id, cached_path, False))
+                continue
             pdf_path = download_pdf(oa_pdf_url, discovered_from)
             log.info("paper_downloaded", paper_id=paper_id, seconds=round(time.monotonic() - t0, 2))
-            result_queue.put(("downloaded", paper_id, pdf_path))
+            result_queue.put(("downloaded", paper_id, pdf_path, True))
         except httpx.HTTPStatusError as exc:
             reason = _describe_http_status_error(exc)
             _fail_download(paper_id, reason, time.monotonic() - t0, result_queue)
@@ -224,3 +282,13 @@ def _fail_download(
     with get_session() as session:
         store.mark_failed(paper_id, error[:2000], session)
     result_queue.put(("failed", paper_id))
+
+
+def _requeue_undownloaded(
+    paper_id: int,
+    result_queue: queue.Queue[_DownloadEvent | None],
+) -> None:
+    log.info("paper_wiley_pdf_not_ready", paper_id=paper_id)
+    with get_session() as session:
+        store.reset_processing_to_relevant(paper_id, session)
+    result_queue.put(("requeued", paper_id))

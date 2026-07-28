@@ -54,6 +54,18 @@ fi
 DOC_LM_PORT="${DOC_LM_PORT:-8083}"
 MEAS_LM_PORT="${MEAS_LM_PORT:-8084}"
 
+# ---- Preflight: warn (don't block) if the Wiley PDF cache looks empty -------
+# Since scripts/wiley_download.py started decoupling Wiley downloads from
+# extraction (EFFICIENCY.md item 1), a claimed Wiley paper whose PDF isn't
+# in WILEY_PDF_DIR yet gets requeued to 'relevant' instead of extracted — so
+# an empty/missing cache dir means this job would spend ~10 minutes starting
+# vLLM servers just to requeue its whole batch and exit. Not a hard failure
+# (a fresh downloader may still be catching up), just a heads-up in the logs.
+WILEY_PDF_DIR="${WILEY_PDF_DIR:-data/wiley_pdfs}"
+if [ ! -d "$WILEY_PDF_DIR" ] || [ -z "$(ls -A "$WILEY_PDF_DIR" 2>/dev/null)" ]; then
+    echo "WARNING: $WILEY_PDF_DIR is empty or missing — is scripts/wiley_download.py running? Wiley papers claimed before it catches up will be requeued to 'relevant', not extracted." >&2
+fi
+
 # ---- Start servers in background, pinned to distinct GPUs -------------------
 cd scripts
 ./serve_model.sh DOC_LM 0 &

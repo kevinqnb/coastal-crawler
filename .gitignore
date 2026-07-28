@@ -225,6 +225,9 @@ memory/*
 scripts/out/*
 scripts/time_ocr.sh
 
+# Pre-downloaded PDF cache (scripts/wiley_download.py)
+/data/
+
 # Personal cluster config and job launchers (site-specific paths/accounts)
 scripts/cluster.local.sh
 scripts/filter.sh

@@ -296,6 +296,17 @@ class Settings(BaseSettings):
         default_factory=list,
         description="Comma-separated journal ISSNs to restrict Wiley queries to",
     )
+    wiley_pdf_dir: str = Field(
+        default="data/wiley_pdfs",
+        description=(
+            "Directory scripts/wiley_download.py pre-downloads Wiley PDFs into "
+            "(named {paper_id}.pdf). The extraction worker reads Wiley papers' "
+            "PDFs from here instead of downloading them live, so only one "
+            "process ever talks to Wiley's rate-limited TDM API — this is what "
+            "makes it safe to run multiple `coastal-crawler extract` jobs in "
+            "parallel. See EFFICIENCY.md item 1."
+        ),
+    )
 
     # field_validator handles CSV strings passed directly to the constructor
     # (init_settings path). The custom sources below handle dotenv/env paths.

@@ -55,6 +55,8 @@ def extract(
     ),
 ) -> None:
     """Claim and extract a batch of relevant papers."""
+    from pathlib import Path
+
     from coastal_crawler.adapter import build_extraction_adapter
     from coastal_crawler.config import get_settings
     from coastal_crawler.worker import run_worker
@@ -62,8 +64,16 @@ def extract(
     settings = get_settings()
     adapter = build_extraction_adapter(settings)
     size = chunk_size if chunk_size is not None else settings.extraction_chunk_size
-    extracted, failed = run_worker(batch_size=batch_size, adapter=adapter, chunk_size=size)
-    typer.echo(f"Extracted {extracted}, failed {failed}.")
+    extracted, failed, requeued = run_worker(
+        batch_size=batch_size,
+        adapter=adapter,
+        chunk_size=size,
+        wiley_pdf_dir=Path(settings.wiley_pdf_dir),
+    )
+    message = f"Extracted {extracted}, failed {failed}."
+    if requeued:
+        message += f" Requeued {requeued} (Wiley PDF not pre-downloaded yet — is scripts/wiley_download.py running?)."
+    typer.echo(message)
 
 
 @app.command()
@@ -226,6 +236,15 @@ def requeue_failed() -> None:
 
     count = _requeue()
     typer.echo(f"Requeued {count} failed paper(s) for extraction retry.")
+
+
+@app.command()
+def requeue_processing() -> None:
+    """Reset papers stuck in 'processing' back to 'relevant' (use after a killed extraction job)."""
+    from coastal_crawler.worker import requeue_processing as _requeue
+
+    count = _requeue()
+    typer.echo(f"Requeued {count} stranded paper(s) back to 'relevant'.")
 
 
 @app.command()

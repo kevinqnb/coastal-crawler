@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session
 from coastal_crawler.adapter import ExtractionResult, StubAdapter
 from coastal_crawler.db import store
 from coastal_crawler.db.models import Extraction, Paper
-from coastal_crawler.worker import run_worker, requeue_failed
+from coastal_crawler.worker import requeue_failed, requeue_processing, run_worker
 
 
 # ---------------------------------------------------------------------------
@@ -130,8 +130,8 @@ def _extractions(engine: Engine) -> list[Extraction]:
 
 class TestRunWorkerSuccess:
     def test_empty_queue_returns_zeros(self, worker_db: Engine) -> None:
-        extracted, failed = run_worker(batch_size=10, adapter=StubAdapter())
-        assert (extracted, failed) == (0, 0)
+        extracted, failed, requeued = run_worker(batch_size=10, adapter=StubAdapter())
+        assert (extracted, failed, requeued) == (0, 0, 0)
 
     def test_extracted_paper_status(
         self, worker_db: Engine, mock_download: MagicMock
@@ -198,7 +198,7 @@ class TestRunWorkerSuccess:
     ) -> None:
         """Calling run_worker without adapter kwarg uses StubAdapter."""
         _insert(worker_db, make_paper())
-        extracted, failed = run_worker(batch_size=10)
+        extracted, failed, requeued = run_worker(batch_size=10)
         assert extracted == 1
         assert failed == 0
 
@@ -258,9 +258,80 @@ class TestRunWorkerSuccess:
         self, worker_db: Engine, mock_download: MagicMock
     ) -> None:
         _insert(worker_db, make_paper(), make_paper())
-        extracted, failed = run_worker(batch_size=10, adapter=StubAdapter())
+        extracted, failed, requeued = run_worker(batch_size=10, adapter=StubAdapter())
         assert extracted == 2
         assert failed == 0
+
+
+# ---------------------------------------------------------------------------
+# run_worker — Wiley pre-download cache (wiley_pdf_dir)
+# ---------------------------------------------------------------------------
+
+class TestRunWorkerWileyCache:
+    def test_wiley_pdf_read_from_cache_not_deleted(
+        self, worker_db: Engine, mocker: Any, tmp_path: Path
+    ) -> None:
+        """A pre-downloaded Wiley PDF is read from wiley_pdf_dir and survives
+        the run — it's a shared cache, not a per-worker temp file."""
+        _insert(
+            worker_db,
+            make_paper(
+                discovered_from="wiley",
+                oa_pdf_url="https://api.wiley.com/onlinelibrary/tdm/v1/articles/10.1/xyz",
+            ),
+        )
+        with Session(worker_db) as s:
+            paper_id = s.scalars(select(Paper.id)).one()
+        cached = tmp_path / f"{paper_id}.pdf"
+        cached.write_bytes(b"%PDF-1.4 fake")
+        http_get = mocker.patch("coastal_crawler.pdf.httpx.get")
+
+        extracted, failed, requeued = run_worker(
+            batch_size=10, adapter=StubAdapter(), wiley_pdf_dir=tmp_path
+        )
+
+        assert (extracted, failed, requeued) == (1, 0, 0)
+        http_get.assert_not_called()
+        assert cached.exists()
+
+    def test_wiley_pdf_missing_requeues_to_relevant(
+        self, worker_db: Engine, mocker: Any, tmp_path: Path
+    ) -> None:
+        """A Wiley paper claimed before its PDF is pre-downloaded goes back
+        to 'relevant' (not 'failed') and isn't counted as an extraction
+        failure."""
+        _insert(
+            worker_db,
+            make_paper(
+                discovered_from="wiley",
+                oa_pdf_url="https://api.wiley.com/onlinelibrary/tdm/v1/articles/10.1/xyz",
+            ),
+        )
+        http_get = mocker.patch("coastal_crawler.pdf.httpx.get")
+
+        extracted, failed, requeued = run_worker(
+            batch_size=10, adapter=StubAdapter(), wiley_pdf_dir=tmp_path
+        )
+
+        assert (extracted, failed, requeued) == (0, 0, 1)
+        http_get.assert_not_called()
+        with Session(worker_db) as s:
+            paper = s.scalars(select(Paper)).one()
+        assert paper.status == "relevant"
+        assert _extractions(worker_db) == []
+
+    def test_non_wiley_paper_still_downloads_when_wiley_pdf_dir_set(
+        self, worker_db: Engine, mock_download: MagicMock, tmp_path: Path
+    ) -> None:
+        """wiley_pdf_dir only changes behavior for Wiley-sourced papers."""
+        _insert(worker_db, make_paper(oa_pdf_url="https://example.com/paper.pdf"))
+
+        extracted, failed, requeued = run_worker(
+            batch_size=10, adapter=StubAdapter(), wiley_pdf_dir=tmp_path
+        )
+
+        assert (extracted, failed, requeued) == (1, 0, 0)
+        mock_download.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -270,8 +341,8 @@ class TestRunWorkerSuccess:
 class TestRunWorkerFailures:
     def test_no_pdf_url_marks_failed(self, worker_db: Engine) -> None:
         _insert(worker_db, make_paper(oa_pdf_url=None))
-        extracted, failed = run_worker(batch_size=10, adapter=StubAdapter())
-        assert (extracted, failed) == (0, 1)
+        extracted, failed, requeued = run_worker(batch_size=10, adapter=StubAdapter())
+        assert (extracted, failed, requeued) == (0, 1, 0)
         with Session(worker_db) as s:
             paper = s.scalars(select(Paper)).one()
         assert paper.status == "failed"
@@ -285,8 +356,8 @@ class TestRunWorkerFailures:
             "coastal_crawler.pdf.httpx.get",
             side_effect=Exception("connection refused"),
         )
-        extracted, failed = run_worker(batch_size=10, adapter=StubAdapter())
-        assert (extracted, failed) == (0, 1)
+        extracted, failed, requeued = run_worker(batch_size=10, adapter=StubAdapter())
+        assert (extracted, failed, requeued) == (0, 1, 0)
         with Session(worker_db) as s:
             paper = s.scalars(select(Paper)).one()
         assert paper.status == "failed"
@@ -309,9 +380,9 @@ class TestRunWorkerFailures:
         response = httpx.Response(500, content=fault_body.encode(), request=request)
         mocker.patch("coastal_crawler.pdf.httpx.get", return_value=response)
 
-        extracted, failed = run_worker(batch_size=10, adapter=StubAdapter())
+        extracted, failed, requeued = run_worker(batch_size=10, adapter=StubAdapter())
 
-        assert (extracted, failed) == (0, 1)
+        assert (extracted, failed, requeued) == (0, 1, 0)
         with Session(worker_db) as s:
             paper = s.scalars(select(Paper)).one()
         assert paper.status == "failed"
@@ -328,9 +399,9 @@ class TestRunWorkerFailures:
         response = httpx.Response(500, content=b"", request=request)
         mocker.patch("coastal_crawler.pdf.httpx.get", return_value=response)
 
-        extracted, failed = run_worker(batch_size=10, adapter=StubAdapter())
+        extracted, failed, requeued = run_worker(batch_size=10, adapter=StubAdapter())
 
-        assert (extracted, failed) == (0, 1)
+        assert (extracted, failed, requeued) == (0, 1, 0)
         with Session(worker_db) as s:
             paper = s.scalars(select(Paper)).one()
         assert paper.status == "failed"
@@ -343,8 +414,8 @@ class TestRunWorkerFailures:
         _insert(worker_db, make_paper())
         adapter = MagicMock()
         adapter.extract_batch.side_effect = RuntimeError("model crashed")
-        extracted, failed = run_worker(batch_size=10, adapter=adapter)
-        assert (extracted, failed) == (0, 1)
+        extracted, failed, requeued = run_worker(batch_size=10, adapter=adapter)
+        assert (extracted, failed, requeued) == (0, 1, 0)
         with Session(worker_db) as s:
             paper = s.scalars(select(Paper)).one()
         assert paper.status == "failed"
@@ -377,7 +448,7 @@ class TestRunWorkerFailures:
     ) -> None:
         """A failure on one paper must not prevent processing subsequent papers."""
         _insert(worker_db, make_paper(oa_pdf_url=None), make_paper())
-        extracted, failed = run_worker(batch_size=10, adapter=StubAdapter())
+        extracted, failed, requeued = run_worker(batch_size=10, adapter=StubAdapter())
         assert extracted == 1
         assert failed == 1
 
@@ -410,9 +481,9 @@ class TestRunWorkerChunking:
         adapter = MagicMock()
         adapter.extract_batch.side_effect = lambda pdf_paths: [[] for _ in pdf_paths]
 
-        extracted, failed = run_worker(batch_size=10, adapter=adapter, chunk_size=2)
+        extracted, failed, requeued = run_worker(batch_size=10, adapter=adapter, chunk_size=2)
 
-        assert (extracted, failed) == (5, 0)
+        assert (extracted, failed, requeued) == (5, 0, 0)
         # 5 papers at chunk_size=2 -> three extract_batch calls sized 2, 2, 1.
         assert adapter.extract_batch.call_count == 3
         call_sizes = sorted(len(call.args[0]) for call in adapter.extract_batch.call_args_list)
@@ -435,9 +506,9 @@ class TestRunWorkerChunking:
 
         adapter.extract_batch.side_effect = _side_effect
 
-        extracted, failed = run_worker(batch_size=10, adapter=adapter, chunk_size=2)
+        extracted, failed, requeued = run_worker(batch_size=10, adapter=adapter, chunk_size=2)
 
-        assert (extracted, failed) == (2, 2)
+        assert (extracted, failed, requeued) == (2, 2, 0)
         assert adapter.extract_batch.call_count == 2
 
 
@@ -462,3 +533,26 @@ class TestRequeueFailed:
     def test_returns_zero_when_nothing_failed(self, worker_db: Engine) -> None:
         _insert(worker_db, make_paper(status="discovered"))
         assert requeue_failed() == 0
+
+
+# ---------------------------------------------------------------------------
+# requeue_processing
+# ---------------------------------------------------------------------------
+
+class TestRequeueProcessing:
+    def test_delegates_to_store(self, worker_db: Engine) -> None:
+        _insert(
+            worker_db,
+            make_paper(status="processing"),
+            make_paper(status="processing"),
+            make_paper(status="extracted"),
+        )
+        count = requeue_processing()
+        assert count == 2
+        with Session(worker_db) as s:
+            statuses = sorted(p.status for p in s.scalars(select(Paper)).all())
+        assert statuses == ["extracted", "relevant", "relevant"]
+
+    def test_returns_zero_when_nothing_processing(self, worker_db: Engine) -> None:
+        _insert(worker_db, make_paper(status="discovered"))
+        assert requeue_processing() == 0
