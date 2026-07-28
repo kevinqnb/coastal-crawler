@@ -16,9 +16,27 @@ module load postgresql/18.1
 # --- HuggingFace cache used by vLLM / serve_model.sh -------------------------
 export HF_HOME=/path/to/your/hf-cache
 
-# --- Local Postgres instance (skip/remove if you use a managed DB that's
-# already running) -------------------------------------------------------------
-pg_ctl -D /path/to/your/pgdata -l /path/to/your/pgdata.log start
+# --- Postgres ------------------------------------------------------------------
+# Don't start a Postgres instance directly here if this job and your DB
+# server can land on different nodes (e.g. this job requests GPUs and your DB
+# job doesn't) — two independent `pg_ctl start` calls against the same data
+# directory from different hosts can corrupt it. Instead run Postgres as its
+# own long-lived job (see scripts/serve_postgres.sh for a template) that
+# writes its current hostname to a well-known shared file, and discover it
+# here, e.g.:
+#
+#   PG_HOST_FILE=/path/to/your/pgserver_host.txt
+#   if [ ! -s "$PG_HOST_FILE" ]; then
+#       echo "ERROR: $PG_HOST_FILE missing or empty — is your Postgres job running?" >&2
+#       exit 1
+#   fi
+#   export DATABASE_URL="postgresql://youruser@$(cat "$PG_HOST_FILE"):5432/yourdb"
+#
+# This must be sourced *after* .env in submit_extract_job.sh so it wins over
+# .env's own DATABASE_URL (see that script's sourcing order).
+#
+# If your DB is guaranteed to always be reachable on the same node as this
+# job (e.g. a single-node setup), a plain `pg_ctl -D ... start` here is fine.
 
 # --- Python environment -------------------------------------------------------
 source .venv/bin/activate

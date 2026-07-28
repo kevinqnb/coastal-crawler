@@ -24,6 +24,20 @@
 #   shell profile or job script before calling this script — do not put it
 #   in .env. Defaults to ~/.cache/huggingface if unset.
 #
+# tiktoken-rs / Harmony vocab cache (gpt-oss models):
+#   vLLM's Harmony parser (used for gpt-oss's response format) loads its
+#   tokenizer via openai_harmony, which downloads and caches a vocab file
+#   through tiktoken-rs. tiktoken-rs reads TIKTOKEN_RS_CACHE_DIR (its own
+#   var — not the standard TIKTOKEN_CACHE_DIR) and otherwise falls back to
+#   a system temp dir, which on this cluster is the per-job scratch dir.
+#   Inside the Singularity container that path isn't bound/visible, so
+#   creating it lands on the container's read-only root filesystem —
+#   crashing gpt-oss servers outright on first request (see
+#   out/extract_error.txt). If the caller hasn't already exported
+#   TIKTOKEN_RS_CACHE_DIR, this script creates (persistently — it's a tiny,
+#   reusable cache) and owns its own per-role directory under the repo,
+#   and explicitly binds it into the container below.
+#
 # Usage:
 #   ./scripts/serve_model.sh FILTER
 #   ./scripts/serve_model.sh DOC_LM 0
@@ -58,6 +72,11 @@ fi
 if [ -n "$GPU_ID" ]; then
     export CUDA_VISIBLE_DEVICES="$GPU_ID"
 fi
+
+# ---- tiktoken-rs / Harmony vocab cache (see header comment) -------------
+TIKTOKEN_RS_CACHE_DIR="${TIKTOKEN_RS_CACHE_DIR:-$REPO_ROOT/.cache/tiktoken-rs/$ROLE}"
+mkdir -p "$TIKTOKEN_RS_CACHE_DIR"
+export TIKTOKEN_RS_CACHE_DIR
 
 # ---- Indirect through ${ROLE}_* env vars --------------------------------
 model_var="${ROLE}_MODEL"
@@ -121,7 +140,7 @@ if [ -n "$SIF_PATH" ]; then
     fi
 
     HF_CACHE="${HF_HOME:-$HOME/.cache/huggingface}"
-    BIND_ARGS=(--bind "$HF_CACHE:$HF_CACHE")
+    BIND_ARGS=(--bind "$HF_CACHE:$HF_CACHE" --bind "$TIKTOKEN_RS_CACHE_DIR:$TIKTOKEN_RS_CACHE_DIR")
 
     if [[ "$MODEL" = /* ]]; then
         MODEL_DIR="$(dirname "$MODEL")"

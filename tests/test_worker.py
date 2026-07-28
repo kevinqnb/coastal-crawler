@@ -1,10 +1,12 @@
 """Tests for the extraction worker (worker.py).
 
-All tests use the ``worker_db`` fixture, which patches ``get_session`` inside
-the worker module to use the test engine.  This avoids needing DATABASE_URL
-set in the environment while still exercising the real session/commit logic.
+All tests use the ``worker_db`` fixture, which patches ``get_session``
+inside the worker module to use the test engine.  This avoids needing
+DATABASE_URL set in the environment while still exercising the real
+session/commit logic.
 
-HTTP calls (PDF download) are mocked via pytest-mock.
+Unlike the OCR worker, there are no network calls here — extraction reads
+OCR text directly from disk (``ocr_dir``), so no download mocking is needed.
 """
 
 from __future__ import annotations
@@ -15,16 +17,16 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
 
-import httpx
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
-from coastal_crawler.adapter import ExtractionResult, StubAdapter
+from coastal_crawler.adapter import ExtractionResult, StubMeasurementAdapter
 from coastal_crawler.db import store
 from coastal_crawler.db.models import Extraction, Paper
-from coastal_crawler.worker import requeue_failed, requeue_processing, run_worker
+from coastal_crawler.ocr_worker import run_ocr_worker
+from coastal_crawler.worker import requeue_failed, requeue_processing, run_worker, run_worker_until_idle
 
 
 # ---------------------------------------------------------------------------
@@ -35,19 +37,14 @@ def _uid() -> str:
     return str(uuid.uuid4())[:8]
 
 
-def make_paper(
-    *,
-    oa_pdf_url: str | None = "https://example.com/paper.pdf",
-    status: str = "relevant",
-    **kwargs: Any,
-) -> dict[str, Any]:
+def make_paper(*, status: str = "ocr_done", **kwargs: Any) -> dict[str, Any]:
     uid = _uid()
     return {
         "doi": f"10.1/{uid}",
         "openalex_id": f"W{uid}",
         "semantic_scholar_id": None,
         "title": f"Test Paper {uid}",
-        "oa_pdf_url": oa_pdf_url,
+        "oa_pdf_url": "https://example.com/paper.pdf",
         "metadata": {},
         "status": status,
         **kwargs,
@@ -90,17 +87,25 @@ def worker_db(clean_db: Engine, mocker: Any) -> Engine:
 
 
 @pytest.fixture
-def mock_download(mocker: Any) -> MagicMock:
-    """Mock httpx.get so no real HTTP requests are made during PDF download.
+def both_stages_db(clean_db: Engine, mocker: Any) -> Engine:
+    """Patch get_session in both worker.py and ocr_worker.py to the same
+    test engine, for tests that run the OCR stage then the extraction stage
+    against the same database (see TestOcrToExtractionIntegration)."""
+    @contextmanager  # type: ignore[misc]
+    def _test_get_session():
+        session = Session(clean_db)
+        try:
+            yield session
+            session.commit()
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
 
-    Patches coastal_crawler.pdf.httpx.get, since that's where download_pdf()
-    actually issues the network request — worker.py itself only imports
-    download_pdf, not httpx.
-    """
-    mock_resp = MagicMock()
-    mock_resp.content = b"%PDF-1.4 fake"
-    mock_resp.raise_for_status = MagicMock()
-    return mocker.patch("coastal_crawler.pdf.httpx.get", return_value=mock_resp)
+    mocker.patch("coastal_crawler.worker.get_session", _test_get_session)
+    mocker.patch("coastal_crawler.ocr_worker.get_session", _test_get_session)
+    return clean_db
 
 
 def _insert(engine: Engine, *paper_dicts: dict[str, Any]) -> None:
@@ -124,46 +129,43 @@ def _extractions(engine: Engine) -> list[Extraction]:
         return list(s.scalars(select(Extraction)).all())
 
 
+def _write_ocr(ocr_dir: Path, paper_id: int, text: str = "some ocr text") -> None:
+    ocr_dir.mkdir(parents=True, exist_ok=True)
+    (ocr_dir / f"{paper_id}.txt").write_text(text, encoding="utf-8")
+
+
 # ---------------------------------------------------------------------------
 # run_worker — successful extraction
 # ---------------------------------------------------------------------------
 
 class TestRunWorkerSuccess:
-    def test_empty_queue_returns_zeros(self, worker_db: Engine) -> None:
-        extracted, failed, requeued = run_worker(batch_size=10, adapter=StubAdapter())
+    def test_empty_queue_returns_zeros(self, worker_db: Engine, tmp_path: Path) -> None:
+        extracted, failed, requeued = run_worker(batch_size=10, adapter=StubMeasurementAdapter(), ocr_dir=tmp_path)
         assert (extracted, failed, requeued) == (0, 0, 0)
 
-    def test_extracted_paper_status(
-        self, worker_db: Engine, mock_download: MagicMock
-    ) -> None:
+    def test_extracted_paper_status(self, worker_db: Engine, tmp_path: Path) -> None:
         _insert(worker_db, make_paper())
-        run_worker(batch_size=10, adapter=StubAdapter())
-        with Session(worker_db) as s:
-            paper = s.scalars(select(Paper)).one()
-        assert paper.status == "extracted"
+        _write_ocr(tmp_path, _paper(worker_db).id)
+        run_worker(batch_size=10, adapter=StubMeasurementAdapter(), ocr_dir=tmp_path)
+        assert _paper(worker_db).status == "extracted"
 
-    def test_extracted_timestamp_set(
-        self, worker_db: Engine, mock_download: MagicMock
-    ) -> None:
+    def test_extracted_timestamp_set(self, worker_db: Engine, tmp_path: Path) -> None:
         _insert(worker_db, make_paper())
-        run_worker(batch_size=10, adapter=StubAdapter())
-        with Session(worker_db) as s:
-            paper = s.scalars(select(Paper)).one()
-        assert paper.extracted_at is not None
+        _write_ocr(tmp_path, _paper(worker_db).id)
+        run_worker(batch_size=10, adapter=StubMeasurementAdapter(), ocr_dir=tmp_path)
+        assert _paper(worker_db).extracted_at is not None
 
-    def test_extraction_results_stored(
-        self, worker_db: Engine, mock_download: MagicMock
-    ) -> None:
+    def test_extraction_results_stored(self, worker_db: Engine, tmp_path: Path) -> None:
         _insert(worker_db, make_paper())
+        _write_ocr(tmp_path, _paper(worker_db).id)
         adapter = MagicMock()
         adapter.extract_batch.return_value = [[make_result(), make_result()]]
-        run_worker(batch_size=10, adapter=adapter)
+        run_worker(batch_size=10, adapter=adapter, ocr_dir=tmp_path)
         assert len(_extractions(worker_db)) == 2
 
-    def test_extraction_result_fields(
-        self, worker_db: Engine, mock_download: MagicMock
-    ) -> None:
+    def test_extraction_result_fields(self, worker_db: Engine, tmp_path: Path) -> None:
         _insert(worker_db, make_paper())
+        _write_ocr(tmp_path, _paper(worker_db).id)
         result = make_result(
             schema_name="coastal_v1",
             model_version="llm-3",
@@ -173,7 +175,7 @@ class TestRunWorkerSuccess:
         )
         adapter = MagicMock()
         adapter.extract_batch.return_value = [[result]]
-        run_worker(batch_size=10, adapter=adapter)
+        run_worker(batch_size=10, adapter=adapter, ocr_dir=tmp_path)
         with Session(worker_db) as s:
             ext = s.scalars(select(Extraction)).one()
         assert ext.schema_name == "coastal_v1"
@@ -182,156 +184,74 @@ class TestRunWorkerSuccess:
         assert ext.latitude == pytest.approx(51.5)
         assert ext.longitude == pytest.approx(-0.1)
 
-    def test_stub_adapter_produces_no_extractions(
-        self, worker_db: Engine, mock_download: MagicMock
-    ) -> None:
+    def test_stub_adapter_produces_no_extractions(self, worker_db: Engine, tmp_path: Path) -> None:
         _insert(worker_db, make_paper())
-        run_worker(batch_size=10, adapter=StubAdapter())
+        _write_ocr(tmp_path, _paper(worker_db).id)
+        run_worker(batch_size=10, adapter=StubMeasurementAdapter(), ocr_dir=tmp_path)
         assert _extractions(worker_db) == []
-        # Paper is still marked extracted
-        with Session(worker_db) as s:
-            paper = s.scalars(select(Paper)).one()
-        assert paper.status == "extracted"
+        assert _paper(worker_db).status == "extracted"
 
-    def test_default_adapter_is_stub(
-        self, worker_db: Engine, mock_download: MagicMock
-    ) -> None:
-        """Calling run_worker without adapter kwarg uses StubAdapter."""
+    def test_default_adapter_is_stub(self, worker_db: Engine, tmp_path: Path) -> None:
+        """Calling run_worker without adapter kwarg uses StubMeasurementAdapter."""
         _insert(worker_db, make_paper())
-        extracted, failed, requeued = run_worker(batch_size=10)
+        _write_ocr(tmp_path, _paper(worker_db).id)
+        extracted, failed, requeued = run_worker(batch_size=10, ocr_dir=tmp_path)
         assert extracted == 1
         assert failed == 0
 
-    def test_batch_size_respected(
-        self, worker_db: Engine, mock_download: MagicMock
-    ) -> None:
+    def test_batch_size_respected(self, worker_db: Engine, tmp_path: Path) -> None:
         _insert(worker_db, *[make_paper() for _ in range(5)])
-        run_worker(batch_size=3, adapter=StubAdapter())
+        for p in _papers(worker_db):
+            _write_ocr(tmp_path, p.id)
+        run_worker(batch_size=3, adapter=StubMeasurementAdapter(), ocr_dir=tmp_path)
         with Session(worker_db) as s:
-            extracted = s.scalar(
-                select(func.count(Paper.id)).where(Paper.status == "extracted")
-            )
-            unclaimed = s.scalar(
-                select(func.count(Paper.id)).where(Paper.status == "relevant")
-            )
+            extracted = s.scalar(select(func.count(Paper.id)).where(Paper.status == "extracted"))
+            unclaimed = s.scalar(select(func.count(Paper.id)).where(Paper.status == "ocr_done"))
         assert extracted == 3
         assert unclaimed == 2
 
-    def test_adapter_called_with_paths(
-        self, worker_db: Engine, mock_download: MagicMock
-    ) -> None:
+    def test_adapter_called_with_ocr_texts(self, worker_db: Engine, tmp_path: Path) -> None:
         _insert(worker_db, make_paper())
+        _write_ocr(tmp_path, _paper(worker_db).id, text="hello world")
         adapter = MagicMock()
         adapter.extract_batch.return_value = [[]]
-        run_worker(batch_size=10, adapter=adapter)
-        adapter.extract_batch.assert_called_once()
-        pdf_paths = adapter.extract_batch.call_args[0][0]
-        assert isinstance(pdf_paths, list)
-        assert len(pdf_paths) == 1
-        assert isinstance(pdf_paths[0], Path)
+        run_worker(batch_size=10, adapter=adapter, ocr_dir=tmp_path)
+        adapter.extract_batch.assert_called_once_with(["hello world"])
 
-    def test_pdf_downloaded_from_oa_url(
-        self, worker_db: Engine, mock_download: MagicMock
-    ) -> None:
-        _insert(worker_db, make_paper(oa_pdf_url="https://example.com/mypaper.pdf"))
-        run_worker(batch_size=10, adapter=StubAdapter())
-        mock_download.assert_called_once()
-        called_url = mock_download.call_args[0][0]
-        assert called_url == "https://example.com/mypaper.pdf"
-
-    def test_temp_file_deleted_after_extraction(
-        self, worker_db: Engine, mock_download: MagicMock
-    ) -> None:
-        _insert(worker_db, make_paper())
-        captured_paths: list[Path] = []
-
-        class CapturingAdapter:
-            def extract_batch(self, pdf_paths: list[Path]) -> list[list[ExtractionResult]]:
-                captured_paths.extend(pdf_paths)
-                return [[] for _ in pdf_paths]
-
-        run_worker(batch_size=10, adapter=CapturingAdapter())
-        assert len(captured_paths) == 1
-        assert not captured_paths[0].exists()
-
-    def test_returns_extracted_failed_counts(
-        self, worker_db: Engine, mock_download: MagicMock
-    ) -> None:
+    def test_returns_extracted_failed_counts(self, worker_db: Engine, tmp_path: Path) -> None:
         _insert(worker_db, make_paper(), make_paper())
-        extracted, failed, requeued = run_worker(batch_size=10, adapter=StubAdapter())
+        for p in _papers(worker_db):
+            _write_ocr(tmp_path, p.id)
+        extracted, failed, requeued = run_worker(batch_size=10, adapter=StubMeasurementAdapter(), ocr_dir=tmp_path)
         assert extracted == 2
         assert failed == 0
 
 
 # ---------------------------------------------------------------------------
-# run_worker — Wiley pre-download cache (wiley_pdf_dir)
+# run_worker — missing OCR text file
 # ---------------------------------------------------------------------------
 
-class TestRunWorkerWileyCache:
-    def test_wiley_pdf_read_from_cache_not_deleted(
-        self, worker_db: Engine, mocker: Any, tmp_path: Path
-    ) -> None:
-        """A pre-downloaded Wiley PDF is read from wiley_pdf_dir and survives
-        the run — it's a shared cache, not a per-worker temp file."""
-        _insert(
-            worker_db,
-            make_paper(
-                discovered_from="wiley",
-                oa_pdf_url="https://api.wiley.com/onlinelibrary/tdm/v1/articles/10.1/xyz",
-            ),
-        )
-        with Session(worker_db) as s:
-            paper_id = s.scalars(select(Paper.id)).one()
-        cached = tmp_path / f"{paper_id}.pdf"
-        cached.write_bytes(b"%PDF-1.4 fake")
-        http_get = mocker.patch("coastal_crawler.pdf.httpx.get")
-
-        extracted, failed, requeued = run_worker(
-            batch_size=10, adapter=StubAdapter(), wiley_pdf_dir=tmp_path
-        )
-
-        assert (extracted, failed, requeued) == (1, 0, 0)
-        http_get.assert_not_called()
-        assert cached.exists()
-
-    def test_wiley_pdf_missing_requeues_to_relevant(
-        self, worker_db: Engine, mocker: Any, tmp_path: Path
-    ) -> None:
-        """A Wiley paper claimed before its PDF is pre-downloaded goes back
-        to 'relevant' (not 'failed') and isn't counted as an extraction
-        failure."""
-        _insert(
-            worker_db,
-            make_paper(
-                discovered_from="wiley",
-                oa_pdf_url="https://api.wiley.com/onlinelibrary/tdm/v1/articles/10.1/xyz",
-            ),
-        )
-        http_get = mocker.patch("coastal_crawler.pdf.httpx.get")
-
-        extracted, failed, requeued = run_worker(
-            batch_size=10, adapter=StubAdapter(), wiley_pdf_dir=tmp_path
-        )
-
+class TestRunWorkerMissingOcrFile:
+    def test_missing_file_requeues_to_relevant_not_failed(self, worker_db: Engine, tmp_path: Path) -> None:
+        """A claimed paper whose OCR text file isn't on disk (shouldn't
+        happen given ocr_worker.py's write-then-commit ordering, but disk
+        issues are possible) is self-healing: back to 'relevant' so it's
+        re-OCR'd, not 'failed' (which requeue-failed could never fix)."""
+        _insert(worker_db, make_paper())
+        extracted, failed, requeued = run_worker(batch_size=10, adapter=StubMeasurementAdapter(), ocr_dir=tmp_path)
         assert (extracted, failed, requeued) == (0, 0, 1)
-        http_get.assert_not_called()
-        with Session(worker_db) as s:
-            paper = s.scalars(select(Paper)).one()
+        paper = _paper(worker_db)
         assert paper.status == "relevant"
         assert _extractions(worker_db) == []
 
-    def test_non_wiley_paper_still_downloads_when_wiley_pdf_dir_set(
-        self, worker_db: Engine, mock_download: MagicMock, tmp_path: Path
-    ) -> None:
-        """wiley_pdf_dir only changes behavior for Wiley-sourced papers."""
-        _insert(worker_db, make_paper(oa_pdf_url="https://example.com/paper.pdf"))
-
-        extracted, failed, requeued = run_worker(
-            batch_size=10, adapter=StubAdapter(), wiley_pdf_dir=tmp_path
-        )
-
-        assert (extracted, failed, requeued) == (1, 0, 0)
-        mock_download.assert_called_once()
+    def test_missing_file_does_not_affect_other_papers(self, worker_db: Engine, tmp_path: Path) -> None:
+        _insert(worker_db, make_paper(), make_paper())
+        papers = _papers(worker_db)
+        _write_ocr(tmp_path, papers[0].id)
+        # papers[1] has no OCR file.
+        extracted, failed, requeued = run_worker(batch_size=10, adapter=StubMeasurementAdapter(), ocr_dir=tmp_path)
+        assert extracted == 1
+        assert requeued == 1
 
 
 # ---------------------------------------------------------------------------
@@ -339,133 +259,62 @@ class TestRunWorkerWileyCache:
 # ---------------------------------------------------------------------------
 
 class TestRunWorkerFailures:
-    def test_no_pdf_url_marks_failed(self, worker_db: Engine) -> None:
-        _insert(worker_db, make_paper(oa_pdf_url=None))
-        extracted, failed, requeued = run_worker(batch_size=10, adapter=StubAdapter())
-        assert (extracted, failed, requeued) == (0, 1, 0)
-        with Session(worker_db) as s:
-            paper = s.scalars(select(Paper)).one()
-        assert paper.status == "failed"
-        assert paper.error is not None
-
-    def test_download_http_error_marks_failed(
-        self, worker_db: Engine, mocker: Any
-    ) -> None:
+    def test_adapter_error_marks_failed(self, worker_db: Engine, tmp_path: Path) -> None:
         _insert(worker_db, make_paper())
-        mocker.patch(
-            "coastal_crawler.pdf.httpx.get",
-            side_effect=Exception("connection refused"),
-        )
-        extracted, failed, requeued = run_worker(batch_size=10, adapter=StubAdapter())
-        assert (extracted, failed, requeued) == (0, 1, 0)
-        with Session(worker_db) as s:
-            paper = s.scalars(select(Paper)).one()
-        assert paper.status == "failed"
-        assert "connection refused" in paper.error
-
-    def test_http_status_error_includes_response_body(
-        self, worker_db: Engine, mocker: Any
-    ) -> None:
-        """A non-2xx PDF download should surface the response body in
-        paper.error, not just httpx's generic 'Server error ... for url ...'
-        summary — this is where Wiley's Apigee gateway hides the actual
-        rate-limit diagnostic."""
-        _insert(worker_db, make_paper())
-        fault_body = (
-            '{"fault":{"faultstring":"Rate limit quota violation. '
-            'Quota limit  exceeded.","detail":'
-            '{"errorcode":"policies.ratelimit.QuotaViolation"}}}'
-        )
-        request = httpx.Request("GET", "https://api.wiley.com/onlinelibrary/tdm/v1/some-doi")
-        response = httpx.Response(500, content=fault_body.encode(), request=request)
-        mocker.patch("coastal_crawler.pdf.httpx.get", return_value=response)
-
-        extracted, failed, requeued = run_worker(batch_size=10, adapter=StubAdapter())
-
-        assert (extracted, failed, requeued) == (0, 1, 0)
-        with Session(worker_db) as s:
-            paper = s.scalars(select(Paper)).one()
-        assert paper.status == "failed"
-        assert "QuotaViolation" in paper.error
-        assert "Rate limit quota violation" in paper.error
-
-    def test_http_status_error_empty_body_still_marks_failed(
-        self, worker_db: Engine, mocker: Any
-    ) -> None:
-        """A non-2xx response with no body should still produce a clear
-        error, distinguishable from a body having been silently dropped."""
-        _insert(worker_db, make_paper())
-        request = httpx.Request("GET", "https://example.com/paper.pdf")
-        response = httpx.Response(500, content=b"", request=request)
-        mocker.patch("coastal_crawler.pdf.httpx.get", return_value=response)
-
-        extracted, failed, requeued = run_worker(batch_size=10, adapter=StubAdapter())
-
-        assert (extracted, failed, requeued) == (0, 1, 0)
-        with Session(worker_db) as s:
-            paper = s.scalars(select(Paper)).one()
-        assert paper.status == "failed"
-        assert "500" in paper.error
-        assert "empty response body" in paper.error
-
-    def test_adapter_error_marks_failed(
-        self, worker_db: Engine, mock_download: MagicMock
-    ) -> None:
-        _insert(worker_db, make_paper())
+        _write_ocr(tmp_path, _paper(worker_db).id)
         adapter = MagicMock()
         adapter.extract_batch.side_effect = RuntimeError("model crashed")
-        extracted, failed, requeued = run_worker(batch_size=10, adapter=adapter)
+        extracted, failed, requeued = run_worker(batch_size=10, adapter=adapter, ocr_dir=tmp_path)
         assert (extracted, failed, requeued) == (0, 1, 0)
-        with Session(worker_db) as s:
-            paper = s.scalars(select(Paper)).one()
+        paper = _paper(worker_db)
         assert paper.status == "failed"
         assert "model crashed" in paper.error
 
-    def test_adapter_error_no_partial_extractions(
-        self, worker_db: Engine, mock_download: MagicMock
-    ) -> None:
+    def test_adapter_error_no_partial_extractions(self, worker_db: Engine, tmp_path: Path) -> None:
         """An adapter error must not leave orphaned extraction rows."""
         _insert(worker_db, make_paper())
+        _write_ocr(tmp_path, _paper(worker_db).id)
         adapter = MagicMock()
         adapter.extract_batch.side_effect = RuntimeError("oom")
-        run_worker(batch_size=10, adapter=adapter)
+        run_worker(batch_size=10, adapter=adapter, ocr_dir=tmp_path)
         assert _extractions(worker_db) == []
 
-    def test_error_text_truncated_to_2000_chars(
-        self, worker_db: Engine, mock_download: MagicMock
-    ) -> None:
+    def test_error_text_truncated_to_2000_chars(self, worker_db: Engine, tmp_path: Path) -> None:
         _insert(worker_db, make_paper())
+        _write_ocr(tmp_path, _paper(worker_db).id)
         adapter = MagicMock()
         adapter.extract_batch.side_effect = RuntimeError("x" * 5000)
-        run_worker(batch_size=10, adapter=adapter)
-        with Session(worker_db) as s:
-            paper = s.scalars(select(Paper)).one()
+        run_worker(batch_size=10, adapter=adapter, ocr_dir=tmp_path)
+        paper = _paper(worker_db)
         assert paper.error is not None
         assert len(paper.error) <= 2000
 
-    def test_continues_after_single_failure(
-        self, worker_db: Engine, mock_download: MagicMock
-    ) -> None:
-        """A failure on one paper must not prevent processing subsequent papers."""
-        _insert(worker_db, make_paper(oa_pdf_url=None), make_paper())
-        extracted, failed, requeued = run_worker(batch_size=10, adapter=StubAdapter())
+    def test_continues_after_single_failure(self, worker_db: Engine, tmp_path: Path) -> None:
+        """A missing-file requeue on one paper must not prevent processing
+        subsequent papers."""
+        _insert(worker_db, make_paper(), make_paper())
+        papers = _papers(worker_db)
+        _write_ocr(tmp_path, papers[0].id)
+        extracted, failed, requeued = run_worker(batch_size=10, adapter=StubMeasurementAdapter(), ocr_dir=tmp_path)
         assert extracted == 1
-        assert failed == 1
+        assert requeued == 1
 
-    def test_temp_file_deleted_on_adapter_error(
-        self, worker_db: Engine, mock_download: MagicMock
+    def test_document_level_extraction_failure_marks_only_that_paper(
+        self, worker_db: Engine, tmp_path: Path
     ) -> None:
-        _insert(worker_db, make_paper())
-        captured_paths: list[Path] = []
-
-        class FailingAdapter:
-            def extract_batch(self, pdf_paths: list[Path]) -> list[list[ExtractionResult]]:
-                captured_paths.extend(pdf_paths)
-                raise RuntimeError("adapter exploded")
-
-        run_worker(batch_size=10, adapter=FailingAdapter())
-        assert len(captured_paths) == 1
-        assert not captured_paths[0].exists()
+        """A per-document extraction failure (a str DocumentOutcome) must
+        mark only that paper 'failed', not its batch-mates, and must not be
+        silently recorded as a clean extraction of zero measurements — see
+        EFFICIENCY.md item 3."""
+        _insert(worker_db, make_paper(), make_paper())
+        for p in _papers(worker_db):
+            _write_ocr(tmp_path, p.id)
+        adapter = MagicMock()
+        adapter.extract_batch.return_value = [[], "model returned unparseable output"]
+        extracted, failed, requeued = run_worker(batch_size=10, adapter=adapter, ocr_dir=tmp_path)
+        assert (extracted, failed, requeued) == (1, 1, 0)
+        statuses = sorted(p.status for p in _papers(worker_db))
+        assert statuses == ["extracted", "failed"]
 
 
 # ---------------------------------------------------------------------------
@@ -473,43 +322,167 @@ class TestRunWorkerFailures:
 # ---------------------------------------------------------------------------
 
 class TestRunWorkerChunking:
-    def test_multiple_chunks_process_every_paper(
-        self, worker_db: Engine, mock_download: MagicMock
-    ) -> None:
+    def test_multiple_chunks_process_every_paper(self, worker_db: Engine, tmp_path: Path) -> None:
         """chunk_size smaller than the claimed batch must still process every paper."""
         _insert(worker_db, *[make_paper() for _ in range(5)])
+        for p in _papers(worker_db):
+            _write_ocr(tmp_path, p.id)
         adapter = MagicMock()
-        adapter.extract_batch.side_effect = lambda pdf_paths: [[] for _ in pdf_paths]
+        adapter.extract_batch.side_effect = lambda texts: [[] for _ in texts]
 
-        extracted, failed, requeued = run_worker(batch_size=10, adapter=adapter, chunk_size=2)
+        extracted, failed, requeued = run_worker(batch_size=10, adapter=adapter, chunk_size=2, ocr_dir=tmp_path)
 
         assert (extracted, failed, requeued) == (5, 0, 0)
-        # 5 papers at chunk_size=2 -> three extract_batch calls sized 2, 2, 1.
         assert adapter.extract_batch.call_count == 3
         call_sizes = sorted(len(call.args[0]) for call in adapter.extract_batch.call_args_list)
         assert call_sizes == [1, 2, 2]
 
-    def test_chunk_failure_does_not_affect_other_chunks(
-        self, worker_db: Engine, mock_download: MagicMock
-    ) -> None:
+    def test_chunk_failure_does_not_affect_other_chunks(self, worker_db: Engine, tmp_path: Path) -> None:
         """An extract_batch exception for one chunk must not fail papers in other chunks."""
         _insert(worker_db, *[make_paper() for _ in range(4)])
+        for p in _papers(worker_db):
+            _write_ocr(tmp_path, p.id)
         adapter = MagicMock()
         call_count = 0
 
-        def _side_effect(pdf_paths: list[Path]) -> list[list[Any]]:
+        def _side_effect(texts: list[str]) -> list[Any]:
             nonlocal call_count
             call_count += 1
             if call_count == 1:
                 raise RuntimeError("gpu oom")
-            return [[] for _ in pdf_paths]
+            return [[] for _ in texts]
 
         adapter.extract_batch.side_effect = _side_effect
 
-        extracted, failed, requeued = run_worker(batch_size=10, adapter=adapter, chunk_size=2)
+        extracted, failed, requeued = run_worker(batch_size=10, adapter=adapter, chunk_size=2, ocr_dir=tmp_path)
 
         assert (extracted, failed, requeued) == (2, 2, 0)
         assert adapter.extract_batch.call_count == 2
+
+
+# ---------------------------------------------------------------------------
+# OCR stage -> extraction stage integration
+#
+# Every other test in this file writes OCR text via the local _write_ocr
+# helper, and every test in test_ocr_worker.py never reads one back — so
+# nothing pins the {paper_id}.txt filename contract between the two
+# independently-implemented workers. This runs the real ocr_worker output
+# straight into the real worker input, against the same DB.
+# ---------------------------------------------------------------------------
+
+class _NonEmptyOCRAdapter:
+    """StubOCRAdapter returns "" per PDF, which run_ocr_worker treats as a
+    failure — this test needs the OCR stage to actually succeed."""
+
+    def ocr_batch(self, pdf_paths: list[Path]) -> list[str]:
+        return ["some ocr text" for _ in pdf_paths]
+
+
+class TestOcrToExtractionIntegration:
+    def test_ocr_output_is_readable_by_extraction(
+        self, both_stages_db: Engine, mocker: Any, tmp_path: Path
+    ) -> None:
+        _insert(both_stages_db, make_paper(status="relevant"))
+        mock_resp = MagicMock()
+        mock_resp.content = b"%PDF-1.4 fake"
+        mock_resp.raise_for_status = MagicMock()
+        mocker.patch("coastal_crawler.pdf.httpx.get", return_value=mock_resp)
+
+        ocr_done, ocr_failed, ocr_requeued = run_ocr_worker(
+            batch_size=10, adapter=_NonEmptyOCRAdapter(), ocr_dir=tmp_path
+        )
+        assert (ocr_done, ocr_failed, ocr_requeued) == (1, 0, 0)
+        assert _paper(both_stages_db).status == "ocr_done"
+
+        extracted, failed, requeued = run_worker(
+            batch_size=10, adapter=StubMeasurementAdapter(), ocr_dir=tmp_path
+        )
+        assert (extracted, failed, requeued) == (1, 0, 0)
+        assert _paper(both_stages_db).status == "extracted"
+
+
+# ---------------------------------------------------------------------------
+# run_worker_until_idle
+# ---------------------------------------------------------------------------
+
+class _FakeClock:
+    """Deterministic monotonic clock + sleep for testing run_worker_until_idle
+    without any real waiting."""
+
+    def __init__(self) -> None:
+        self.t = 0.0
+        self.sleeps: list[float] = []
+
+    def now(self) -> float:
+        return self.t
+
+    def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        self.t += seconds
+
+
+class TestRunWorkerUntilIdle:
+    def test_returns_immediately_when_no_upstream_work(self, worker_db: Engine, tmp_path: Path) -> None:
+        _insert(worker_db, make_paper(status="extracted"))
+        clock = _FakeClock()
+        extracted, failed, requeued = run_worker_until_idle(
+            batch_size=10,
+            adapter=StubMeasurementAdapter(),
+            ocr_dir=tmp_path,
+            poll_interval=5,
+            idle_timeout=1000,
+            sleep_fn=clock.sleep,
+            now_fn=clock.now,
+        )
+        assert (extracted, failed, requeued) == (0, 0, 0)
+        assert clock.sleeps == []
+
+    def test_picks_up_paper_that_becomes_ocr_done_mid_loop(self, worker_db: Engine, tmp_path: Path) -> None:
+        """Directly exercises the partially-populated-OCR-directory
+        requirement: a paper starts out mid-OCR (status='ocr_processing',
+        no text file yet) and only becomes claimable after a simulated
+        concurrent OCR worker finishes it between polls."""
+        _insert(worker_db, make_paper(status="ocr_processing"))
+        paper_id = _paper(worker_db).id
+        clock = _FakeClock()
+
+        def _sleep(seconds: float) -> None:
+            clock.sleep(seconds)
+            if len(clock.sleeps) == 1:
+                _write_ocr(tmp_path, paper_id)
+                with Session(worker_db) as s:
+                    s.execute(update(Paper).where(Paper.id == paper_id).values(status="ocr_done"))
+                    s.commit()
+
+        extracted, failed, requeued = run_worker_until_idle(
+            batch_size=10,
+            adapter=StubMeasurementAdapter(),
+            ocr_dir=tmp_path,
+            poll_interval=5,
+            idle_timeout=1000,
+            sleep_fn=_sleep,
+            now_fn=clock.now,
+        )
+        assert extracted == 1
+        assert _paper(worker_db).status == "extracted"
+
+    def test_exits_once_idle_timeout_elapses_with_work_pending(self, worker_db: Engine, tmp_path: Path) -> None:
+        """A paper stuck at 'relevant' (simulating a stalled OCR job) never
+        becomes claimable — the loop must still bound its wait by
+        idle_timeout rather than polling forever."""
+        _insert(worker_db, make_paper(status="relevant"))
+        clock = _FakeClock()
+        extracted, failed, requeued = run_worker_until_idle(
+            batch_size=10,
+            adapter=StubMeasurementAdapter(),
+            ocr_dir=tmp_path,
+            poll_interval=10,
+            idle_timeout=25,
+            sleep_fn=clock.sleep,
+            now_fn=clock.now,
+        )
+        assert (extracted, failed, requeued) == (0, 0, 0)
+        assert clock.t >= 25
 
 
 # ---------------------------------------------------------------------------
@@ -526,9 +499,8 @@ class TestRequeueFailed:
         )
         count = requeue_failed()
         assert count == 2
-        with Session(worker_db) as s:
-            statuses = sorted(p.status for p in s.scalars(select(Paper)).all())
-        assert statuses == ["discovered", "discovered", "extracted"]
+        statuses = sorted(p.status for p in _papers(worker_db))
+        assert statuses == ["extracted", "ocr_done", "ocr_done"]
 
     def test_returns_zero_when_nothing_failed(self, worker_db: Engine) -> None:
         _insert(worker_db, make_paper(status="discovered"))
@@ -549,9 +521,8 @@ class TestRequeueProcessing:
         )
         count = requeue_processing()
         assert count == 2
-        with Session(worker_db) as s:
-            statuses = sorted(p.status for p in s.scalars(select(Paper)).all())
-        assert statuses == ["extracted", "relevant", "relevant"]
+        statuses = sorted(p.status for p in _papers(worker_db))
+        assert statuses == ["extracted", "ocr_done", "ocr_done"]
 
     def test_returns_zero_when_nothing_processing(self, worker_db: Engine) -> None:
         _insert(worker_db, make_paper(status="discovered"))

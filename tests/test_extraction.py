@@ -80,8 +80,11 @@ class TestExtractionLM:
             AsyncMock(return_value=_fake_chat_response(content)),
         )
 
-        records = instance.fit(["some ocr text"])
+        outcomes = instance.fit(["some ocr text"])
 
+        assert len(outcomes) == 1
+        records = outcomes[0]
+        assert isinstance(records, list)
         assert len(records) == 1
         record = records[0]
         assert record["name"] == "Site A"
@@ -102,8 +105,10 @@ class TestExtractionLM:
             AsyncMock(side_effect=[_fake_chat_response("not valid json"), _fake_chat_response(good_content)]),
         )
 
-        records = instance.fit(["some ocr text"])
+        outcomes = instance.fit(["some ocr text"])
 
+        records = outcomes[0]
+        assert isinstance(records, list)
         assert len(records) == 1
         assert records[0]["value"] == "10"
 
@@ -123,10 +128,98 @@ class TestExtractionLM:
             AsyncMock(return_value=_fake_chat_response(content)),
         )
 
-        records = instance.fit(["some ocr text"])
+        outcomes = instance.fit(["some ocr text"])
 
+        records = outcomes[0]
+        assert isinstance(records, list)
         assert len(records) == 1
         assert records[0]["attribute"] == "turbidity"
+
+    def test_fit_marks_document_failed_after_exhausted_retries(self, mocker: Any) -> None:
+        """A response that never parses, even after the outer retry loop is
+        exhausted, must surface as a per-document failure string — not
+        silently as zero records — so the worker can mark the paper
+        'failed' in the DB. See EFFICIENCY.md item 3."""
+        instance = self._make_instance()
+        mocker.patch(
+            "coastal_crawler.extraction.extraction_lm.asyncio.sleep",
+            AsyncMock(),
+        )
+        create_mock = mocker.patch.object(
+            instance.async_client.chat.completions,
+            "create",
+            AsyncMock(return_value=_fake_chat_response("not valid json at all")),
+        )
+
+        outcomes = instance.fit(["some ocr text"])
+
+        assert len(outcomes) == 1
+        assert isinstance(outcomes[0], str)
+        # max_retries=3 -> 1 initial attempt + 3 retries = 4 calls.
+        assert create_mock.call_count == 4
+
+    def test_fit_marks_document_failed_when_calls_always_error(self, mocker: Any) -> None:
+        """A call that fails outright every attempt (e.g. connection error,
+        timeout) must also surface as a per-document failure, not be
+        swallowed into an empty record list."""
+        instance = self._make_instance()
+        mocker.patch(
+            "coastal_crawler.extraction.extraction_lm.asyncio.sleep",
+            AsyncMock(),
+        )
+        mocker.patch.object(
+            instance.async_client.chat.completions,
+            "create",
+            AsyncMock(side_effect=Exception("connection reset")),
+        )
+
+        outcomes = instance.fit(["some ocr text"])
+
+        assert len(outcomes) == 1
+        assert isinstance(outcomes[0], str)
+
+    def test_fit_salvages_partial_items_from_truncated_response(self, mocker: Any) -> None:
+        """A response cut off mid-generation (e.g. hit max_tokens) should
+        still yield whatever complete records the model produced before the
+        cutoff, rather than losing the whole document's extraction."""
+        instance = self._make_instance()
+        mocker.patch(
+            "coastal_crawler.extraction.extraction_lm.asyncio.sleep",
+            AsyncMock(),
+        )
+        truncated = (
+            '{"items": [{"name": "Site A", "attribute": "salinity", "value": "10", "units": "psu"}, '
+            '{"name": "Site B", "attribute": "turbidity", "value": "5", "units": "NTU"'
+        )
+        mocker.patch.object(
+            instance.async_client.chat.completions,
+            "create",
+            AsyncMock(return_value=_fake_chat_response(truncated)),
+        )
+
+        outcomes = instance.fit(["some ocr text"])
+
+        assert len(outcomes) == 1
+        records = outcomes[0]
+        assert isinstance(records, list)
+        assert len(records) == 1
+        assert records[0]["name"] == "Site A"
+
+    def test_default_temperature_is_fixed(self) -> None:
+        instance = self._make_instance()
+        assert instance.sampling_params["temperature"] == 0.6
+
+    def test_default_max_tokens(self) -> None:
+        instance = self._make_instance()
+        assert instance.sampling_params["max_tokens"] == 32768
+
+    def test_async_client_disables_sdk_level_retries(self) -> None:
+        """The SDK's own retry defaulting to 3 attempts per logical call
+        duplicated the outer retry loop in _call_batch() and turned a single
+        stuck request into a multi-x-timeout serialized tail — see
+        EFFICIENCY.md item 3."""
+        instance = self._make_instance()
+        assert instance.async_client.max_retries == 0
 
 
 # ---------------------------------------------------------------------------

@@ -14,7 +14,7 @@ from __future__ import annotations
 from datetime import date, datetime, timezone
 from typing import Any
 
-from sqlalchemy import func, select, text, update
+from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session, selectinload
 
@@ -185,8 +185,124 @@ def requeue_irrelevant(session: Session) -> int:
     return result.rowcount
 
 
+def claim_batch_for_ocr(batch_size: int, session: Session) -> list[Paper]:
+    """Atomically claim up to *batch_size* relevant papers for OCR.
+
+    Uses ``SELECT … FOR UPDATE SKIP LOCKED`` so multiple OCR worker processes
+    can run concurrently without ever claiming the same row.  Claimed papers
+    are immediately set to ``status='ocr_processing'`` within the same open
+    transaction — the worker should not commit until OCR is complete (or it
+    has written a failure).
+
+    Returns:
+        List of claimed Paper objects (may be shorter than batch_size if fewer
+        relevant papers exist).
+    """
+    stmt = (
+        select(Paper)
+        .where(Paper.status == "relevant")
+        .with_for_update(skip_locked=True)
+        .limit(batch_size)
+    )
+    papers = list(session.scalars(stmt).all())
+    for paper in papers:
+        paper.status = "ocr_processing"
+    session.flush()
+    return papers
+
+
+def mark_ocr_done(paper_id: int, session: Session) -> None:
+    """Flip a paper to ``status='ocr_done'`` once its OCR text file is written and closed."""
+    session.execute(
+        update(Paper)
+        .where(Paper.id == paper_id)
+        .values(status="ocr_done")
+    )
+
+
+def mark_ocr_failed(paper_id: int, error: str, session: Session) -> None:
+    """Flip a paper to ``status='ocr_failed'`` and record the error text."""
+    session.execute(
+        update(Paper)
+        .where(Paper.id == paper_id)
+        .values(status="ocr_failed", error=error)
+    )
+
+
+def reset_ocr_processing_to_relevant(paper_id: int, session: Session) -> bool:
+    """Reset one claimed paper from ``ocr_processing`` back to ``relevant``.
+
+    Used when a Wiley paper is claimed for OCR but its PDF hasn't been
+    pre-downloaded yet by scripts/wiley_download.py — this isn't a real OCR
+    failure, so the paper goes back to the queue instead of ``ocr_failed``.
+    Guarded on ``status='ocr_processing'`` so it can't stomp a concurrent
+    transition (e.g. another path already marked it ocr_failed).
+
+    Returns:
+        True if the row was updated, False if it was no longer 'ocr_processing'.
+    """
+    result = session.execute(
+        update(Paper)
+        .where(Paper.id == paper_id, Paper.status == "ocr_processing")
+        .values(status="relevant")
+    )
+    return result.rowcount > 0
+
+
+def requeue_ocr_processing(session: Session) -> int:
+    """Reset all ``ocr_processing`` papers back to ``relevant``.
+
+    Papers are left in ``status='ocr_processing'`` if an OCR job is killed
+    mid-batch (e.g. walltime limit, OOM, node preemption). Call this before
+    resubmitting to rescue those stranded papers.
+
+    Returns:
+        Count of papers requeued.
+    """
+    result = session.execute(
+        update(Paper)
+        .where(Paper.status == "ocr_processing")
+        .values(status="relevant")
+    )
+    return result.rowcount
+
+
+def requeue_ocr_failed(session: Session) -> int:
+    """Reset all ``ocr_failed`` papers back to ``relevant`` for an OCR retry.
+
+    Returns:
+        Count of papers requeued.
+    """
+    result = session.execute(
+        update(Paper)
+        .where(Paper.status == "ocr_failed")
+        .values(status="relevant", error=None)
+    )
+    return result.rowcount
+
+
+def requeue_ocr(session: Session) -> int:
+    """Reset every paper touched by OCR or extraction back to ``relevant``.
+
+    Resets ``ocr_done``, ``ocr_failed``, ``processing``, ``extracted``, and
+    ``failed`` papers to ``relevant``, clearing ``error``/``extracted_at``.
+    Use this to force a full re-OCR (e.g. after changing DOC_LM_MODEL) —
+    the OCR text files on disk are left in place and simply get overwritten
+    as papers are re-claimed and re-OCR'd.
+
+    Returns:
+        Count of papers requeued.
+    """
+    result = session.execute(
+        update(Paper)
+        .where(Paper.status.in_(["ocr_done", "ocr_failed", "processing", "extracted", "failed"]))
+        .values(status="relevant", error=None, extracted_at=None)
+    )
+    return result.rowcount
+
+
 def claim_batch(batch_size: int, session: Session) -> list[Paper]:
-    """Atomically claim up to *batch_size* relevant papers for extraction.
+    """Atomically claim up to *batch_size* OCR'd papers for extraction.
 
     Uses ``SELECT … FOR UPDATE SKIP LOCKED`` so multiple worker processes can
     call this concurrently without ever claiming the same row.  Claimed papers
@@ -196,11 +312,11 @@ def claim_batch(batch_size: int, session: Session) -> list[Paper]:
 
     Returns:
         List of claimed Paper objects (may be shorter than batch_size if fewer
-        relevant papers exist).
+        ocr_done papers exist).
     """
     stmt = (
         select(Paper)
-        .where(Paper.status == "relevant")
+        .where(Paper.status == "ocr_done")
         .with_for_update(skip_locked=True)
         .limit(batch_size)
     )
@@ -229,15 +345,18 @@ def mark_failed(paper_id: int, error: str, session: Session) -> None:
     )
 
 
-def mark_failed_if_relevant(paper_id: int, error: str, session: Session) -> bool:
-    """Flip a paper to ``failed`` only if it's still ``relevant``.
+def mark_ocr_failed_if_relevant(paper_id: int, error: str, session: Session) -> bool:
+    """Flip a paper to ``ocr_failed`` only if it's still ``relevant``.
 
     Used by scripts/wiley_download.py, which reads ``relevant`` papers
-    without claiming them (no ``FOR UPDATE``) — a GPU worker can claim the
-    same paper into ``processing`` while the download is in flight, so an
-    unconditional write here could clobber a paper that's actively being
-    extracted. The status guard makes the write a no-op if that race is
-    lost, instead of unconditional ``mark_failed``.
+    without claiming them (no ``FOR UPDATE``) — an OCR worker can claim the
+    same paper into ``ocr_processing`` while the download is in flight, so
+    an unconditional write here could clobber a paper that's actively being
+    OCR'd. The status guard makes the write a no-op if that race is lost,
+    instead of unconditional ``mark_ocr_failed``. Targets ``ocr_failed``
+    (not ``failed``) since a Wiley download error is an OCR-stage failure —
+    landing it in ``failed`` would make ``requeue-failed`` route it to
+    ``ocr_done`` where extraction would find no OCR text file.
 
     Returns:
         True if the row was updated, False if it was no longer 'relevant'.
@@ -245,7 +364,7 @@ def mark_failed_if_relevant(paper_id: int, error: str, session: Session) -> bool
     result = session.execute(
         update(Paper)
         .where(Paper.id == paper_id, Paper.status == "relevant")
-        .values(status="failed", error=error)
+        .values(status="ocr_failed", error=error)
     )
     return result.rowcount > 0
 
@@ -274,10 +393,12 @@ def requeue_inaccessible(session: Session) -> int:
 
 
 def requeue_failed(session: Session) -> int:
-    """Reset all ``failed`` papers back to ``relevant`` for extraction retry.
+    """Reset all ``failed`` papers back to ``ocr_done`` for extraction retry.
 
-    Resets to 'relevant' (not 'discovered') so papers skip re-filtering —
-    they were already deemed relevant and only failed during PDF extraction.
+    Resets to 'ocr_done' (not 'relevant') so papers skip both re-filtering
+    and re-OCR — they were already deemed relevant and OCR'd, and only
+    failed during measurement extraction; their OCR text file is still
+    valid on disk.
 
     Returns:
         Count of papers requeued.
@@ -285,19 +406,22 @@ def requeue_failed(session: Session) -> int:
     result = session.execute(
         update(Paper)
         .where(Paper.status == "failed")
-        .values(status="relevant", error=None)
+        .values(status="ocr_done", error=None)
     )
     return result.rowcount
 
 
 def requeue_processing(session: Session) -> int:
-    """Reset all ``processing`` papers back to ``relevant``.
+    """Reset all ``processing`` papers back to ``ocr_done``.
 
     Papers are left in ``status='processing'`` if an extraction job is
     killed mid-batch (e.g. walltime limit, OOM, node preemption). Call this
-    before resubmitting to rescue those stranded papers. Matters more once
-    multiple concurrent extraction jobs are running (see EFFICIENCY.md item
-    1) — more jobs means more chances of a stranded batch.
+    before resubmitting to rescue those stranded papers. Resets to
+    'ocr_done' (not 'relevant') since these papers were already OCR'd —
+    their OCR text file is still valid on disk, so a retry shouldn't force
+    a redundant re-OCR. Matters more once multiple concurrent extraction
+    jobs are running (see EFFICIENCY.md item 1) — more jobs means more
+    chances of a stranded batch.
 
     Returns:
         Count of papers requeued.
@@ -305,9 +429,31 @@ def requeue_processing(session: Session) -> int:
     result = session.execute(
         update(Paper)
         .where(Paper.status == "processing")
-        .values(status="relevant")
+        .values(status="ocr_done")
     )
     return result.rowcount
+
+
+def reset_extractions(session: Session) -> tuple[int, int]:
+    """Wipe all extraction results and rewind extraction-stage papers to 'ocr_done'.
+
+    Deletes every row in ``extractions`` and resets any paper with
+    status in ('extracted', 'processing', 'failed') back to 'ocr_done',
+    clearing ``extracted_at``/``error``. OCR text files on disk are left in
+    place (their status='ocr_done' rows already point at valid files), and
+    filtering results ('relevant'/'irrelevant' papers not yet OCR'd) are
+    left untouched — restoring the DB to its post-OCR, pre-extraction state.
+
+    Returns:
+        (extractions_deleted, papers_reset) counts.
+    """
+    deleted = session.execute(delete(Extraction)).rowcount
+    result = session.execute(
+        update(Paper)
+        .where(Paper.status.in_(["extracted", "processing", "failed"]))
+        .values(status="ocr_done", extracted_at=None, error=None)
+    )
+    return deleted, result.rowcount
 
 
 def reset_processing_to_relevant(paper_id: int, session: Session) -> bool:

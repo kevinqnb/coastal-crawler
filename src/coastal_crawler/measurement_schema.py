@@ -54,8 +54,8 @@ class EntitySchema(BaseModel):
 
 
 # entity_identification_prompt is NOT defined here — it lives in .env as
-# MEAS_LM_ENTITY_IDENTIFICATION_PROMPT (see build_extraction_adapter(), which
-# reads it from Settings and passes it into build_direct_extraction_prompt()).
+# MEAS_LM_ENTITY_IDENTIFICATION_PROMPT (see build_measurement_adapter(),
+# which reads it from Settings and passes it into build_direct_extraction_prompt()).
 # See .env.example for a drafted prompt tuned to the EntitySchema fields above.
 
 

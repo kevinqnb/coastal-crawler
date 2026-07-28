@@ -91,16 +91,17 @@ def _promote(tmp_source: Path, final_path: Path) -> None:
 
 
 def _mark_failed(paper_id: int, error: str) -> None:
-    """Mark a paper failed, but only if it's still 'relevant'.
+    """Mark a paper ocr_failed, but only if it's still 'relevant'.
 
-    A GPU worker can claim this paper into 'processing' while our download
-    was in flight (this script doesn't claim rows — it only reads
+    An OCR worker can claim this paper into 'ocr_processing' while our
+    download was in flight (this script doesn't claim rows — it only reads
     status='relevant'). Guarding on status avoids clobbering a paper that's
-    actively being extracted via some other path (e.g. it already has a
-    cached file from a previous run and extraction is succeeding right now).
+    actively being OCR'd via some other path (e.g. it already has a cached
+    file from a previous run and OCR is succeeding right now). Targets
+    'ocr_failed' (not 'failed') since this is an OCR-stage failure.
     """
     with get_session() as session:
-        updated = store.mark_failed_if_relevant(paper_id, error[:2000], session)
+        updated = store.mark_ocr_failed_if_relevant(paper_id, error[:2000], session)
     if updated:
         log.warning("wiley_pdf_download_failed", paper_id=paper_id, error=error)
     else:

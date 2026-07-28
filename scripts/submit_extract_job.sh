@@ -1,38 +1,51 @@
 #!/bin/bash -l
 #
-# SGE job script — start the OCRLM (OCR) and ExtractionLM (extraction)
-# vLLM servers on separate GPUs of the same node, run extraction, then shut
-# both servers down.
+# SGE job script — start the ExtractionLM (measurement extraction) vLLM
+# server, run extraction, then shut it down.
 #
-# Both servers and the extraction client run on the same allocated node, so
-# the client connects to localhost. Servers are pinned to distinct GPUs via
-# CUDA_VISIBLE_DEVICES (see scripts/serve_model.sh's gpu_id argument) and are
-# started in the background, killed automatically when the job exits.
-#
-# This script is cluster-agnostic: it expects REPO_DIR to be exported by the
-# submitter (SGE jobs land in $HOME, not the submission directory) and
-# sources scripts/cluster.local.sh for any site-specific bootstrap (module
-# loads, HF_HOME, a local Postgres, venv activation). Copy
-# scripts/cluster.local.sh.example to scripts/cluster.local.sh and edit it
-# for your environment, then submit via a small personal wrapper that also
-# carries your SGE project/account, e.g.:
+# The server and the extraction client run on the same allocated node, so
+# the client connects to localhost. This script is cluster-agnostic: it
+# expects REPO_DIR to be exported by the submitter (SGE jobs land in $HOME,
+# not the submission directory) and sources scripts/cluster.local.sh for any
+# site-specific bootstrap (module loads, HF_HOME, discovering/connecting to
+# Postgres, venv activation). Copy scripts/cluster.local.sh.example to
+# scripts/cluster.local.sh and edit it for your environment, then submit via
+# a small personal wrapper that also carries your SGE project/account, e.g.:
 #
 #   qsub -P <your_project> -v REPO_DIR="$REPO_DIR" scripts/submit_extract_job.sh
 #
+# This job reads OCR text from OCR_DIR (written by a separate OCR job — see
+# scripts/submit_ocr_job.sh) instead of downloading/OCRing PDFs itself, so
+# it has zero Wiley awareness. Run both jobs at roughly the same time (two
+# separate 1-GPU submissions instead of one combined 2-GPU job); this job's
+# --idle-timeout keeps it polling for newly-OCR'd papers instead of exiting
+# as soon as it catches up to the OCR job.
+#
 # Customise the #$ directives below for your cluster and the resource
-# requirements of your chosen models.
+# requirements of your chosen extraction model.
 #
 #$ -l h_rt=24:00:00
-#$ -pe omp 16
-#$ -l gpus=2
-#$ -l gpu_memory=24G
-#$ -l gpu_c=7.0
+#$ -pe omp 8
+#$ -l gpus=1
+#$ -l gpu_memory=80G
+#$ -l gpu_c=9.0
 #$ -o out/extract_out.txt
 #$ -e out/extract_error.txt
 #$ -m e
 
 : "${REPO_DIR:?REPO_DIR must be exported by the submitter (e.g. qsub -v REPO_DIR=...) — see scripts/cluster.local.sh.example}"
 cd "$REPO_DIR"
+
+# Load .env first so MEAS_LM_PORT is available for the health check below.
+# Loaded *before* cluster.local.sh so that if cluster.local.sh exports its
+# own DATABASE_URL (e.g. pointing at wherever scripts/serve_postgres.sh
+# currently lives), that export is the last word and isn't clobbered by
+# .env's static value.
+if [ -f .env ]; then
+    set -a
+    source .env
+    set +a
+fi
 
 if [ -f scripts/cluster.local.sh ]; then
     source scripts/cluster.local.sh
@@ -44,42 +57,28 @@ fi
 set -euo pipefail
 mkdir -p logs
 
-# Load .env so DOC_LM_PORT/MEAS_LM_PORT are available for the health checks below.
-if [ -f .env ]; then
-    set -a
-    source .env
-    set +a
-fi
-
-DOC_LM_PORT="${DOC_LM_PORT:-8083}"
 MEAS_LM_PORT="${MEAS_LM_PORT:-8084}"
 
-# ---- Preflight: warn (don't block) if the Wiley PDF cache looks empty -------
-# Since scripts/wiley_download.py started decoupling Wiley downloads from
-# extraction (EFFICIENCY.md item 1), a claimed Wiley paper whose PDF isn't
-# in WILEY_PDF_DIR yet gets requeued to 'relevant' instead of extracted — so
-# an empty/missing cache dir means this job would spend ~10 minutes starting
-# vLLM servers just to requeue its whole batch and exit. Not a hard failure
-# (a fresh downloader may still be catching up), just a heads-up in the logs.
-WILEY_PDF_DIR="${WILEY_PDF_DIR:-data/wiley_pdfs}"
-if [ ! -d "$WILEY_PDF_DIR" ] || [ -z "$(ls -A "$WILEY_PDF_DIR" 2>/dev/null)" ]; then
-    echo "WARNING: $WILEY_PDF_DIR is empty or missing — is scripts/wiley_download.py running? Wiley papers claimed before it catches up will be requeued to 'relevant', not extracted." >&2
-fi
+# ---- Preflight: fail fast if the DB isn't reachable --------------------------
+# Without this, a stale/unreachable DATABASE_URL still burns several minutes
+# starting a vLLM server before `coastal-crawler extract` makes its first
+# query and fails.
+python3 scripts/check_db.py
 
-# ---- Start servers in background, pinned to distinct GPUs -------------------
+# ---- Start the server in the background --------------------------------------
 cd scripts
-./serve_model.sh DOC_LM 0 &
-DOC_LM_PID=$!
-./serve_model.sh MEAS_LM 1 &
+./serve_model.sh MEAS_LM 0 &
 MEAS_LM_PID=$!
 
-# Kill both servers when this script exits for any reason.
-trap 'echo "Stopping vLLM servers (PIDs $DOC_LM_PID $MEAS_LM_PID)..."; kill "$DOC_LM_PID" "$MEAS_LM_PID" 2>/dev/null || true; wait "$DOC_LM_PID" "$MEAS_LM_PID" 2>/dev/null || true' EXIT
+# Kill the server when this script exits for any reason.
+trap 'echo "Stopping vLLM server (PID $MEAS_LM_PID)..."; kill "$MEAS_LM_PID" 2>/dev/null || true; wait "$MEAS_LM_PID" 2>/dev/null || true' EXIT
 
-# ---- Wait for both servers to be ready ---------------------------------------
-./wait_for_health.sh "$DOC_LM_PORT" "$DOC_LM_PID"
+# ---- Wait for the server to be ready -----------------------------------------
 ./wait_for_health.sh "$MEAS_LM_PORT" "$MEAS_LM_PID"
 
 # ---- Run extraction -----------------------------------------------------------
+# --idle-timeout keeps this job polling for newly-OCR'd papers instead of
+# exiting the moment it catches up to a concurrently-running OCR job (see
+# scripts/submit_ocr_job.sh); --poll-interval controls how often it checks.
 cd "$REPO_DIR"
-coastal-crawler extract --batch-size 100
+coastal-crawler extract --batch-size 750 --poll-interval 60 --idle-timeout 1800

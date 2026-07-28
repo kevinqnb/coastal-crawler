@@ -67,6 +67,47 @@ def response_validator(response_structure: type[BaseModel], response: str) -> di
     return pyd.model_dump()
 
 
+def _salvage_items(response: str, item_schema: type[BaseModel]) -> list[dict[str, Any]]:
+    """Recover leading complete items from a response cut off mid-generation.
+
+    A response that hits max_tokens is truncated before the outer
+    ``{"items": [...]}`` object can close, so whole-document validation via
+    response_validator() always fails even though the leading items in the
+    array are individually well-formed. Walks the array by hand with
+    JSONDecoder.raw_decode, keeping each object that both parses and
+    validates against item_schema, and stopping at the first one that
+    doesn't parse (the truncated tail) — so a paper that ran long still
+    yields whatever the model got through, instead of nothing.
+    """
+    key_idx = response.find('"items"')
+    if key_idx == -1:
+        return []
+    start = response.find("[", key_idx)
+    if start == -1:
+        return []
+
+    decoder = json.JSONDecoder()
+    items: list[dict[str, Any]] = []
+    pos = start + 1
+    n = len(response)
+    while pos < n:
+        while pos < n and response[pos] in " \t\n\r,":
+            pos += 1
+        if pos >= n or response[pos] == "]":
+            break
+        try:
+            obj, end = decoder.raw_decode(response, pos)
+        except json.JSONDecodeError:
+            break
+        try:
+            items.append(item_schema.model_validate(obj).model_dump())
+        except Exception:
+            pass
+        pos = end
+
+    return items
+
+
 class ExtractionLM:
     """
     Single-call direct measurement extraction.
@@ -108,11 +149,17 @@ class ExtractionLM:
         # trigger): merge onto real defaults so an empty/partial override
         # dict behaves as documented.
         self.sampling_params: dict[str, Any] = {
-            "temperature": 0.90,
+            # Fixed (not sampled) for reproducibility of a task that's closer
+            # to find-and-report than creative — see EFFICIENCY.md item 5.
+            "temperature": 0.6,
             "top_p": 0.95,
             "top_k": 64,
             "repetition_penalty": 1.0,
-            "max_tokens": 2048,
+            # A paper that needs more than this is handled by
+            # _salvage_items() recovering whatever complete records were
+            # generated before the cutoff, rather than by raising the cap
+            # without bound.
+            "max_tokens": 32768,
             "enable_thinking": False,
         } | (sampling_params or {})
         self.max_concurrent = max_concurrent
@@ -121,7 +168,12 @@ class ExtractionLM:
         self._call_count: int = 0
         self._total_prompt_tokens: int = 0
         self._total_completion_tokens: int = 0
-        self.async_client = AsyncOpenAI(api_key=api_key, base_url=api_base, timeout=2400.0)
+        # max_retries=0: the outer retry loop in _call_batch() already
+        # retries a failed/timed-out call; the SDK's own default retry
+        # (3 attempts per logical call) duplicated that and turned a single
+        # stuck request into a serialized multi-x-timeout tail blocking the
+        # rest of the chunk — see EFFICIENCY.md item 3.
+        self.async_client = AsyncOpenAI(api_key=api_key, base_url=api_base, timeout=2400.0, max_retries=0)
 
     # -----------------------------------------------------------------------
     # Core API call helpers
@@ -248,12 +300,19 @@ class ExtractionLM:
     # Single extraction step: extract all records directly
     # -----------------------------------------------------------------------
 
-    def _extract_triples(self) -> list[dict[str, Any]]:
+    def _extract_triples(self) -> list[list[dict[str, Any]] | str]:
         """
         Extract all measurement records from each document in a single LLM call.
 
-        Returns a list of records — no provenance fields (page_number,
-        table_number, etc.) are produced.
+        Returns one entry per input document, in order: either the list of
+        records extracted for that document (no provenance fields —
+        page_number, table_number, etc. — are produced; possibly an empty
+        list if the paper legitimately has none), or a str describing why
+        extraction failed for that document specifically. Keeping failures
+        distinguishable per-document (rather than silently returning zero
+        records) is what lets the worker mark just that paper 'failed' in
+        the DB instead of recording it as a clean extraction with nothing
+        found — see EFFICIENCY.md item 3.
         """
         schema = self.direct_extraction_schema
         DirectExtractionList = create_model(
@@ -284,43 +343,70 @@ class ExtractionLM:
         # self.max_concurrent (configurable via MEAS_LM_MAX_CONCURRENT) so
         # documents in a batch can be extracted concurrently against vLLM's
         # continuous batching, rather than hardcoding serial dispatch.
+        # max_tokens is omitted so it falls back to self.sampling_params
+        # (generous by default — see __init__); max_retries=3 keeps the
+        # outer retry loop bounded now that the SDK-level retry is off.
         response_texts = self._call_batch(
             messages,
             response_format=response_format,
-            max_tokens=32768,
-            max_retries=4,
+            max_retries=3,
             validator=partial(response_validator, DirectExtractionList),
             timeout=600.0,
         )
 
-        triple_data: list[dict[str, Any]] = []
+        outcomes: list[list[dict[str, Any]] | str] = []
         for i, r in enumerate(response_texts):
-            try:
-                resp_validated = response_validator(DirectExtractionList, r)
-            except Exception as e:
-                log.warning("extraction_validation_failed", document_index=i, error=str(e), response_preview=r[:500])
-                resp_validated = {"items": []}
+            if not r:
+                log.warning("extraction_call_exhausted", document_index=i)
+                outcomes.append("Extraction call failed: no response from the model after retries")
+                continue
 
-            for j, item in enumerate(resp_validated["items"]):
+            try:
+                items = response_validator(DirectExtractionList, r)["items"]
+            except Exception as e:
+                items = _salvage_items(r, schema)
+                if items:
+                    log.warning(
+                        "extraction_response_truncated",
+                        document_index=i,
+                        recovered_items=len(items),
+                        error=str(e),
+                    )
+                else:
+                    log.warning(
+                        "extraction_validation_failed",
+                        document_index=i,
+                        error=str(e),
+                        response_preview=r[:500],
+                    )
+                    outcomes.append(f"Extraction response could not be parsed: {e}")
+                    continue
+
+            records: list[dict[str, Any]] = []
+            for j, item in enumerate(items):
                 if item.get("value") is None:
                     continue
                 entity_id = f"doc_{i}_entity_{j}"
-                triple_data.append(self.data[i] | item | {"entity_id": entity_id, "attribute_terms": []})
+                records.append(self.data[i] | item | {"entity_id": entity_id, "attribute_terms": []})
+            outcomes.append(records)
 
-        return triple_data
+        return outcomes
 
     # -----------------------------------------------------------------------
     # Full pipeline (single extraction step)
     # -----------------------------------------------------------------------
 
-    def fit(self, documents: list[str]) -> list[dict[str, Any]]:
+    def fit(self, documents: list[str]) -> list[list[dict[str, Any]] | str]:
         """Run direct extraction on the provided documents.
 
         Args:
             documents: OCR text strings, one per document.
 
         Returns:
-            Measurement records extracted from the documents.
+            One entry per input document, same order and length as
+            ``documents``: either the list of measurement records extracted
+            for that document (possibly empty), or a str error message if
+            extraction failed for that document specifically.
         """
         self.data: list[dict[str, Any]] = [{"document_id": i, "context": doc} for i, doc in enumerate(documents)]
 
@@ -330,7 +416,7 @@ class ExtractionLM:
         self._total_prompt_tokens = 0
         self._total_completion_tokens = 0
 
-        self.data = self._extract_triples()
+        outcomes = self._extract_triples()
 
         log.info(
             "extraction_batch_summary",
@@ -338,6 +424,7 @@ class ExtractionLM:
             calls=self._call_count,
             prompt_tokens=self._total_prompt_tokens,
             completion_tokens=self._total_completion_tokens,
+            failed=sum(1 for o in outcomes if isinstance(o, str)),
             seconds=round(time.monotonic() - t_fit0, 2),
         )
-        return self.data
+        return outcomes

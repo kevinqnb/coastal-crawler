@@ -276,10 +276,31 @@ class Settings(BaseSettings):
     extraction_chunk_size: int = Field(
         default=20,
         description=(
-            "Papers processed per OCR+extraction GPU call within one claimed extract "
-            "batch. Downloads for the next chunk run in a background thread while the "
-            "current chunk's GPU work runs, hiding PDF download / Wiley-throttle wait "
-            "time behind GPU compute."
+            "Papers processed per ExtractionLM GPU call within one claimed 'extract' "
+            "batch. Independent of ocr_chunk_size — the extraction stage reads OCR "
+            "text from disk (no network/download overlap to hide)."
+        ),
+    )
+
+    # ------------------------------------------------------------- OCR
+    ocr_dir: str = Field(
+        default="data/ocr",
+        description=(
+            "Directory the OCR stage writes each paper's OCR text into "
+            "(named {paper_id}.txt). The extraction stage reads from here "
+            "instead of re-running OCR, so the two stages can run as "
+            "separate jobs/processes."
+        ),
+    )
+    ocr_chunk_size: int = Field(
+        default=20,
+        description=(
+            "Papers processed per OCRLM GPU call within one claimed 'ocr' batch. "
+            "Downloads for the next chunk run in a background thread while the "
+            "current chunk's GPU work runs, hiding PDF download / Wiley-throttle "
+            "wait time behind GPU compute. Kept independent of "
+            "extraction_chunk_size since the two stages have different GPU "
+            "concurrency profiles (see doc_lm_max_concurrent vs meas_lm_max_concurrent)."
         ),
     )
 

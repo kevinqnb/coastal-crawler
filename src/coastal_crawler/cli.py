@@ -48,31 +48,84 @@ def filter_papers(
 
 
 @app.command()
-def extract(
+def ocr(
     batch_size: int = typer.Option(10, "--batch-size", help="Papers to process per run."),
     chunk_size: int = typer.Option(
-        None, "--chunk-size", help="Papers per OCR+extraction GPU call. Defaults to EXTRACTION_CHUNK_SIZE in .env."
+        None, "--chunk-size", help="Papers per OCR GPU call. Defaults to OCR_CHUNK_SIZE in .env."
     ),
 ) -> None:
-    """Claim and extract a batch of relevant papers."""
+    """Claim and OCR a batch of relevant papers, writing text to OCR_DIR."""
     from pathlib import Path
 
-    from coastal_crawler.adapter import build_extraction_adapter
+    from coastal_crawler.adapter import build_ocr_adapter
     from coastal_crawler.config import get_settings
-    from coastal_crawler.worker import run_worker
+    from coastal_crawler.ocr_worker import run_ocr_worker
 
     settings = get_settings()
-    adapter = build_extraction_adapter(settings)
-    size = chunk_size if chunk_size is not None else settings.extraction_chunk_size
-    extracted, failed, requeued = run_worker(
+    adapter = build_ocr_adapter(settings)
+    size = chunk_size if chunk_size is not None else settings.ocr_chunk_size
+    ocr_done, failed, requeued = run_ocr_worker(
         batch_size=batch_size,
         adapter=adapter,
         chunk_size=size,
         wiley_pdf_dir=Path(settings.wiley_pdf_dir),
+        ocr_dir=Path(settings.ocr_dir),
     )
-    message = f"Extracted {extracted}, failed {failed}."
+    message = f"OCR'd {ocr_done}, failed {failed}."
     if requeued:
         message += f" Requeued {requeued} (Wiley PDF not pre-downloaded yet — is scripts/wiley_download.py running?)."
+    typer.echo(message)
+
+
+@app.command()
+def extract(
+    batch_size: int = typer.Option(10, "--batch-size", help="Papers to process per run."),
+    chunk_size: int = typer.Option(
+        None, "--chunk-size", help="Papers per extraction GPU call. Defaults to EXTRACTION_CHUNK_SIZE in .env."
+    ),
+    poll_interval: float = typer.Option(
+        60.0, "--poll-interval", help="Seconds to wait between polls when --idle-timeout > 0."
+    ),
+    idle_timeout: float = typer.Option(
+        0.0,
+        "--idle-timeout",
+        help=(
+            "If > 0, keep polling for newly-OCR'd papers and wait up to this many seconds "
+            "of no new work before exiting (for running alongside a concurrent 'ocr' job). "
+            "Default 0 = process one batch and exit."
+        ),
+    ),
+) -> None:
+    """Claim and extract a batch of OCR'd papers."""
+    from pathlib import Path
+
+    from coastal_crawler.adapter import build_measurement_adapter
+    from coastal_crawler.config import get_settings
+    from coastal_crawler.worker import run_worker, run_worker_until_idle
+
+    settings = get_settings()
+    adapter = build_measurement_adapter(settings)
+    size = chunk_size if chunk_size is not None else settings.extraction_chunk_size
+    ocr_dir = Path(settings.ocr_dir)
+    if idle_timeout > 0:
+        extracted, failed, requeued = run_worker_until_idle(
+            batch_size=batch_size,
+            adapter=adapter,
+            chunk_size=size,
+            ocr_dir=ocr_dir,
+            poll_interval=poll_interval,
+            idle_timeout=idle_timeout,
+        )
+    else:
+        extracted, failed, requeued = run_worker(
+            batch_size=batch_size,
+            adapter=adapter,
+            chunk_size=size,
+            ocr_dir=ocr_dir,
+        )
+    message = f"Extracted {extracted}, failed {failed}."
+    if requeued:
+        message += f" Requeued {requeued} (OCR text not written yet — is 'coastal-crawler ocr' running?)."
     typer.echo(message)
 
 
@@ -206,7 +259,19 @@ def status(
 
         total = sum(counts.values())
         typer.echo(f"\nTotal papers: {total}")
-        for s in ("discovered", "filtering", "relevant", "irrelevant", "inaccessible", "processing", "extracted", "failed"):
+        for s in (
+            "discovered",
+            "filtering",
+            "relevant",
+            "irrelevant",
+            "inaccessible",
+            "ocr_processing",
+            "ocr_done",
+            "ocr_failed",
+            "processing",
+            "extracted",
+            "failed",
+        ):
             n = counts.get(s, 0)
             if n or s in ("discovered", "relevant", "extracted"):
                 typer.echo(f"  {s:<12} {n}")
@@ -231,7 +296,7 @@ def status(
 
 @app.command()
 def requeue_failed() -> None:
-    """Reset failed papers back to 'relevant' so extraction is retried (skips re-filter)."""
+    """Reset failed papers back to 'ocr_done' so extraction is retried (skips re-filter and re-OCR)."""
     from coastal_crawler.worker import requeue_failed as _requeue
 
     count = _requeue()
@@ -240,11 +305,38 @@ def requeue_failed() -> None:
 
 @app.command()
 def requeue_processing() -> None:
-    """Reset papers stuck in 'processing' back to 'relevant' (use after a killed extraction job)."""
+    """Reset papers stuck in 'processing' back to 'ocr_done' (use after a killed extraction job)."""
     from coastal_crawler.worker import requeue_processing as _requeue
 
     count = _requeue()
+    typer.echo(f"Requeued {count} stranded paper(s) back to 'ocr_done'.")
+
+
+@app.command()
+def requeue_ocr_processing() -> None:
+    """Reset papers stuck in 'ocr_processing' back to 'relevant' (use after a killed OCR job)."""
+    from coastal_crawler.ocr_worker import requeue_ocr_processing as _requeue
+
+    count = _requeue()
     typer.echo(f"Requeued {count} stranded paper(s) back to 'relevant'.")
+
+
+@app.command()
+def requeue_ocr_failed() -> None:
+    """Reset ocr_failed papers back to 'relevant' so OCR is retried."""
+    from coastal_crawler.ocr_worker import requeue_ocr_failed as _requeue
+
+    count = _requeue()
+    typer.echo(f"Requeued {count} ocr_failed paper(s) for OCR retry.")
+
+
+@app.command()
+def requeue_ocr() -> None:
+    """Reset every paper touched by OCR or extraction back to 'relevant' (forces a full re-OCR)."""
+    from coastal_crawler.ocr_worker import requeue_ocr as _requeue
+
+    count = _requeue()
+    typer.echo(f"Requeued {count} paper(s) back to 'relevant' for a full re-OCR.")
 
 
 @app.command()
@@ -295,6 +387,34 @@ def requeue_irrelevant() -> None:
     with get_session() as session:
         count = store.requeue_irrelevant(session)
     typer.echo(f"Requeued {count} irrelevant paper(s) for re-filtering.")
+
+
+@app.command()
+def reset_extractions(
+    yes: bool = typer.Option(False, "--yes", help="Skip the confirmation prompt."),
+) -> None:
+    """Delete all extraction results and rewind extraction-stage papers to 'ocr_done'.
+
+    Restores the DB to its post-OCR, pre-extraction state: every row in
+    'extractions' is deleted, and any paper with status 'extracted',
+    'processing', or 'failed' is reset to 'ocr_done' so extraction can be
+    re-run from scratch without re-OCRing. OCR text files on disk are left
+    in place. Filtering/OCR results ('relevant'/'irrelevant'/'ocr_done'
+    papers not yet re-touched by extraction) are left as-is.
+    """
+    from coastal_crawler.db import store
+    from coastal_crawler.db.engine import get_session
+
+    if not yes:
+        typer.confirm(
+            "This will permanently delete ALL extraction results and reset "
+            "extracted/processing/failed papers to 'ocr_done'. Continue?",
+            abort=True,
+        )
+
+    with get_session() as session:
+        deleted, reset = store.reset_extractions(session)
+    typer.echo(f"Deleted {deleted} extraction row(s); reset {reset} paper(s) back to 'ocr_done'.")
 
 
 if __name__ == "__main__":

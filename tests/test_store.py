@@ -128,27 +128,194 @@ class TestUpsertPapers:
 
 
 # ---------------------------------------------------------------------------
+# claim_batch_for_ocr
+# ---------------------------------------------------------------------------
+
+class TestClaimBatchForOcr:
+    def test_claims_relevant_papers(self, db_session: Session) -> None:
+        store.upsert_papers([make_paper(status="relevant"), make_paper(status="relevant")], db_session)
+        claimed = store.claim_batch_for_ocr(10, db_session)
+        assert len(claimed) == 2
+
+    def test_sets_status_to_ocr_processing(self, db_session: Session) -> None:
+        store.upsert_papers([make_paper(status="relevant")], db_session)
+        claimed = store.claim_batch_for_ocr(10, db_session)
+        assert all(p.status == "ocr_processing" for p in claimed)
+
+    def test_respects_batch_size(self, db_session: Session) -> None:
+        store.upsert_papers([make_paper(status="relevant") for _ in range(5)], db_session)
+        claimed = store.claim_batch_for_ocr(3, db_session)
+        assert len(claimed) == 3
+
+    def test_returns_empty_when_nothing_relevant(self, db_session: Session) -> None:
+        store.upsert_papers([make_paper(status="ocr_done")], db_session)
+        claimed = store.claim_batch_for_ocr(10, db_session)
+        assert claimed == []
+
+    def test_skips_ocr_processing_papers(self, db_session: Session) -> None:
+        store.upsert_papers([make_paper(status="ocr_processing")], db_session)
+        claimed = store.claim_batch_for_ocr(10, db_session)
+        assert claimed == []
+
+    def test_skip_locked_no_double_claim(self, clean_db: Engine) -> None:
+        """Two concurrent open sessions cannot claim the same paper.
+
+        s1 holds an uncommitted FOR UPDATE lock on the row.  s2 uses SKIP
+        LOCKED so it silently skips the locked row instead of blocking.
+        """
+        with Session(clean_db) as setup:
+            store.upsert_papers([make_paper(status="relevant")], setup)
+            setup.commit()
+
+        s1 = Session(clean_db)
+        s2 = Session(clean_db)
+        try:
+            batch1 = store.claim_batch_for_ocr(10, s1)   # acquires row lock
+            batch2 = store.claim_batch_for_ocr(10, s2)   # SKIP LOCKED → 0 rows
+
+            assert len(batch1) == 1
+            assert len(batch2) == 0
+        finally:
+            s1.rollback()
+            s1.close()
+            s2.rollback()
+            s2.close()
+
+
+class TestMarkOcrDoneAndFailed:
+    def test_mark_ocr_done_sets_status(self, db_session: Session) -> None:
+        store.upsert_papers([make_paper(status="ocr_processing")], db_session)
+        paper = db_session.scalars(select(Paper)).one()
+        store.mark_ocr_done(paper.id, db_session)
+        db_session.expire(paper)
+        assert paper.status == "ocr_done"
+
+    def test_mark_ocr_failed_sets_status_and_error(self, db_session: Session) -> None:
+        store.upsert_papers([make_paper(status="ocr_processing")], db_session)
+        paper = db_session.scalars(select(Paper)).one()
+        store.mark_ocr_failed(paper.id, "OCR produced empty output", db_session)
+        db_session.expire(paper)
+        assert paper.status == "ocr_failed"
+        assert paper.error == "OCR produced empty output"
+
+
+class TestResetOcrProcessingToRelevant:
+    def test_resets_ocr_processing_paper(self, db_session: Session) -> None:
+        store.upsert_papers([make_paper(status="ocr_processing")], db_session)
+        paper = db_session.scalars(select(Paper)).one()
+        updated = store.reset_ocr_processing_to_relevant(paper.id, db_session)
+        assert updated is True
+        db_session.expire(paper)
+        assert paper.status == "relevant"
+
+    def test_no_op_when_not_ocr_processing(self, db_session: Session) -> None:
+        store.upsert_papers([make_paper(status="ocr_failed")], db_session)
+        paper = db_session.scalars(select(Paper)).one()
+        updated = store.reset_ocr_processing_to_relevant(paper.id, db_session)
+        assert updated is False
+        db_session.expire(paper)
+        assert paper.status == "ocr_failed"
+
+
+class TestRequeueOcrProcessing:
+    def test_resets_all_ocr_processing_to_relevant(self, db_session: Session) -> None:
+        store.upsert_papers(
+            [
+                make_paper(status="ocr_processing"),
+                make_paper(status="ocr_processing"),
+                make_paper(status="ocr_done"),
+            ],
+            db_session,
+        )
+        n = store.requeue_ocr_processing(db_session)
+        assert n == 2
+        statuses = sorted(p.status for p in db_session.scalars(select(Paper)).all())
+        assert statuses == ["ocr_done", "relevant", "relevant"]
+
+    def test_returns_zero_when_nothing_ocr_processing(self, db_session: Session) -> None:
+        store.upsert_papers([make_paper(status="discovered")], db_session)
+        assert store.requeue_ocr_processing(db_session) == 0
+
+
+class TestRequeueOcrFailed:
+    def test_resets_ocr_failed_to_relevant(self, db_session: Session) -> None:
+        store.upsert_papers([make_paper(status="ocr_failed"), make_paper(status="ocr_failed")], db_session)
+        n = store.requeue_ocr_failed(db_session)
+        assert n == 2
+        statuses = {p.status for p in db_session.scalars(select(Paper)).all()}
+        assert statuses == {"relevant"}
+
+    def test_clears_error(self, db_session: Session) -> None:
+        store.upsert_papers([make_paper(status="ocr_processing")], db_session)
+        paper = db_session.scalars(select(Paper)).one()
+        store.mark_ocr_failed(paper.id, "some error", db_session)
+        store.requeue_ocr_failed(db_session)
+        db_session.expire(paper)
+        assert paper.error is None
+
+    def test_returns_zero_when_nothing_ocr_failed(self, db_session: Session) -> None:
+        store.upsert_papers([make_paper(status="discovered")], db_session)
+        assert store.requeue_ocr_failed(db_session) == 0
+
+
+class TestRequeueOcr:
+    def test_resets_every_downstream_status_to_relevant(self, db_session: Session) -> None:
+        store.upsert_papers(
+            [
+                make_paper(status="ocr_done"),
+                make_paper(status="ocr_failed"),
+                make_paper(status="processing"),
+                make_paper(status="extracted"),
+                make_paper(status="failed"),
+                make_paper(status="discovered"),
+            ],
+            db_session,
+        )
+        n = store.requeue_ocr(db_session)
+        assert n == 5
+        statuses = sorted(p.status for p in db_session.scalars(select(Paper)).all())
+        assert statuses == ["discovered", "relevant", "relevant", "relevant", "relevant", "relevant"]
+
+    def test_clears_error_and_extracted_at(self, db_session: Session) -> None:
+        store.upsert_papers([make_paper(status="processing")], db_session)
+        paper = db_session.scalars(select(Paper)).one()
+        store.mark_extracted(paper.id, db_session)
+        store.mark_failed(paper.id, "boom", db_session)
+        store.requeue_ocr(db_session)
+        db_session.expire(paper)
+        assert paper.status == "relevant"
+        assert paper.error is None
+        assert paper.extracted_at is None
+
+
+# ---------------------------------------------------------------------------
 # claim_batch
 # ---------------------------------------------------------------------------
 
 class TestClaimBatch:
-    def test_claims_discovered_papers(self, db_session: Session) -> None:
-        store.upsert_papers([make_paper(), make_paper()], db_session)
+    def test_claims_ocr_done_papers(self, db_session: Session) -> None:
+        store.upsert_papers([make_paper(status="ocr_done"), make_paper(status="ocr_done")], db_session)
         claimed = store.claim_batch(10, db_session)
         assert len(claimed) == 2
 
     def test_sets_status_to_processing(self, db_session: Session) -> None:
-        store.upsert_papers([make_paper()], db_session)
+        store.upsert_papers([make_paper(status="ocr_done")], db_session)
         claimed = store.claim_batch(10, db_session)
         assert all(p.status == "processing" for p in claimed)
 
     def test_respects_batch_size(self, db_session: Session) -> None:
-        store.upsert_papers([make_paper() for _ in range(5)], db_session)
+        store.upsert_papers([make_paper(status="ocr_done") for _ in range(5)], db_session)
         claimed = store.claim_batch(3, db_session)
         assert len(claimed) == 3
 
-    def test_returns_empty_when_nothing_discovered(self, db_session: Session) -> None:
+    def test_returns_empty_when_nothing_ocr_done(self, db_session: Session) -> None:
         store.upsert_papers([make_paper(status="extracted")], db_session)
+        claimed = store.claim_batch(10, db_session)
+        assert claimed == []
+
+    def test_skips_relevant_papers(self, db_session: Session) -> None:
+        """'relevant' papers haven't been OCR'd yet — not claimable for extraction."""
+        store.upsert_papers([make_paper(status="relevant")], db_session)
         claimed = store.claim_batch(10, db_session)
         assert claimed == []
 
@@ -168,9 +335,9 @@ class TestClaimBatch:
         s1 holds an uncommitted FOR UPDATE lock on the row.  s2 uses SKIP
         LOCKED so it silently skips the locked row instead of blocking.
         """
-        # Arrange: insert a committed discovered paper.
+        # Arrange: insert a committed ocr_done paper.
         with Session(clean_db) as setup:
-            store.upsert_papers([make_paper()], setup)
+            store.upsert_papers([make_paper(status="ocr_done")], setup)
             setup.commit()
 
         s1 = Session(clean_db)
@@ -223,12 +390,12 @@ class TestStatusTransitions:
         db_session.expire(paper)
         assert paper.error == "pdf download timeout"
 
-    def test_requeue_failed_resets_to_discovered(self, db_session: Session) -> None:
+    def test_requeue_failed_resets_to_ocr_done(self, db_session: Session) -> None:
         store.upsert_papers([make_paper(status="failed"), make_paper(status="failed")], db_session)
         n = store.requeue_failed(db_session)
         assert n == 2
         statuses = {p.status for p in db_session.scalars(select(Paper)).all()}
-        assert statuses == {"discovered"}
+        assert statuses == {"ocr_done"}
 
     def test_requeue_failed_clears_error(self, db_session: Session) -> None:
         paper_dict = make_paper(status="failed")
@@ -252,7 +419,7 @@ class TestStatusTransitions:
         statuses = sorted(
             p.status for p in db_session.scalars(select(Paper)).all()
         )
-        assert statuses == ["discovered", "discovered", "extracted"]
+        assert statuses == ["discovered", "extracted", "ocr_done"]
 
     def test_requeue_returns_zero_when_nothing_failed(self, db_session: Session) -> None:
         store.upsert_papers([make_paper(status="discovered")], db_session)
@@ -260,7 +427,7 @@ class TestStatusTransitions:
 
 
 # ---------------------------------------------------------------------------
-# relevant_papers / mark_failed_if_relevant / reset_processing_to_relevant /
+# relevant_papers / mark_ocr_failed_if_relevant / reset_processing_to_relevant /
 # requeue_processing — scripts/wiley_download.py + worker.py support
 # ---------------------------------------------------------------------------
 
@@ -295,26 +462,26 @@ class TestRelevantPapers:
         assert store.relevant_papers(db_session) == []
 
 
-class TestMarkFailedIfRelevant:
+class TestMarkOcrFailedIfRelevant:
     def test_updates_relevant_paper(self, db_session: Session) -> None:
         store.upsert_papers([make_paper(status="relevant")], db_session)
         paper = db_session.scalars(select(Paper)).one()
-        updated = store.mark_failed_if_relevant(paper.id, "bad pdf", db_session)
+        updated = store.mark_ocr_failed_if_relevant(paper.id, "bad pdf", db_session)
         assert updated is True
         db_session.expire(paper)
-        assert paper.status == "failed"
+        assert paper.status == "ocr_failed"
         assert paper.error == "bad pdf"
 
-    def test_no_op_when_already_processing(self, db_session: Session) -> None:
-        """Simulates the race scripts/wiley_download.py guards against: a
-        GPU worker claimed the paper into 'processing' while the
+    def test_no_op_when_already_ocr_processing(self, db_session: Session) -> None:
+        """Simulates the race scripts/wiley_download.py guards against: an
+        OCR worker claimed the paper into 'ocr_processing' while the
         pre-downloader's download was in flight."""
-        store.upsert_papers([make_paper(status="processing")], db_session)
+        store.upsert_papers([make_paper(status="ocr_processing")], db_session)
         paper = db_session.scalars(select(Paper)).one()
-        updated = store.mark_failed_if_relevant(paper.id, "bad pdf", db_session)
+        updated = store.mark_ocr_failed_if_relevant(paper.id, "bad pdf", db_session)
         assert updated is False
         db_session.expire(paper)
-        assert paper.status == "processing"
+        assert paper.status == "ocr_processing"
         assert paper.error is None
 
 
@@ -337,7 +504,7 @@ class TestResetProcessingToRelevant:
 
 
 class TestRequeueProcessing:
-    def test_resets_all_processing_to_relevant(self, db_session: Session) -> None:
+    def test_resets_all_processing_to_ocr_done(self, db_session: Session) -> None:
         store.upsert_papers(
             [
                 make_paper(status="processing"),
@@ -349,7 +516,7 @@ class TestRequeueProcessing:
         n = store.requeue_processing(db_session)
         assert n == 2
         statuses = sorted(p.status for p in db_session.scalars(select(Paper)).all())
-        assert statuses == ["extracted", "relevant", "relevant"]
+        assert statuses == ["extracted", "ocr_done", "ocr_done"]
 
     def test_returns_zero_when_nothing_processing(self, db_session: Session) -> None:
         store.upsert_papers([make_paper(status="discovered")], db_session)
@@ -444,6 +611,48 @@ class TestWatermark:
         assert store.get_watermark("openalex", db_session) == date(2024, 1, 1)
         assert store.get_watermark("semantic_scholar", db_session) == date(2024, 6, 1)
         assert store.get_watermark("wiley", db_session) is None
+
+
+# ---------------------------------------------------------------------------
+# reset_extractions
+# ---------------------------------------------------------------------------
+
+class TestResetExtractions:
+    def test_deletes_all_extraction_rows(self, db_session: Session) -> None:
+        store.upsert_papers([make_paper(status="extracted")], db_session)
+        paper_id = db_session.scalars(select(Paper.id)).one()
+        store.insert_extraction(paper_id, make_extraction_result(), db_session)
+        store.insert_extraction(paper_id, make_extraction_result(), db_session)
+        deleted, _ = store.reset_extractions(db_session)
+        assert deleted == 2
+        assert db_session.scalar(select(func.count(Extraction.id))) == 0
+
+    def test_resets_extracted_processing_failed_to_ocr_done(self, db_session: Session) -> None:
+        store.upsert_papers(
+            [
+                make_paper(status="extracted"),
+                make_paper(status="processing"),
+                make_paper(status="failed"),
+                make_paper(status="relevant"),
+                make_paper(status="ocr_done"),
+            ],
+            db_session,
+        )
+        _, reset = store.reset_extractions(db_session)
+        assert reset == 3
+        statuses = sorted(p.status for p in db_session.scalars(select(Paper)).all())
+        assert statuses == ["ocr_done", "ocr_done", "ocr_done", "ocr_done", "relevant"]
+
+    def test_clears_extracted_at_and_error(self, db_session: Session) -> None:
+        store.upsert_papers([make_paper(status="processing")], db_session)
+        paper = db_session.scalars(select(Paper)).one()
+        store.mark_extracted(paper.id, db_session)
+        store.mark_failed(paper.id, "boom", db_session)
+        store.reset_extractions(db_session)
+        db_session.expire(paper)
+        assert paper.status == "ocr_done"
+        assert paper.extracted_at is None
+        assert paper.error is None
 
 
 # ---------------------------------------------------------------------------
