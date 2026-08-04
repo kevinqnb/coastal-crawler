@@ -1,0 +1,10 @@
+id: 2026-07-30-ocr-olmocr2-01
+project: coastal-crawler
+description: OCR batch of relevant papers with olmOCR-2-7B (DOC_LM); backfilled from scripts/submit_ocr_job.sh's last completed run (ocr_done=346, failed=0, requeued=0).
+seed: 342
+params:
+  stage: ocr
+  batch_size: 5000
+  chunk_size: 20
+  env:
+    DOC_LM_MODEL: allenai/olmOCR-2-7B-1025

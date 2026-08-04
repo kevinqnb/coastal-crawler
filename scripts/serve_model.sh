@@ -38,6 +38,12 @@
 #   reusable cache) and owns its own per-role directory under the repo,
 #   and explicitly binds it into the container below.
 #
+# Port override:
+#   Set PORT_OVERRIDE to bind a specific port instead of <ROLE>_PORT from
+#   .env. Used by run_experiment_job.sh so two same-role experiments don't
+#   collide on the static .env port if SGE schedules them onto the same
+#   host — harmless no-op for direct/manual invocations, which never set it.
+#
 # Usage:
 #   ./scripts/serve_model.sh FILTER
 #   ./scripts/serve_model.sh DOC_LM 0
@@ -99,7 +105,7 @@ if [ -z "$MODEL" ]; then
 fi
 
 # ---- Serving args -----------------------------------------------------------
-PORT="${!port_var:-8000}"
+PORT="${PORT_OVERRIDE:-${!port_var:-8000}}"
 TENSOR_PARALLEL_SIZE="${!tp_var:-1}"
 GPU_MEMORY_UTILIZATION="${!gpu_mem_var:-0.90}"
 DTYPE="${!dtype_var:-auto}"
