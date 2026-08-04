@@ -117,7 +117,7 @@ def run_worker(
             batch_error = exc
         log.info("gpu_chunk_done", chunk_size=len(ids), seconds=round(time.monotonic() - t0, 2))
 
-        for paper_id, outcome in zip(ids, batch_results):
+        for paper_id, ocr_text, outcome in zip(ids, ocr_texts, batch_results):
             with get_session() as session:
                 try:
                     if batch_error is not None:
@@ -129,6 +129,9 @@ def run_worker(
                     # measurements, so requeue-failed can retry it.
                     if isinstance(outcome, str):
                         raise RuntimeError(outcome)
+                    # One copy of this paper's OCR text, not one per
+                    # measurement record — see PaperOcrContext's docstring.
+                    store.upsert_paper_ocr_context(paper_id, ocr_text, session)
                     for result in outcome:
                         store.insert_extraction(paper_id, result, session)
                     store.mark_extracted(paper_id, session)

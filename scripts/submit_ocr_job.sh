@@ -77,8 +77,11 @@ if [ ! -d "$WILEY_PDF_DIR" ] || [ -z "$(ls -A "$WILEY_PDF_DIR" 2>/dev/null)" ]; 
 fi
 
 # ---- Start the server in the background --------------------------------------
+# No gpu_id argument: this is a standalone single-GPU job, so SGE's own
+# CUDA_VISIBLE_DEVICES assignment for the allocated GPU should stand rather
+# than being overridden to a hardcoded physical device index.
 cd scripts
-./serve_model.sh DOC_LM 0 &
+./serve_model.sh DOC_LM &
 DOC_LM_PID=$!
 
 # Kill the server when this script exits for any reason.

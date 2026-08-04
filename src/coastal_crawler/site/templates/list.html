@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}coastal-crawler &mdash; measurements{% endblock %}
+{% block content %}
+
+{% macro qs(attr, eco) %}{% if attr %}attribute={{ attr | urlencode }}{% endif %}{% if attr and eco %}&{% endif %}{% if eco %}ecosystem_type={{ eco | urlencode }}{% endif %}{% endmacro %}
+
+<div class="page-layout">
+  <aside class="filters">
+    <div class="filter-group">
+      <h3>attribute</h3>
+      <a href="/?{{ qs(none, ecosystem_type) }}" class="{{ 'active' if not attribute }}">all</a>
+      {% for a in attributes %}
+      <a href="/?{{ qs(a, ecosystem_type) }}" class="{{ 'active' if a == attribute }}">{{ a | replace("_", " ") }}</a>
+      {% endfor %}
+    </div>
+    <div class="filter-group">
+      <h3>ecosystem type</h3>
+      <a href="/?{{ qs(attribute, none) }}" class="{{ 'active' if not ecosystem_type }}">all</a>
+      {% for e in ecosystem_types %}
+      <a href="/?{{ qs(attribute, e) }}" class="{{ 'active' if e == ecosystem_type }}">{{ e | replace("_", " ") }}</a>
+      {% endfor %}
+    </div>
+  </aside>
+
+  <div class="content">
+    <div class="section-header">
+      <h2 class="section-title">Extracted Data</h2>
+      <span class="count">{{ total }} measurement{{ 's' if total != 1 }}{% if attribute %} for {{ attribute | replace("_", " ") }}{% endif %}{% if ecosystem_type %} in {{ ecosystem_type | replace("_", " ") }}{% endif %}</span>
+    </div>
+    <hr class="section-divider">
+
+    {% for r in rows %}
+    <div class="datapoint">
+      <span class="datapoint-number data">#{{ row_offset + loop.index }}</span>
+      <p><span class="label">Ecosystem:</span> {{ r.ecosystem_type | replace("_", " ") if r.ecosystem_type else "NA" }}</p>
+      <p><span class="label">Measurement:</span> {{ r.attribute | replace("_", " ") }}{% if r.judgement %}<span class="judgement {{ r.judgement }}">{{ r.judgement }}</span>{% endif %}</p>
+      <p><span class="label">Measurement value:</span> <a class="data value" href="/extraction/{{ r.id }}">{{ r.value if r.value is not none else "?" }}{% if r.units %} {{ r.units }}{% endif %}</a></p>
+      <p><span class="label">Title:</span> {{ (r.title | render_title | safe) if r.title else "(untitled)" }}</p>
+      <p><span class="label">Authors:</span> {{ r.authors | join(", ") if r.authors else "NA" }}</p>
+      <p><span class="label">DOI:</span> {% if r.doi %}<a href="https://doi.org/{{ r.doi }}">{{ r.doi }}</a>{% else %}NA{% endif %}</p>
+    </div>
+    {% else %}
+    <p>No measurements found.</p>
+    {% endfor %}
+
+    <div class="pagination">
+      <span>
+        {% if page > 1 %}<a href="/?page={{ page - 1 }}{% if attribute or ecosystem_type %}&{{ qs(attribute, ecosystem_type) }}{% endif %}">&larr; previous</a>{% endif %}
+      </span>
+      <span>page {{ page }} of {{ total_pages }}</span>
+      <span>
+        {% if page < total_pages %}<a href="/?page={{ page + 1 }}{% if attribute or ecosystem_type %}&{{ qs(attribute, ecosystem_type) }}{% endif %}">next &rarr;</a>{% endif %}
+      </span>
+    </div>
+  </div>
+</div>
+
+{% endblock %}

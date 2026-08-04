@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}{{ data.attribute }} &mdash; coastal-crawler{% endblock %}
+{% block content %}
+
+<a class="back-link" href="/">&larr; all measurements</a>
+
+<div class="paper-title">
+  <h1>{{ (paper.title | render_title | safe) if paper.title else "(untitled)" }}</h1>
+  <p class="meta">
+    {% if paper.authors %}{{ paper.authors | join(", ") }}{% endif %}
+    {% if paper.publication_date %} &middot; {{ paper.publication_date }}{% endif %}
+    {% if paper.doi %} &middot; <a href="https://doi.org/{{ paper.doi }}">doi:{{ paper.doi }}</a>{% endif %}
+  </p>
+</div>
+
+<hr class="detail-divider">
+
+<div class="measurement-box">
+  {% if extraction.judgement %}<span class="judgement {{ extraction.judgement }}">{{ extraction.judgement }}</span>{% endif %}
+  <dl>
+    <dt>measurement</dt><dd class="data">{{ data.attribute | replace("_", " ") }}</dd>
+    <dt>value</dt><dd class="data">{{ data.value if data.value is not none else "?" }}{% if data.units %} {{ data.units }}{% endif %}</dd>
+    {% if data.name %}<dt>site</dt><dd class="data">{{ data.name }}</dd>{% endif %}
+    {% if data.ecosystem_type %}<dt>ecosystem</dt><dd class="data">{{ data.ecosystem_type | replace("_", " ") }}</dd>{% endif %}
+    {% if data.location %}<dt>location</dt><dd class="data">{{ data.location }}</dd>{% endif %}
+    {% if data.date %}<dt>event date</dt><dd class="data">{{ data.date }}</dd>{% endif %}
+    {% if data.sub_location %}<dt>sub-location</dt><dd class="data">{{ data.sub_location }}</dd>{% endif %}
+    {% if extraction.confidence is not none %}<dt>confidence</dt><dd class="data">{{ "%.2f"|format(extraction.confidence) }}</dd>{% endif %}
+    {% if ocr_model %}<dt>ocr model</dt><dd class="data">{{ ocr_model }}</dd>{% endif %}
+    <dt>extraction model</dt><dd class="data">{{ extraction_model }}</dd>
+  </dl>
+</div>
+
+<div class="snippet">
+  <p class="snippet-header">
+    {% if snippet_page is not none %}
+      source: page {{ snippet_page + 1 }} of the OCR'd document
+      {% if not snippet_matched %}&mdash; value not precisely located; showing the most likely page{% endif %}
+    {% else %}
+      OCR text unavailable for this paper.
+    {% endif %}
+  </p>
+  <div class="snippet-body data">{{ snippet_html | safe }}</div>
+</div>
+
+<form class="vote-form" method="post" action="/extraction/{{ extraction.id }}/vote">
+  <button class="valid" name="vote" value="valid" type="submit">&#10003; valid</button>
+  <button class="invalid" name="vote" value="invalid" type="submit">&#10007; invalid</button>
+  <span class="vote-tally">{{ valid_votes }} valid &middot; {{ invalid_votes }} invalid</span>
+</form>
+
+{% endblock %}

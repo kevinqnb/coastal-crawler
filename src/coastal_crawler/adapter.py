@@ -173,12 +173,19 @@ class DirectMeasurementAdapter:
             "row_index": record.get("row_index"),
             "column_index": record.get("column_index"),
             "source": record.get("source"),
-            "context": record.get("context"),
         }
+        # `context` (the full OCR'd document text) is dropped here, not
+        # persisted per-record — worker.py writes it once per paper via
+        # store.upsert_paper_ocr_context instead, from the same ocr_texts
+        # string this record's `context` was merged in from. Storing it on
+        # every measurement record (previously in both `data` and
+        # `provenance`) meant a paper with N measurements stored its ~55KB
+        # OCR text N*2 times — see migration c2d3e4f5a6b7.
+        data = {k: v for k, v in record.items() if k != "context"}
         return ExtractionResult(
             schema_name=self.schema_name,
             model_version=self.model_version,
-            data=record,
+            data=data,
             # STUB: wire in a real confidence score if ExtractionLM exposes one.
             confidence=None,
             provenance=provenance,

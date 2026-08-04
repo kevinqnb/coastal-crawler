@@ -19,7 +19,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session, selectinload
 
 from coastal_crawler.adapter import ExtractionResult
-from coastal_crawler.db.models import CrawlState, Extraction, Paper
+from coastal_crawler.db.models import CrawlState, Extraction, Paper, PaperOcrContext, Vote
 
 
 # ---------------------------------------------------------------------------
@@ -508,6 +508,27 @@ def insert_extraction(
     return extraction
 
 
+def upsert_paper_ocr_context(paper_id: int, context: str, session: Session) -> None:
+    """Insert or update the one stored copy of a paper's full OCR text.
+
+    Called once per paper per extraction batch (see worker.py), not once per
+    measurement record — see PaperOcrContext's docstring for why this
+    replaced embedding `context` in every extraction row's `data`.
+    """
+    stmt = pg_insert(PaperOcrContext).values(paper_id=paper_id, context=context)
+    stmt = stmt.on_conflict_do_update(
+        index_elements=[PaperOcrContext.paper_id], set_={"context": stmt.excluded.context}
+    )
+    session.execute(stmt)
+
+
+def get_paper_ocr_context(session: Session, paper_id: int) -> str | None:
+    """Return the stored OCR text for a paper, or None if not yet recorded."""
+    return session.scalar(
+        select(PaperOcrContext.context).where(PaperOcrContext.paper_id == paper_id)
+    )
+
+
 # ---------------------------------------------------------------------------
 # Crawl state / watermarks
 # ---------------------------------------------------------------------------
@@ -593,3 +614,162 @@ def papers_with_extractions(
 
     stmt = stmt.where(Paper.status == "extracted").order_by(Paper.extracted_at.desc()).limit(limit)
     return list(session.scalars(stmt).all())
+
+
+# ---------------------------------------------------------------------------
+# Site queries (results website — read path)
+# ---------------------------------------------------------------------------
+
+def list_extractions(
+    session: Session,
+    page: int = 1,
+    page_size: int = 25,
+    attribute: str | None = None,
+    ecosystem_type: str | None = None,
+) -> tuple[list[Any], int]:
+    """Paginated (measurement, paper) rows for the results website's list view.
+
+    Deduped on (paper_id, attribute, value, units), keeping the highest `id`
+    — extraction rows accumulate across re-extraction passes (see
+    insert_extraction), so without this the same real-world measurement
+    would appear once per pass.
+
+    Two-stage query, deliberately: every extraction row carries a ~55KB
+    embedded copy of its paper's full OCR text (in `data->'context'`), and
+    Postgres must detoast that whole blob to evaluate *any* `data->>'...'`
+    expression on a row with no supporting index. Computing the dedup key
+    (attribute/value/units) across every row in one wide query — even one
+    that excludes `context` from its SELECT list — still pays that cost,
+    since the key itself is a JSONB expression. So stage 1 works out just
+    the winning page's `id`s from a narrow projection (covered by this
+    migration's `ix_extractions_dedup_key` index, so it never touches the
+    heap), and stage 2 hydrates only those ~25 ids with the full fields —
+    see migration b1c2d3e4f5a6 and its indexes for the counterpart.
+
+    Returns:
+        (rows, total_count). Each row exposes .id, .paper_id, .attribute,
+        .value, .units, .entity_name, .event_date, .ecosystem_type,
+        .judgement, .confidence, .created_at, .title, .doi, .authors,
+        .publication_date.
+    """
+    dedup_key = (
+        Extraction.paper_id,
+        Extraction.data["attribute"].astext,
+        Extraction.data["value"].astext,
+        Extraction.data["units"].astext,
+    )
+    narrow = select(
+        Extraction.id,
+        Extraction.paper_id,
+        Extraction.data["attribute"].astext,
+        Extraction.data["value"].astext,
+        Extraction.data["units"].astext,
+        Extraction.created_at,
+    )
+    if attribute:
+        narrow = narrow.where(Extraction.data["attribute"].astext == attribute)
+    if ecosystem_type:
+        narrow = narrow.where(Extraction.data["ecosystem_type"].astext == ecosystem_type)
+    deduped_ids = narrow.distinct(*dedup_key).order_by(*dedup_key, Extraction.id.desc()).subquery()
+
+    total = session.execute(select(func.count()).select_from(deduped_ids)).scalar_one()
+
+    page_ids_stmt = (
+        select(deduped_ids.c.id)
+        .order_by(deduped_ids.c.created_at.desc())
+        .limit(page_size)
+        .offset((page - 1) * page_size)
+    )
+    page_ids = list(session.scalars(page_ids_stmt).all())
+    if not page_ids:
+        return [], total
+
+    hydrate_stmt = (
+        select(
+            Extraction.id,
+            Extraction.paper_id,
+            Extraction.data["attribute"].astext.label("attribute"),
+            Extraction.data["value"].astext.label("value"),
+            Extraction.data["units"].astext.label("units"),
+            Extraction.data["name"].astext.label("entity_name"),
+            Extraction.data["date"].astext.label("event_date"),
+            Extraction.data["ecosystem_type"].astext.label("ecosystem_type"),
+            Extraction.judgement,
+            Extraction.confidence,
+            Extraction.created_at,
+            Paper.title,
+            Paper.doi,
+            Paper.authors,
+            Paper.publication_date,
+        )
+        .join(Paper, Paper.id == Extraction.paper_id)
+        .where(Extraction.id.in_(page_ids))
+        .order_by(Extraction.created_at.desc())
+    )
+    rows = list(session.execute(hydrate_stmt).all())
+    return rows, total
+
+
+def list_ecosystem_types(session: Session) -> list[str]:
+    """Distinct non-null ecosystem types present across all extractions, for the site's facet filter."""
+    stmt = (
+        select(Extraction.data["ecosystem_type"].astext)
+        .where(Extraction.data["ecosystem_type"].astext.is_not(None))
+        .distinct()
+        .order_by(Extraction.data["ecosystem_type"].astext)
+    )
+    return list(session.scalars(stmt).all())
+
+
+def get_extraction(session: Session, extraction_id: int) -> Extraction | None:
+    """Return one extraction with its full `data` (including OCR `context`) and parent paper.
+
+    Unlike `list_extractions`, `context` is kept here — the detail page needs
+    it to locate an OCR-text snippet for this specific measurement.
+    """
+    stmt = (
+        select(Extraction)
+        .options(selectinload(Extraction.paper))
+        .where(Extraction.id == extraction_id)
+    )
+    return session.scalars(stmt).first()
+
+
+# ---------------------------------------------------------------------------
+# Votes
+# ---------------------------------------------------------------------------
+
+def record_vote(
+    session: Session,
+    extraction_id: int,
+    vote: bool,
+    voter_hash: str | None,
+) -> str | None:
+    """Insert a vote and recompute the extraction's majority `judgement`.
+
+    A tie leaves `judgement` unresolved (None) rather than picking a side.
+
+    Returns:
+        The recomputed judgement ('valid', 'invalid', or None on a tie).
+    """
+    session.add(Vote(extraction_id=extraction_id, vote=vote, voter_hash=voter_hash))
+    session.flush()
+
+    result = session.execute(
+        select(Vote.vote, func.count())
+        .where(Vote.extraction_id == extraction_id)
+        .group_by(Vote.vote)
+    )
+    counts: dict[bool, int] = {v: c for v, c in result}
+    valid_count, invalid_count = counts.get(True, 0), counts.get(False, 0)
+    if valid_count > invalid_count:
+        judgement = "valid"
+    elif invalid_count > valid_count:
+        judgement = "invalid"
+    else:
+        judgement = None
+
+    session.execute(
+        update(Extraction).where(Extraction.id == extraction_id).values(judgement=judgement)
+    )
+    return judgement

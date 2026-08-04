@@ -6,6 +6,7 @@ from datetime import date, datetime
 from typing import Any
 
 from sqlalchemy import (
+    Boolean,
     Date,
     DateTime,
     Double,
@@ -39,6 +40,8 @@ class Paper(Base):
     abstract: Mapped[str | None] = mapped_column(Text)
     discovered_from: Mapped[str | None] = mapped_column(String)
     oa_pdf_url: Mapped[str | None] = mapped_column(Text)
+    authors: Mapped[list[str] | None] = mapped_column(JSONB)
+    publication_date: Mapped[date | None] = mapped_column(Date)
     # Column is named "metadata" in the DB; "paper_metadata" avoids shadowing
     # DeclarativeBase.metadata on the class.
     paper_metadata: Mapped[dict[str, Any] | None] = mapped_column("metadata", JSONB)
@@ -70,11 +73,57 @@ class Extraction(Base):
     provenance: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     latitude: Mapped[float | None] = mapped_column(Double)
     longitude: Mapped[float | None] = mapped_column(Double)
+    # Majority vote outcome ('valid'/'invalid'), recomputed from `votes` on
+    # every new vote. NULL until at least one vote is cast.
+    judgement: Mapped[str | None] = mapped_column(String)
     created_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
 
     paper: Mapped[Paper] = relationship("Paper", back_populates="extractions")
+    votes: Mapped[list[Vote]] = relationship(
+        "Vote", back_populates="extraction", cascade="all, delete-orphan"
+    )
+
+
+class PaperOcrContext(Base):
+    """One paper's full OCR'd text — one row per paper, not per extraction.
+
+    ExtractionLM previously had every measurement record it produced embed
+    its own copy of the source document's full OCR text (`data->'context'`
+    on `Extraction`), so a paper with N measurements stored that text N
+    times. This table holds exactly one copy per paper instead; the site's
+    snippet lookup (site/snippets.py's find_snippet) reads from here via
+    paper_id rather than from any single extraction row's `data`.
+    """
+
+    __tablename__ = "paper_ocr_context"
+
+    paper_id: Mapped[int] = mapped_column(Integer, ForeignKey("papers.id"), primary_key=True)
+    context: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class Vote(Base):
+    """One site visitor's valid/invalid vote on an extracted measurement."""
+
+    __tablename__ = "votes"
+    __table_args__ = (Index("ix_votes_extraction_id", "extraction_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    extraction_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("extractions.id"), nullable=False
+    )
+    vote: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    # Hashed IP+UA — best-effort duplicate-vote deterrent, not authentication.
+    voter_hash: Mapped[str | None] = mapped_column(String)
+    created_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    extraction: Mapped[Extraction] = relationship("Extraction", back_populates="votes")
 
 
 class CrawlState(Base):

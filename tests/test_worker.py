@@ -184,6 +184,19 @@ class TestRunWorkerSuccess:
         assert ext.latitude == pytest.approx(51.5)
         assert ext.longitude == pytest.approx(-0.1)
 
+    def test_ocr_context_stored_once_per_paper(self, worker_db: Engine, tmp_path: Path) -> None:
+        """paper_ocr_context gets exactly one row per paper, holding the same
+        text run_worker read from ocr_dir — regardless of how many
+        measurement records the adapter returns for that paper."""
+        _insert(worker_db, make_paper())
+        paper_id = _paper(worker_db).id
+        _write_ocr(tmp_path, paper_id, text="the full document text")
+        adapter = MagicMock()
+        adapter.extract_batch.return_value = [[make_result(), make_result()]]
+        run_worker(batch_size=10, adapter=adapter, ocr_dir=tmp_path)
+        with Session(worker_db) as s:
+            assert store.get_paper_ocr_context(s, paper_id) == "the full document text"
+
     def test_stub_adapter_produces_no_extractions(self, worker_db: Engine, tmp_path: Path) -> None:
         _insert(worker_db, make_paper())
         _write_ocr(tmp_path, _paper(worker_db).id)

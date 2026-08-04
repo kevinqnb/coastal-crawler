@@ -27,7 +27,7 @@ log = structlog.get_logger(__name__)
 
 _BASE_URL = "https://api.openalex.org/works"
 _PAGE_SIZE = 200
-_SELECT = "id,doi,title,abstract_inverted_index,open_access,publication_date"
+_SELECT = "id,doi,title,abstract_inverted_index,open_access,publication_date,authorships"
 
 _DELAY_NO_KEY = 0.15   # seconds between requests without a key (polite pool: 10 req/s)
 _DELAY_WITH_KEY = 0.05  # seconds between requests with a key
@@ -142,6 +142,26 @@ def _normalize_openalex_id(raw: str | None) -> str | None:
     return raw.rsplit("/", 1)[-1]
 
 
+def _extract_authors(authorships: list[dict[str, Any]] | None) -> list[str] | None:
+    if not authorships:
+        return None
+    names: list[str] = []
+    for a in authorships:
+        name = (a.get("author") or {}).get("display_name")
+        if name:
+            names.append(name)
+    return names or None
+
+
+def _parse_date(raw: str | None) -> date | None:
+    if not raw:
+        return None
+    try:
+        return date.fromisoformat(raw)
+    except ValueError:
+        return None
+
+
 def _map_result(r: dict[str, Any]) -> dict[str, Any]:
     return {
         "doi": _normalize_doi(r.get("doi")),
@@ -150,6 +170,8 @@ def _map_result(r: dict[str, Any]) -> dict[str, Any]:
         "title": r.get("title"),
         "abstract": _reconstruct_abstract(r.get("abstract_inverted_index")),
         "oa_pdf_url": (r.get("open_access") or {}).get("oa_url"),
+        "authors": _extract_authors(r.get("authorships")),
+        "publication_date": _parse_date(r.get("publication_date")),
         "discovered_from": "openalex",
         "metadata": {},
         "status": "discovered",

@@ -203,6 +203,30 @@ class TestDirectMeasurementAdapterExtractBatch:
         assert len(results[0]) == 1
         assert results[1] == []
 
+    def test_context_dropped_from_data_and_provenance(self) -> None:
+        """`context` (the full OCR'd document text ExtractionLM merges into
+        every record) must not be persisted per-record — worker.py stores it
+        once per paper instead (see PaperOcrContext). Previously this landed
+        in both `data` and `provenance`, doubling an already-duplicated cost."""
+        adapter = self._adapter()
+        adapter.meas_lm.fit.return_value = [
+            [
+                {
+                    "document_id": 0,
+                    "context": "the full document text",
+                    "value": 1.0,
+                    "units": "m",
+                    "attribute": "depth",
+                },
+            ],
+        ]
+
+        results = adapter.extract_batch(["doc0 text"])
+
+        assert "context" not in results[0][0].data
+        assert results[0][0].provenance is not None
+        assert "context" not in results[0][0].provenance
+
     def test_lat_lon_extracted_from_records(self) -> None:
         adapter = self._adapter(lat_field="latitude", lon_field="longitude")
         adapter.meas_lm.fit.return_value = [

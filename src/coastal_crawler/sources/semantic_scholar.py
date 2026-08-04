@@ -33,7 +33,7 @@ from coastal_crawler.sources.http import get_with_retry
 log = structlog.get_logger(__name__)
 
 _BASE_URL = "https://api.semanticscholar.org/graph/v1/paper/search/bulk"
-_FIELDS = "paperId,externalIds,title,abstract,openAccessPdf,publicationDate"
+_FIELDS = "paperId,externalIds,title,abstract,openAccessPdf,publicationDate,authors"
 _PAGE_SIZE = 1000
 
 _DELAY = 2.0  # seconds between requests — conservative buffer around 1 req/s free tier limit
@@ -138,6 +138,26 @@ class SemanticScholarSource:
 # Helpers
 # ---------------------------------------------------------------------------
 
+def _extract_authors(authors: list[dict[str, Any]] | None) -> list[str] | None:
+    if not authors:
+        return None
+    names: list[str] = []
+    for a in authors:
+        name = a.get("name")
+        if name:
+            names.append(name)
+    return names or None
+
+
+def _parse_date(raw: str | None) -> date | None:
+    if not raw:
+        return None
+    try:
+        return date.fromisoformat(raw)
+    except ValueError:
+        return None
+
+
 def _map_paper(p: dict[str, Any]) -> dict[str, Any]:
     ext = p.get("externalIds") or {}
     return {
@@ -147,6 +167,8 @@ def _map_paper(p: dict[str, Any]) -> dict[str, Any]:
         "title": p.get("title"),
         "abstract": p.get("abstract"),
         "oa_pdf_url": (p.get("openAccessPdf") or {}).get("url"),
+        "authors": _extract_authors(p.get("authors")),
+        "publication_date": _parse_date(p.get("publicationDate")),
         "discovered_from": "semantic_scholar",
         "metadata": {},
         "status": "discovered",
@@ -154,12 +176,5 @@ def _map_paper(p: dict[str, Any]) -> dict[str, Any]:
 
 
 def _max_pub_date(papers: list[dict[str, Any]]) -> date | None:
-    dates = []
-    for p in papers:
-        raw = p.get("publicationDate")
-        if raw:
-            try:
-                dates.append(date.fromisoformat(raw))
-            except ValueError:
-                pass
+    dates = [d for p in papers if (d := _parse_date(p.get("publicationDate")))]
     return max(dates) if dates else None

@@ -1,0 +1,3 @@
+pg_ctl: another server might be running; trying to start server anyway
+pg_ctl: PID file "/projectnb/mcnet/kevin/my_pgserver/postmaster.pid" does not exist
+Is server running?

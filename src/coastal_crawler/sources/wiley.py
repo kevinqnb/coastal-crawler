@@ -30,7 +30,7 @@ log = structlog.get_logger(__name__)
 _CROSSREF_URL = "https://api.crossref.org/works"
 _WILEY_TDM_URL = "https://api.wiley.com/onlinelibrary/tdm/v1/articles"
 _PAGE_SIZE = 200
-_SELECT = "DOI,title,abstract,published,link"
+_SELECT = "DOI,title,abstract,published,link,author"
 _DELAY = 0.5  # seconds between requests (~2 req/s, well within CrossRef polite pool)
 
 
@@ -125,6 +125,17 @@ def _normalize_issn(issn: str) -> str:
     return f"{cleaned[:4]}-{cleaned[4:]}" if len(cleaned) == 8 else issn.strip()
 
 
+def _extract_authors(authors: list[dict[str, Any]] | None) -> list[str] | None:
+    if not authors:
+        return None
+    names = []
+    for a in authors:
+        name = " ".join(p for p in (a.get("given"), a.get("family")) if p)
+        if name:
+            names.append(name)
+    return names or None
+
+
 def _map_item(item: dict[str, Any]) -> dict[str, Any]:
     doi = item.get("DOI") or None
     titles = item.get("title") or []
@@ -135,6 +146,8 @@ def _map_item(item: dict[str, Any]) -> dict[str, Any]:
         "title": titles[0] if titles else None,
         "abstract": _strip_jats(item.get("abstract")),
         "oa_pdf_url": _extract_tdm_url(item.get("link") or [], doi),
+        "authors": _extract_authors(item.get("author")),
+        "publication_date": _pub_date(item),
         "discovered_from": "wiley",
         "metadata": {},
         "status": "discovered",

@@ -66,8 +66,11 @@ MEAS_LM_PORT="${MEAS_LM_PORT:-8084}"
 python3 scripts/check_db.py
 
 # ---- Start the server in the background --------------------------------------
+# No gpu_id argument: this is a standalone single-GPU job, so SGE's own
+# CUDA_VISIBLE_DEVICES assignment for the allocated GPU should stand rather
+# than being overridden to a hardcoded physical device index.
 cd scripts
-./serve_model.sh MEAS_LM 0 &
+./serve_model.sh MEAS_LM &
 MEAS_LM_PID=$!
 
 # Kill the server when this script exits for any reason.
@@ -81,4 +84,4 @@ trap 'echo "Stopping vLLM server (PID $MEAS_LM_PID)..."; kill "$MEAS_LM_PID" 2>/
 # exiting the moment it catches up to a concurrently-running OCR job (see
 # scripts/submit_ocr_job.sh); --poll-interval controls how often it checks.
 cd "$REPO_DIR"
-coastal-crawler extract --batch-size 750 --poll-interval 60 --idle-timeout 1800
+coastal-crawler extract --batch-size 250 --poll-interval 60 --idle-timeout 1800

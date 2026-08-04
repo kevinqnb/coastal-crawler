@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from coastal_crawler.adapter import ExtractionResult
 from coastal_crawler.db import store
-from coastal_crawler.db.models import Extraction, Paper
+from coastal_crawler.db.models import Extraction, Paper, Vote
 
 
 # ---------------------------------------------------------------------------
@@ -676,3 +676,150 @@ class TestCountByStatus:
 
     def test_empty_db_returns_empty_dict(self, db_session: Session) -> None:
         assert store.count_by_status(db_session) == {}
+
+
+# ---------------------------------------------------------------------------
+# list_extractions / get_extraction (results website read path)
+# ---------------------------------------------------------------------------
+
+def _make_paper_with_extractions(session: Session, extraction_datas: list[dict]) -> Paper:
+    store.upsert_papers([make_paper(status="extracted")], session)
+    paper = session.scalars(select(Paper).order_by(Paper.id.desc())).first()
+    for data in extraction_datas:
+        store.insert_extraction(paper.id, make_extraction_result(data=data), session)
+    return paper
+
+
+class TestListExtractions:
+    def test_returns_rows_with_paper_metadata(self, db_session: Session) -> None:
+        paper = _make_paper_with_extractions(
+            db_session, [{"attribute": "salinity", "value": "28.4", "units": "PSU"}]
+        )
+        rows, total = store.list_extractions(db_session)
+        assert total == 1
+        assert rows[0].attribute == "salinity"
+        assert rows[0].value == "28.4"
+        assert rows[0].title == paper.title
+        assert rows[0].doi == paper.doi
+
+    def test_excludes_context_key(self, db_session: Session) -> None:
+        _make_paper_with_extractions(
+            db_session,
+            [{"attribute": "salinity", "value": "28.4", "units": "PSU", "context": "huge OCR blob"}],
+        )
+        rows, _ = store.list_extractions(db_session)
+        assert not hasattr(rows[0], "context")
+
+    def test_filters_by_attribute(self, db_session: Session) -> None:
+        _make_paper_with_extractions(
+            db_session,
+            [
+                {"attribute": "salinity", "value": "1", "units": None},
+                {"attribute": "nitrate", "value": "2", "units": None},
+            ],
+        )
+        rows, total = store.list_extractions(db_session, attribute="nitrate")
+        assert total == 1
+        assert rows[0].attribute == "nitrate"
+
+    def test_dedupes_repeated_extraction_passes(self, db_session: Session) -> None:
+        """Re-extraction accumulates rows (insert_extraction never overwrites);
+        the list view must collapse identical (paper, attribute, value, units)
+        measurements down to the latest row rather than showing duplicates."""
+        paper = _make_paper_with_extractions(
+            db_session, [{"attribute": "salinity", "value": "28.4", "units": "PSU"}]
+        )
+        second = store.insert_extraction(
+            paper.id,
+            make_extraction_result(data={"attribute": "salinity", "value": "28.4", "units": "PSU"}),
+            db_session,
+        )
+        rows, total = store.list_extractions(db_session)
+        assert total == 1
+        assert rows[0].id == second.id  # keeps the newer row
+
+    def test_pagination(self, db_session: Session) -> None:
+        _make_paper_with_extractions(
+            db_session,
+            [{"attribute": "salinity", "value": str(i), "units": None} for i in range(5)],
+        )
+        rows, total = store.list_extractions(db_session, page=1, page_size=2)
+        assert total == 5
+        assert len(rows) == 2
+
+
+class TestGetExtraction:
+    def test_returns_extraction_with_paper_and_context(self, db_session: Session) -> None:
+        paper = _make_paper_with_extractions(
+            db_session, [{"attribute": "salinity", "value": "28.4", "context": "the doc text"}]
+        )
+        extraction = db_session.scalars(select(Extraction)).one()
+        result = store.get_extraction(db_session, extraction.id)
+        assert result is not None
+        assert result.paper.id == paper.id
+        assert result.data["context"] == "the doc text"
+
+    def test_missing_id_returns_none(self, db_session: Session) -> None:
+        assert store.get_extraction(db_session, 999999) is None
+
+
+# ---------------------------------------------------------------------------
+# paper_ocr_context
+# ---------------------------------------------------------------------------
+
+class TestPaperOcrContext:
+    def test_roundtrip(self, db_session: Session) -> None:
+        store.upsert_papers([make_paper()], db_session)
+        paper = db_session.scalars(select(Paper).order_by(Paper.id.desc())).first()
+        store.upsert_paper_ocr_context(paper.id, "the full ocr text", db_session)
+        assert store.get_paper_ocr_context(db_session, paper.id) == "the full ocr text"
+
+    def test_missing_paper_returns_none(self, db_session: Session) -> None:
+        assert store.get_paper_ocr_context(db_session, 999999) is None
+
+    def test_upsert_overwrites_existing_context(self, db_session: Session) -> None:
+        """A re-extraction pass overwrites rather than duplicating rows —
+        `paper_ocr_context` holds one row per paper, not one per pass."""
+        store.upsert_papers([make_paper()], db_session)
+        paper = db_session.scalars(select(Paper).order_by(Paper.id.desc())).first()
+        store.upsert_paper_ocr_context(paper.id, "first pass text", db_session)
+        store.upsert_paper_ocr_context(paper.id, "second pass text", db_session)
+        assert store.get_paper_ocr_context(db_session, paper.id) == "second pass text"
+
+
+# ---------------------------------------------------------------------------
+# record_vote
+# ---------------------------------------------------------------------------
+
+class TestRecordVote:
+    def test_single_valid_vote(self, db_session: Session) -> None:
+        _make_paper_with_extractions(db_session, [{"attribute": "salinity", "value": "1"}])
+        extraction = db_session.scalars(select(Extraction)).one()
+        judgement = store.record_vote(db_session, extraction.id, True, "hash1")
+        assert judgement == "valid"
+        db_session.expire(extraction)
+        assert extraction.judgement == "valid"
+
+    def test_majority_wins(self, db_session: Session) -> None:
+        _make_paper_with_extractions(db_session, [{"attribute": "salinity", "value": "1"}])
+        extraction = db_session.scalars(select(Extraction)).one()
+        store.record_vote(db_session, extraction.id, True, "hash1")
+        store.record_vote(db_session, extraction.id, True, "hash2")
+        judgement = store.record_vote(db_session, extraction.id, False, "hash3")
+        assert judgement == "valid"
+
+    def test_tie_leaves_judgement_unresolved(self, db_session: Session) -> None:
+        _make_paper_with_extractions(db_session, [{"attribute": "salinity", "value": "1"}])
+        extraction = db_session.scalars(select(Extraction)).one()
+        store.record_vote(db_session, extraction.id, True, "hash1")
+        judgement = store.record_vote(db_session, extraction.id, False, "hash2")
+        assert judgement is None
+
+    def test_records_individual_vote_rows(self, db_session: Session) -> None:
+        _make_paper_with_extractions(db_session, [{"attribute": "salinity", "value": "1"}])
+        extraction = db_session.scalars(select(Extraction)).one()
+        store.record_vote(db_session, extraction.id, True, "hash1")
+        votes = db_session.scalars(select(Vote).where(Vote.extraction_id == extraction.id)).all()
+        assert len(votes) == 1
+        assert votes[0].vote is True
+        assert votes[0].voter_hash == "hash1"
