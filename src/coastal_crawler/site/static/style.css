@@ -37,6 +37,81 @@ body {
   margin: 0;
 }
 
+/* -------------------------------------------------- search box */
+
+.search-box {
+  position: relative;
+  padding: 0.75rem 1.5rem 0;
+  max-width: 420px;
+}
+
+#search-input {
+  width: 100%;
+  font-family: inherit;
+  font-size: 0.95rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--sea);
+  border-radius: 6px;
+  background: white;
+  color: var(--ink);
+}
+
+#search-input:focus {
+  outline: none;
+  border-color: var(--sea-deep);
+  box-shadow: 0 0 0 2px var(--sea-light);
+}
+
+.search-suggestions {
+  position: absolute;
+  top: 100%;
+  left: 1.5rem;
+  right: 1.5rem;
+  max-width: 420px;
+  margin-top: 0.25rem;
+  background: white;
+  border: 1px solid var(--sea);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(27, 73, 101, 0.15);
+  z-index: 10;
+  overflow: hidden;
+}
+
+.search-suggestion-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  padding: 0.5rem 0.75rem;
+  text-decoration: none;
+  color: var(--ink);
+  border-top: 1px solid var(--line);
+}
+
+.search-suggestion-item:first-child {
+  border-top: none;
+}
+
+.search-suggestion-item:hover,
+.search-suggestion-item.active {
+  background: var(--sea-light);
+}
+
+.search-suggestion-title {
+  font-style: italic;
+  font-size: 0.9rem;
+}
+
+.search-suggestion-meta {
+  color: var(--ink-soft);
+  font-size: 0.75rem;
+}
+
+.search-suggestion-empty {
+  padding: 0.5rem 0.75rem;
+  color: var(--ink-soft);
+  font-size: 0.85rem;
+}
+
 main {
   max-width: 900px;
   margin: 0 auto;
@@ -103,6 +178,42 @@ footer {
   border-color: var(--sea-deep);
 }
 
+.title-filter {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  width: 100%;
+}
+
+.title-filter input[type="text"] {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: inherit;
+  font-size: 0.85rem;
+  padding: 0.3rem 0.6rem;
+  border: 1px solid var(--sea);
+  border-radius: 6px;
+  background: white;
+  color: var(--ink);
+}
+
+.title-filter button {
+  font-family: inherit;
+  font-size: 0.85rem;
+  padding: 0.25rem 0.7rem;
+  border: 1px solid var(--sea);
+  border-radius: 999px;
+  background: var(--sea-light);
+  color: var(--sea-deep);
+  cursor: pointer;
+}
+
+.title-filter a {
+  font-size: 0.8rem;
+  color: var(--ink-soft);
+}
+
 .content {
   flex: 1;
   min-width: 0;
@@ -125,6 +236,20 @@ footer {
   color: var(--ink-soft);
   font-size: 0.9rem;
   white-space: nowrap;
+}
+
+.export-link {
+  font-size: 0.85rem;
+  color: var(--sea-deep);
+  text-decoration: none;
+  padding: 0.25rem 0.7rem;
+  border: 1px solid var(--sea);
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.export-link:hover {
+  background: var(--sea-light);
 }
 
 .section-divider {

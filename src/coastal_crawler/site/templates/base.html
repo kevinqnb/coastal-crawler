@@ -8,9 +8,14 @@
 </head>
 <body>
   <a class="site-title" href="/">Coastal Crawler 🦀</a>
+  <form class="search-box" action="/search" method="get" role="search" autocomplete="off">
+    <input type="search" name="q" id="search-input" placeholder="Search by title&hellip;" aria-label="Search papers by title">
+    <div id="search-suggestions" class="search-suggestions" hidden></div>
+  </form>
   <main>
     {% block content %}{% endblock %}
   </main>
   <footer>coastal-crawler &mdash; extracted measurements are model-generated; vote on whether each one looks right.</footer>
+  <script src="/static/search.js" defer></script>
 </body>
 </html>

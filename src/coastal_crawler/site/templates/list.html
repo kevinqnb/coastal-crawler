@@ -2,22 +2,32 @@
 {% block title %}coastal-crawler &mdash; measurements{% endblock %}
 {% block content %}
 
-{% macro qs(attr, eco) %}{% if attr %}attribute={{ attr | urlencode }}{% endif %}{% if attr and eco %}&{% endif %}{% if eco %}ecosystem_type={{ eco | urlencode }}{% endif %}{% endmacro %}
+{% macro qs(attr, eco, ttl) %}{% if attr %}attribute={{ attr | urlencode }}{% endif %}{% if attr and eco %}&{% endif %}{% if eco %}ecosystem_type={{ eco | urlencode }}{% endif %}{% if (attr or eco) and ttl %}&{% endif %}{% if ttl %}title={{ ttl | urlencode }}{% endif %}{% endmacro %}
 
 <div class="page-layout">
   <aside class="filters">
     <div class="filter-group">
+      <h3>title</h3>
+      <form method="get" action="/" class="title-filter">
+        <input type="text" name="title" value="{{ title or '' }}" placeholder="Filter by title&hellip;" aria-label="Filter by title">
+        {% if attribute %}<input type="hidden" name="attribute" value="{{ attribute }}">{% endif %}
+        {% if ecosystem_type %}<input type="hidden" name="ecosystem_type" value="{{ ecosystem_type }}">{% endif %}
+        <button type="submit">filter</button>
+        {% if title %}<a href="/?{{ qs(attribute, ecosystem_type, none) }}">clear</a>{% endif %}
+      </form>
+    </div>
+    <div class="filter-group">
       <h3>attribute</h3>
-      <a href="/?{{ qs(none, ecosystem_type) }}" class="{{ 'active' if not attribute }}">all</a>
+      <a href="/?{{ qs(none, ecosystem_type, title) }}" class="{{ 'active' if not attribute }}">all</a>
       {% for a in attributes %}
-      <a href="/?{{ qs(a, ecosystem_type) }}" class="{{ 'active' if a == attribute }}">{{ a | replace("_", " ") }}</a>
+      <a href="/?{{ qs(a, ecosystem_type, title) }}" class="{{ 'active' if a == attribute }}">{{ a | replace("_", " ") }}</a>
       {% endfor %}
     </div>
     <div class="filter-group">
       <h3>ecosystem type</h3>
-      <a href="/?{{ qs(attribute, none) }}" class="{{ 'active' if not ecosystem_type }}">all</a>
+      <a href="/?{{ qs(attribute, none, title) }}" class="{{ 'active' if not ecosystem_type }}">all</a>
       {% for e in ecosystem_types %}
-      <a href="/?{{ qs(attribute, e) }}" class="{{ 'active' if e == ecosystem_type }}">{{ e | replace("_", " ") }}</a>
+      <a href="/?{{ qs(attribute, e, title) }}" class="{{ 'active' if e == ecosystem_type }}">{{ e | replace("_", " ") }}</a>
       {% endfor %}
     </div>
   </aside>
@@ -25,7 +35,8 @@
   <div class="content">
     <div class="section-header">
       <h2 class="section-title">Extracted Data</h2>
-      <span class="count">{{ total }} measurement{{ 's' if total != 1 }}{% if attribute %} for {{ attribute | replace("_", " ") }}{% endif %}{% if ecosystem_type %} in {{ ecosystem_type | replace("_", " ") }}{% endif %}</span>
+      <span class="count">{{ total }} measurement{{ 's' if total != 1 }}{% if attribute %} for {{ attribute | replace("_", " ") }}{% endif %}{% if ecosystem_type %} in {{ ecosystem_type | replace("_", " ") }}{% endif %}{% if title %} matching &ldquo;{{ title }}&rdquo;{% endif %}</span>
+      <a class="export-link" href="/export.csv?{{ qs(attribute, ecosystem_type, title) }}">Export CSV</a>
     </div>
     <hr class="section-divider">
 
@@ -45,11 +56,11 @@
 
     <div class="pagination">
       <span>
-        {% if page > 1 %}<a href="/?page={{ page - 1 }}{% if attribute or ecosystem_type %}&{{ qs(attribute, ecosystem_type) }}{% endif %}">&larr; previous</a>{% endif %}
+        {% if page > 1 %}<a href="/?page={{ page - 1 }}{% if attribute or ecosystem_type or title %}&{{ qs(attribute, ecosystem_type, title) }}{% endif %}">&larr; previous</a>{% endif %}
       </span>
       <span>page {{ page }} of {{ total_pages }}</span>
       <span>
-        {% if page < total_pages %}<a href="/?page={{ page + 1 }}{% if attribute or ecosystem_type %}&{{ qs(attribute, ecosystem_type) }}{% endif %}">next &rarr;</a>{% endif %}
+        {% if page < total_pages %}<a href="/?page={{ page + 1 }}{% if attribute or ecosystem_type or title %}&{{ qs(attribute, ecosystem_type, title) }}{% endif %}">next &rarr;</a>{% endif %}
       </span>
     </div>
   </div>

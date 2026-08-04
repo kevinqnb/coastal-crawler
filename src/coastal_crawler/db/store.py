@@ -14,7 +14,7 @@ from __future__ import annotations
 from datetime import date, datetime, timezone
 from typing import Any
 
-from sqlalchemy import delete, func, select, text, update
+from sqlalchemy import case, delete, func, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session, selectinload
 
@@ -620,19 +620,26 @@ def papers_with_extractions(
 # Site queries (results website — read path)
 # ---------------------------------------------------------------------------
 
-def list_extractions(
+def _extraction_rows(
     session: Session,
-    page: int = 1,
-    page_size: int = 25,
+    *,
+    title: str | None = None,
     attribute: str | None = None,
     ecosystem_type: str | None = None,
+    paper_id: int | None = None,
+    limit: int | None = None,
+    offset: int = 0,
 ) -> tuple[list[Any], int]:
-    """Paginated (measurement, paper) rows for the results website's list view.
+    """Shared narrow+hydrate dedup query behind `list_extractions` and
+    `export_extractions`. `limit=None` returns every matching row
+    (unpaginated, for CSV export); a given `limit` paginates via `offset`.
 
     Deduped on (paper_id, attribute, value, units), keeping the highest `id`
     — extraction rows accumulate across re-extraction passes (see
     insert_extraction), so without this the same real-world measurement
-    would appear once per pass.
+    would appear once per pass. `paper_id` narrows to one paper's page
+    (site/app.py's paper_view) while reusing this same dedup — a
+    re-extracted paper is exactly where duplicate rows are most visible.
 
     Two-stage query, deliberately: every extraction row carries a ~55KB
     embedded copy of its paper's full OCR text (in `data->'context'`), and
@@ -643,14 +650,19 @@ def list_extractions(
     since the key itself is a JSONB expression. So stage 1 works out just
     the winning page's `id`s from a narrow projection (covered by this
     migration's `ix_extractions_dedup_key` index, so it never touches the
-    heap), and stage 2 hydrates only those ~25 ids with the full fields —
-    see migration b1c2d3e4f5a6 and its indexes for the counterpart.
+    heap), and stage 2 hydrates only those ids with the full fields — see
+    migration b1c2d3e4f5a6 and its indexes for the counterpart.
+
+    `title` (substring, case-insensitive, autoescaped — same as
+    `search_papers_by_title`) joins `Paper` into the narrow stage; the
+    other filters stay join-free when `title` is absent.
 
     Returns:
         (rows, total_count). Each row exposes .id, .paper_id, .attribute,
-        .value, .units, .entity_name, .event_date, .ecosystem_type,
-        .judgement, .confidence, .created_at, .title, .doi, .authors,
-        .publication_date.
+        .value, .units, .entity_name, .identifiers, .location, .latitude,
+        .longitude, .event_date, .sub_location, .additional_details,
+        .ecosystem_type, .judgement, .confidence, .created_at, .title,
+        .doi, .authors, .publication_date.
     """
     dedup_key = (
         Extraction.paper_id,
@@ -666,20 +678,23 @@ def list_extractions(
         Extraction.data["units"].astext,
         Extraction.created_at,
     )
+    if title:
+        narrow = narrow.join(Paper, Paper.id == Extraction.paper_id).where(
+            Paper.title.icontains(title, autoescape=True)
+        )
     if attribute:
         narrow = narrow.where(Extraction.data["attribute"].astext == attribute)
     if ecosystem_type:
         narrow = narrow.where(Extraction.data["ecosystem_type"].astext == ecosystem_type)
+    if paper_id is not None:
+        narrow = narrow.where(Extraction.paper_id == paper_id)
     deduped_ids = narrow.distinct(*dedup_key).order_by(*dedup_key, Extraction.id.desc()).subquery()
 
     total = session.execute(select(func.count()).select_from(deduped_ids)).scalar_one()
 
-    page_ids_stmt = (
-        select(deduped_ids.c.id)
-        .order_by(deduped_ids.c.created_at.desc())
-        .limit(page_size)
-        .offset((page - 1) * page_size)
-    )
+    page_ids_stmt = select(deduped_ids.c.id).order_by(deduped_ids.c.created_at.desc())
+    if limit is not None:
+        page_ids_stmt = page_ids_stmt.limit(limit).offset(offset)
     page_ids = list(session.scalars(page_ids_stmt).all())
     if not page_ids:
         return [], total
@@ -692,7 +707,13 @@ def list_extractions(
             Extraction.data["value"].astext.label("value"),
             Extraction.data["units"].astext.label("units"),
             Extraction.data["name"].astext.label("entity_name"),
+            Extraction.data["identifiers"].astext.label("identifiers"),
+            Extraction.data["location"].astext.label("location"),
+            Extraction.data["latitude"].astext.label("latitude"),
+            Extraction.data["longitude"].astext.label("longitude"),
             Extraction.data["date"].astext.label("event_date"),
+            Extraction.data["sub_location"].astext.label("sub_location"),
+            Extraction.data["additional_details"].astext.label("additional_details"),
             Extraction.data["ecosystem_type"].astext.label("ecosystem_type"),
             Extraction.judgement,
             Extraction.confidence,
@@ -710,6 +731,48 @@ def list_extractions(
     return rows, total
 
 
+def list_extractions(
+    session: Session,
+    page: int = 1,
+    page_size: int = 25,
+    title: str | None = None,
+    attribute: str | None = None,
+    ecosystem_type: str | None = None,
+    paper_id: int | None = None,
+) -> tuple[list[Any], int]:
+    """Paginated (measurement, paper) rows for the results website's list view.
+
+    See `_extraction_rows` for the dedup/query shape this wraps. `title`
+    combines with `attribute`/`ecosystem_type` via AND, same as those two
+    combine with each other today.
+    """
+    return _extraction_rows(
+        session,
+        title=title,
+        attribute=attribute,
+        ecosystem_type=ecosystem_type,
+        paper_id=paper_id,
+        limit=page_size,
+        offset=(page - 1) * page_size,
+    )
+
+
+def export_extractions(
+    session: Session,
+    title: str | None = None,
+    attribute: str | None = None,
+    ecosystem_type: str | None = None,
+) -> list[Any]:
+    """Every (measurement, paper) row matching the given filters, unpaginated
+    — for the results website's CSV export. Same dedup and row shape as
+    `list_extractions` (see `_extraction_rows`), just without a page limit.
+    """
+    rows, _total = _extraction_rows(
+        session, title=title, attribute=attribute, ecosystem_type=ecosystem_type
+    )
+    return rows
+
+
 def list_ecosystem_types(session: Session) -> list[str]:
     """Distinct non-null ecosystem types present across all extractions, for the site's facet filter."""
     stmt = (
@@ -719,6 +782,35 @@ def list_ecosystem_types(session: Session) -> list[str]:
         .order_by(Extraction.data["ecosystem_type"].astext)
     )
     return list(session.scalars(stmt).all())
+
+
+def get_paper(session: Session, paper_id: int) -> Paper | None:
+    """Return one paper by id, for the site's paper-detail page header."""
+    return session.get(Paper, paper_id)
+
+
+def search_papers_by_title(session: Session, query: str, limit: int) -> list[Any]:
+    """Title-search papers that have at least one extraction, for the site's search box.
+
+    `icontains`/`istartswith` are used with `autoescape=True` so a user typing
+    a literal `%` or `_` doesn't turn into a SQL wildcard — SQLAlchemy's
+    plain `.ilike()` does not escape these. Excludes papers with zero
+    extractions (e.g. still `discovered`/`irrelevant`/`ocr_failed`) since a
+    search result is meant to lead to recorded measurements. Ranked
+    prefix-match-first, then shortest title, so results don't look like they
+    reshuffle randomly across keystrokes — there's no trigram index backing
+    this (see WEBSITE.md; deliberately skipped at the current ~250-paper
+    scale).
+    """
+    prefix_rank = case((Paper.title.istartswith(query, autoescape=True), 0), else_=1)
+    stmt = (
+        select(Paper.id, Paper.title, Paper.authors, Paper.publication_date, Paper.doi)
+        .where(Paper.title.icontains(query, autoescape=True))
+        .where(Paper.extractions.any())
+        .order_by(prefix_rank, func.length(Paper.title))
+        .limit(limit)
+    )
+    return list(session.execute(stmt).all())
 
 
 def get_extraction(session: Session, extraction_id: int) -> Extraction | None:

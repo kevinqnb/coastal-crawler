@@ -9,15 +9,18 @@ extraction row rather than requiring OCR_DIR filesystem access.
 
 from __future__ import annotations
 
+import csv
 import hashlib
+import io
 import math
 import re
 from pathlib import Path
+from typing import Any
 
 import markdown as md
 import nh3
 from fastapi import FastAPI, Form, HTTPException, Request
-from fastapi.responses import RedirectResponse, Response
+from fastapi.responses import JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -33,6 +36,42 @@ app.mount("/static", StaticFiles(directory=_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=_DIR / "templates")
 
 _PAGE_SIZE = 25
+# Search box: dropdown suggestions are capped tighter than the full /search
+# results page since they render inline as the user types.
+_SEARCH_SUGGESTION_LIMIT = 8
+_SEARCH_RESULTS_LIMIT = 50
+_SEARCH_MIN_CHARS = 2
+
+# Column order for /export.csv — see notes/coastal-crawler/builds/
+# 2026-08-04-csv-export-01.md for the agreed set. Header names on the left;
+# the matching attribute on an `_extraction_rows` row (or, for "authors", a
+# small transform) on the right.
+_CSV_COLUMNS: list[tuple[str, str]] = [
+    ("attribute", "attribute"),
+    ("value", "value"),
+    ("units", "units"),
+    ("name", "entity_name"),
+    ("identifiers", "identifiers"),
+    ("ecosystem_type", "ecosystem_type"),
+    ("location", "location"),
+    ("latitude", "latitude"),
+    ("longitude", "longitude"),
+    ("date", "event_date"),
+    ("sub_location", "sub_location"),
+    ("additional_details", "additional_details"),
+    ("judgement", "judgement"),
+    ("confidence", "confidence"),
+    ("title", "title"),
+    ("authors", "authors"),
+    ("doi", "doi"),
+    ("publication_date", "publication_date"),
+]
+
+_SLUG_RE = re.compile(r"[^a-z0-9]+")
+
+
+def _slugify(value: str) -> str:
+    return _SLUG_RE.sub("_", value.lower()).strip("_")
 
 # Paper titles from discovery APIs (Crossref/OpenAlex) sometimes embed HTML
 # for genus/species italics (e.g. "<i>Trichodesmium</i>") or chemical
@@ -132,6 +171,7 @@ def _split_model_version(model_version: str) -> tuple[str | None, str | None]:
 def list_view(
     request: Request,
     page: int = 1,
+    title: str | None = None,
     attribute: str | None = None,
     ecosystem_type: str | None = None,
 ) -> Response:
@@ -141,6 +181,7 @@ def list_view(
             session,
             page=page,
             page_size=_PAGE_SIZE,
+            title=title,
             attribute=attribute,
             ecosystem_type=ecosystem_type,
         )
@@ -154,6 +195,7 @@ def list_view(
             "page": page,
             "total_pages": total_pages,
             "total": total,
+            "title": title,
             "attribute": attribute,
             "attributes": sorted(ATTRIBUTE_INFO_DICT.keys()),
             "ecosystem_type": ecosystem_type,
@@ -161,6 +203,102 @@ def list_view(
             "row_offset": (page - 1) * _PAGE_SIZE,
         },
     )
+
+
+@app.get("/export.csv")
+def export_csv(
+    title: str | None = None,
+    attribute: str | None = None,
+    ecosystem_type: str | None = None,
+) -> Response:
+    """Every measurement matching the list view's current filter, as CSV
+    (unpaginated) — see _CSV_COLUMNS for the agreed column set/order."""
+    with get_session() as session:
+        rows = store.export_extractions(
+            session, title=title, attribute=attribute, ecosystem_type=ecosystem_type
+        )
+
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(name for name, _attr in _CSV_COLUMNS)
+    for r in rows:
+        row = []
+        for _name, attr in _CSV_COLUMNS:
+            value = getattr(r, attr)
+            row.append(", ".join(value) if attr == "authors" and value else value)
+        writer.writerow(row)
+
+    name_parts = [_slugify(p) for p in (attribute, ecosystem_type) if p]
+    filename = "measurements_" + "_".join(name_parts) + ".csv" if name_parts else "measurements.csv"
+    return Response(
+        content=buffer.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.get("/search.json")
+def search_json(q: str = "") -> Response:
+    """Live suggestions for the header search box's dropdown."""
+    q = q.strip()
+    if len(q) < _SEARCH_MIN_CHARS:
+        return JSONResponse([])
+    with get_session() as session:
+        rows = store.search_papers_by_title(session, q, _SEARCH_SUGGESTION_LIMIT)
+        results = [
+            {
+                "id": paper_id,
+                # Sanitized/title-cased server-side (same as list/detail pages)
+                # so the frontend can insert it via innerHTML directly.
+                "title": _render_title(title) if title else "(untitled)",
+                "authors": authors or [],
+                "year": publication_date.year if publication_date else None,
+            }
+            for paper_id, title, authors, publication_date, _doi in rows
+        ]
+    return JSONResponse(results)
+
+
+@app.get("/search")
+def search_view(request: Request, q: str = "") -> Response:
+    """Full-page search results — also the no-JS fallback for the search form."""
+    q = q.strip()
+    rows: list[Any] = []
+    if len(q) >= _SEARCH_MIN_CHARS:
+        with get_session() as session:
+            rows = store.search_papers_by_title(session, q, _SEARCH_RESULTS_LIMIT)
+    return templates.TemplateResponse(
+        request,
+        "search.html",
+        {"q": q, "rows": rows, "min_chars": _SEARCH_MIN_CHARS},
+    )
+
+
+@app.get("/papers/{paper_id}")
+def paper_view(request: Request, paper_id: int, page: int = 1) -> Response:
+    page = max(page, 1)
+    with get_session() as session:
+        paper = store.get_paper(session, paper_id)
+        if paper is None:
+            raise HTTPException(status_code=404, detail="Paper not found")
+        rows, total = store.list_extractions(
+            session, page=page, page_size=_PAGE_SIZE, paper_id=paper_id
+        )
+        total_pages = max(1, math.ceil(total / _PAGE_SIZE))
+        # Rendered inside the session block — the template touches `paper`'s
+        # ORM attributes, which need a live session (see detail_view below).
+        return templates.TemplateResponse(
+            request,
+            "paper.html",
+            {
+                "paper": paper,
+                "rows": rows,
+                "page": page,
+                "total_pages": total_pages,
+                "total": total,
+                "row_offset": (page - 1) * _PAGE_SIZE,
+            },
+        )
 
 
 @app.get("/extraction/{extraction_id}")

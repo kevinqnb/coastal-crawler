@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}Search{% if q %}: {{ q }}{% endif %} &mdash; coastal-crawler{% endblock %}
+{% block content %}
+
+<a class="back-link" href="/">&larr; all measurements</a>
+
+<div class="section-header">
+  <h2 class="section-title">Search Results</h2>
+  {% if q %}<span class="count">{{ rows | length }} paper{{ 's' if (rows | length) != 1 }} matching &ldquo;{{ q }}&rdquo;</span>{% endif %}
+</div>
+<hr class="section-divider">
+
+{% if not q %}
+<p>Type a paper title above to search.</p>
+{% elif q | length < min_chars %}
+<p>Keep typing &mdash; at least {{ min_chars }} characters needed to search.</p>
+{% else %}
+  {% for r in rows %}
+  <div class="datapoint">
+    <p><a class="data value" href="/papers/{{ r.id }}">{{ (r.title | render_title | safe) if r.title else "(untitled)" }}</a></p>
+    <p><span class="label">Authors:</span> {{ r.authors | join(", ") if r.authors else "NA" }}</p>
+    <p><span class="label">DOI:</span> {% if r.doi %}<a href="https://doi.org/{{ r.doi }}">{{ r.doi }}</a>{% else %}NA{% endif %}</p>
+  </div>
+  {% else %}
+  <p>No papers with recorded measurements match &ldquo;{{ q }}&rdquo;.</p>
+  {% endfor %}
+{% endif %}
+
+{% endblock %}

@@ -690,6 +690,16 @@ def _make_paper_with_extractions(session: Session, extraction_datas: list[dict])
     return paper
 
 
+def _make_paper_with_extractions_titled(
+    session: Session, title: str, extraction_datas: list[dict]
+) -> Paper:
+    store.upsert_papers([make_paper(status="extracted", title=title)], session)
+    paper = session.scalars(select(Paper).order_by(Paper.id.desc())).first()
+    for data in extraction_datas:
+        store.insert_extraction(paper.id, make_extraction_result(data=data), session)
+    return paper
+
+
 class TestListExtractions:
     def test_returns_rows_with_paper_metadata(self, db_session: Session) -> None:
         paper = _make_paper_with_extractions(
@@ -747,6 +757,146 @@ class TestListExtractions:
         assert total == 5
         assert len(rows) == 2
 
+    def test_filters_by_paper_id(self, db_session: Session) -> None:
+        paper_a = _make_paper_with_extractions(
+            db_session, [{"attribute": "salinity", "value": "1", "units": None}]
+        )
+        _make_paper_with_extractions(
+            db_session, [{"attribute": "salinity", "value": "2", "units": None}]
+        )
+        rows, total = store.list_extractions(db_session, paper_id=paper_a.id)
+        assert total == 1
+        assert rows[0].paper_id == paper_a.id
+
+    def test_paper_id_filter_still_dedupes(self, db_session: Session) -> None:
+        """A single paper's page is exactly where a re-extraction pass's
+        duplicate rows would be most visible — confirm dedup still applies."""
+        paper = _make_paper_with_extractions(
+            db_session, [{"attribute": "salinity", "value": "28.4", "units": "PSU"}]
+        )
+        second = store.insert_extraction(
+            paper.id,
+            make_extraction_result(data={"attribute": "salinity", "value": "28.4", "units": "PSU"}),
+            db_session,
+        )
+        rows, total = store.list_extractions(db_session, paper_id=paper.id)
+        assert total == 1
+        assert rows[0].id == second.id
+
+    def test_filters_by_title(self, db_session: Session) -> None:
+        uid = _uid()
+        matching = _make_paper_with_extractions_titled(
+            db_session, f"Nutrient Cycling in {uid} Marshes",
+            [{"attribute": "salinity", "value": "1", "units": None}],
+        )
+        _make_paper_with_extractions_titled(
+            db_session, f"Unrelated Paper {_uid()}",
+            [{"attribute": "salinity", "value": "2", "units": None}],
+        )
+        rows, total = store.list_extractions(db_session, title=uid)
+        assert total == 1
+        assert rows[0].paper_id == matching.id
+
+    def test_title_combines_with_attribute_and_ecosystem_type(self, db_session: Session) -> None:
+        uid = _uid()
+        _make_paper_with_extractions_titled(
+            db_session, f"{uid} Salt Marsh Study",
+            [
+                {"attribute": "salinity", "value": "1", "units": None, "ecosystem_type": "salt_marsh"},
+                {"attribute": "nitrate", "value": "2", "units": None, "ecosystem_type": "salt_marsh"},
+            ],
+        )
+        rows, total = store.list_extractions(
+            db_session, title=uid, attribute="salinity", ecosystem_type="salt_marsh"
+        )
+        assert total == 1
+        assert rows[0].attribute == "salinity"
+
+    def test_hydrates_entity_and_event_fields(self, db_session: Session) -> None:
+        """CSV export needs these six fields alongside the ones already
+        hydrated — see notes/coastal-crawler/builds/2026-08-04-csv-export-01.md."""
+        _make_paper_with_extractions(
+            db_session,
+            [{
+                "attribute": "salinity", "value": "28.4", "units": "PSU",
+                "name": "Site A", "identifiers": "SITE-1",
+                "ecosystem_type": "estuary", "location": "Bay X",
+                "latitude": 41.5, "longitude": -70.6,
+                "date": "2020", "sub_location": "T1",
+                "additional_details": "high tide",
+            }],
+        )
+        rows, _ = store.list_extractions(db_session)
+        r = rows[0]
+        assert r.identifiers == "SITE-1"
+        assert r.location == "Bay X"
+        assert r.latitude == "41.5"
+        assert r.longitude == "-70.6"
+        assert r.sub_location == "T1"
+        assert r.additional_details == "high tide"
+
+
+class TestExportExtractions:
+    def test_returns_all_matching_rows_unpaginated(self, db_session: Session) -> None:
+        _make_paper_with_extractions(
+            db_session,
+            [{"attribute": "salinity", "value": str(i), "units": None} for i in range(30)],
+        )
+        rows = store.export_extractions(db_session)
+        assert len(rows) == 30
+
+    def test_dedupes_like_list_extractions(self, db_session: Session) -> None:
+        paper = _make_paper_with_extractions(
+            db_session, [{"attribute": "salinity", "value": "28.4", "units": "PSU"}]
+        )
+        second = store.insert_extraction(
+            paper.id,
+            make_extraction_result(data={"attribute": "salinity", "value": "28.4", "units": "PSU"}),
+            db_session,
+        )
+        rows = store.export_extractions(db_session)
+        assert len(rows) == 1
+        assert rows[0].id == second.id
+
+    def test_filters_by_title_attribute_ecosystem_type(self, db_session: Session) -> None:
+        uid = _uid()
+        paper = _make_paper_with_extractions_titled(
+            db_session, f"{uid} Coastal Study",
+            [{"attribute": "salinity", "value": "1", "units": None, "ecosystem_type": "reef"}],
+        )
+        _make_paper_with_extractions_titled(
+            db_session, f"Other {uid} Paper",
+            [{"attribute": "nitrate", "value": "2", "units": None, "ecosystem_type": "marsh"}],
+        )
+        rows = store.export_extractions(
+            db_session, title=uid, attribute="salinity", ecosystem_type="reef"
+        )
+        assert len(rows) == 1
+        assert rows[0].paper_id == paper.id
+
+    def test_row_includes_all_csv_fields(self, db_session: Session) -> None:
+        _make_paper_with_extractions(
+            db_session,
+            [{
+                "attribute": "salinity", "value": "28.4", "units": "PSU",
+                "name": "Site A", "identifiers": "SITE-1",
+                "ecosystem_type": "estuary", "location": "Bay X",
+                "latitude": 41.5, "longitude": -70.6,
+                "date": "2020", "sub_location": "T1",
+                "additional_details": "high tide",
+            }],
+        )
+        rows = store.export_extractions(db_session)
+        r = rows[0]
+        for field in (
+            "attribute", "value", "units", "entity_name", "identifiers",
+            "ecosystem_type", "location", "latitude", "longitude",
+            "event_date", "sub_location", "additional_details",
+            "judgement", "confidence", "title", "doi", "authors",
+            "publication_date",
+        ):
+            assert hasattr(r, field)
+
 
 class TestGetExtraction:
     def test_returns_extraction_with_paper_and_context(self, db_session: Session) -> None:
@@ -761,6 +911,74 @@ class TestGetExtraction:
 
     def test_missing_id_returns_none(self, db_session: Session) -> None:
         assert store.get_extraction(db_session, 999999) is None
+
+
+class TestGetPaper:
+    def test_returns_paper_by_id(self, db_session: Session) -> None:
+        paper = _make_paper_with_extractions(
+            db_session, [{"attribute": "salinity", "value": "1", "units": None}]
+        )
+        result = store.get_paper(db_session, paper.id)
+        assert result is not None
+        assert result.id == paper.id
+
+    def test_missing_id_returns_none(self, db_session: Session) -> None:
+        assert store.get_paper(db_session, 999999) is None
+
+
+class TestSearchPapersByTitle:
+    def test_matches_substring_case_insensitive(self, db_session: Session) -> None:
+        uid = _uid()
+        paper = _make_paper_with_extractions_titled(
+            db_session, f"Nutrient Cycling in {uid} Salt Marshes",
+            [{"attribute": "salinity", "value": "1", "units": None}],
+        )
+        rows = store.search_papers_by_title(db_session, uid.lower(), limit=10)
+        assert [r.id for r in rows] == [paper.id]
+
+    def test_percent_and_underscore_are_literal_not_wildcards(self, db_session: Session) -> None:
+        uid = _uid()
+        # LIKE treats "_" as "match any one character" unless escaped — without
+        # autoescape, searching "Foo_Bar" would also match "FooXBar".
+        match = _make_paper_with_extractions_titled(
+            db_session, f"Foo_Bar {uid} Baseline",
+            [{"attribute": "salinity", "value": "1", "units": None}],
+        )
+        _make_paper_with_extractions_titled(
+            db_session, f"FooXBar {uid} Baseline",
+            [{"attribute": "salinity", "value": "1", "units": None}],
+        )
+        rows = store.search_papers_by_title(db_session, f"Foo_Bar {uid}", limit=10)
+        assert [r.id for r in rows] == [match.id]
+
+    def test_excludes_papers_without_extractions(self, db_session: Session) -> None:
+        uid = _uid()
+        store.upsert_papers([make_paper(title=f"Unextracted {uid} Paper")], db_session)
+        rows = store.search_papers_by_title(db_session, uid, limit=10)
+        assert rows == []
+
+    def test_prefix_match_ranked_first(self, db_session: Session) -> None:
+        uid = _uid()
+        prefix = _make_paper_with_extractions_titled(
+            db_session, f"{uid} Coastal Erosion Study",
+            [{"attribute": "salinity", "value": "1", "units": None}],
+        )
+        substring = _make_paper_with_extractions_titled(
+            db_session, f"A Study on {uid} Coastal Erosion",
+            [{"attribute": "salinity", "value": "1", "units": None}],
+        )
+        rows = store.search_papers_by_title(db_session, uid, limit=10)
+        assert [r.id for r in rows] == [prefix.id, substring.id]
+
+    def test_limit_respected(self, db_session: Session) -> None:
+        uid = _uid()
+        for i in range(3):
+            _make_paper_with_extractions_titled(
+                db_session, f"{uid} Paper {i}",
+                [{"attribute": "salinity", "value": "1", "units": None}],
+            )
+        rows = store.search_papers_by_title(db_session, uid, limit=2)
+        assert len(rows) == 2
 
 
 # ---------------------------------------------------------------------------
