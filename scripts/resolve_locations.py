@@ -233,18 +233,25 @@ def main() -> None:
 
         coord_rows: list[tuple[int, str | None, float, float]] = []
         nocoord_rows: list[tuple[int, str | None]] = []
+        partial_pair_count = 0
         for ext_id, name, lat_raw, lon_raw in rows:
             lat = _parse_coord(lat_raw, ext_id, "latitude")
             lon = _parse_coord(lon_raw, ext_id, "longitude")
             if lat is None or lon is None:
+                # A partial pair (one present, one absent) is treated as "no
+                # coordinates" rather than raising — confirmed live-data
+                # scale (336/16375 extraction rows) after this originally
+                # raised, see notes/coastal-crawler/builds/
+                # 2026-08-11-location-resolution-01.md. The lone coordinate
+                # is discarded, not guessed at; the row still routes through
+                # name-matching.
                 if lat is not None or lon is not None:
-                    raise ValueError(
-                        f"extraction {ext_id}: latitude/longitude must both be present or "
-                        f"both absent (got latitude={lat_raw!r}, longitude={lon_raw!r})"
-                    )
+                    partial_pair_count += 1
                 nocoord_rows.append((ext_id, name))
             else:
                 coord_rows.append((ext_id, name, lat, lon))
+        if partial_pair_count:
+            log.warning("partial_coordinate_pairs_treated_as_no_coordinates", count=partial_pair_count)
 
         coord_locations, row_to_location = _cluster_by_coordinates(
             coord_rows, settings.location_distance_threshold_km

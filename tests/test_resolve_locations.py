@@ -291,9 +291,26 @@ class TestFailLoud:
         with pytest.raises(ValueError, match="unparseable"):
             resolve_locations.main()
 
-    def test_partial_coordinates_raise(self, resolve_db: Engine) -> None:
+    def test_partial_coordinates_treated_as_no_coordinates(self, resolve_db: Engine) -> None:
+        """A row with only one of latitude/longitude present is routed
+        through name-matching, not raised — confirmed against live data
+        (336/16375 extraction rows had exactly one of the two set; see
+        notes/coastal-crawler/builds/2026-08-11-location-resolution-01.md).
+        The lone coordinate is discarded, not guessed at."""
         paper_id = _make_paper(resolve_db)
-        _insert_extraction(resolve_db, paper_id, {"latitude": "10.0"})  # no longitude
+        e1 = _insert_extraction(
+            resolve_db, paper_id, {"latitude": "10.0", "name": "Cedar Marsh"}
+        )  # no longitude
+        e2 = _insert_extraction(
+            resolve_db, paper_id, {"longitude": "-70.0", "name": "Cedar Marsh"}
+        )  # no latitude
 
-        with pytest.raises(ValueError, match="both be present or both absent"):
-            resolve_locations.main()
+        resolve_locations.main()
+
+        ext1, ext2 = _extraction(resolve_db, e1), _extraction(resolve_db, e2)
+        loc1, loc2 = _location(resolve_db, ext1.location_id), _location(resolve_db, ext2.location_id)
+        # Same normalized name, both coordinate-less -> merge via the name path.
+        assert ext1.location_id == ext2.location_id
+        assert loc1.resolution_method == "name"
+        assert loc1.latitude is None
+        assert loc1.longitude is None
