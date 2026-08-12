@@ -26,6 +26,7 @@ import structlog
 from coastal_crawler.adapter import MeasurementAdapter, StubMeasurementAdapter
 from coastal_crawler.db import store
 from coastal_crawler.db.engine import get_session
+from coastal_crawler.site.snippets import find_snippet
 
 log = structlog.get_logger(__name__)
 
@@ -133,7 +134,23 @@ def run_worker(
                     # measurement record — see PaperOcrContext's docstring.
                     store.upsert_paper_ocr_context(paper_id, ocr_text, session)
                     for result in outcome:
-                        store.insert_extraction(paper_id, result, session)
+                        # find_snippet() is the same heuristic site/app.py's
+                        # detail_view calls live, run once here at write
+                        # time instead of per page-render (see
+                        # 2026-08-11-page-number-persistence-01).
+                        snippet = find_snippet(
+                            ocr_text,
+                            result.data.get("value"),
+                            result.data.get("attribute"),
+                            result.data.get("units"),
+                        )
+                        store.insert_extraction(
+                            paper_id,
+                            result,
+                            session,
+                            page_number=snippet.page_number,
+                            page_matched=snippet.matched,
+                        )
                     store.mark_extracted(paper_id, session)
                     extracted += 1
                     log.info("paper_extracted", paper_id=paper_id, measurements=len(outcome))

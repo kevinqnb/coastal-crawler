@@ -580,6 +580,22 @@ class TestInsertExtraction:
         )
         assert count == 3
 
+    def test_page_number_and_matched_default_to_none(self, db_session: Session) -> None:
+        """Call sites that don't compute find_snippet() (e.g. this test file
+        itself) must keep working — the columns are nullable."""
+        paper_id = self._paper_id(db_session)
+        extraction = store.insert_extraction(paper_id, make_extraction_result(), db_session)
+        assert extraction.page_number is None
+        assert extraction.page_matched is None
+
+    def test_stores_page_number_and_matched(self, db_session: Session) -> None:
+        paper_id = self._paper_id(db_session)
+        extraction = store.insert_extraction(
+            paper_id, make_extraction_result(), db_session, page_number=7, page_matched=True
+        )
+        assert extraction.page_number == 7
+        assert extraction.page_matched is True
+
 
 # ---------------------------------------------------------------------------
 # Watermarks
@@ -834,6 +850,72 @@ class TestListExtractions:
         assert r.longitude == "-70.6"
         assert r.sub_location == "T1"
         assert r.additional_details == "high tide"
+
+
+class TestPagesForPaper:
+    def _insert(
+        self, session: Session, paper_id: int, page_number: int | None, **data_kwargs
+    ) -> Extraction:
+        data = {"attribute": "salinity", "value": _uid(), "units": "PSU", **data_kwargs}
+        return store.insert_extraction(
+            paper_id,
+            make_extraction_result(data=data),
+            session,
+            page_number=page_number,
+            page_matched=True,
+        )
+
+    def test_groups_and_counts_by_page(self, db_session: Session) -> None:
+        paper = _make_paper_with_extractions(db_session, [])
+        self._insert(db_session, paper.id, page_number=1)
+        self._insert(db_session, paper.id, page_number=1)
+        self._insert(db_session, paper.id, page_number=2)
+        pages = store.pages_for_paper(db_session, paper.id)
+        assert pages == [(1, 2), (2, 1)]
+
+    def test_null_page_number_sorts_last(self, db_session: Session) -> None:
+        paper = _make_paper_with_extractions(db_session, [])
+        self._insert(db_session, paper.id, page_number=None)
+        self._insert(db_session, paper.id, page_number=1)
+        pages = store.pages_for_paper(db_session, paper.id)
+        assert pages == [(1, 1), (None, 1)]
+
+    def test_dedupes_repeated_extraction_pass(self, db_session: Session) -> None:
+        """Same (attribute, value, units) re-extracted must not double-count
+        its page — mirrors _extraction_rows' dedup, see
+        test_dedupes_repeated_extraction_passes above."""
+        paper = _make_paper_with_extractions(db_session, [])
+        self._insert(db_session, paper.id, page_number=1, attribute="salinity", value="28.4")
+        self._insert(db_session, paper.id, page_number=1, attribute="salinity", value="28.4")
+        pages = store.pages_for_paper(db_session, paper.id)
+        assert pages == [(1, 1)]
+
+    def test_scoped_to_one_paper(self, db_session: Session) -> None:
+        paper_a = _make_paper_with_extractions(db_session, [])
+        paper_b = _make_paper_with_extractions(db_session, [])
+        self._insert(db_session, paper_a.id, page_number=1)
+        self._insert(db_session, paper_b.id, page_number=1)
+        self._insert(db_session, paper_b.id, page_number=2)
+        assert store.pages_for_paper(db_session, paper_a.id) == [(1, 1)]
+        assert store.pages_for_paper(db_session, paper_b.id) == [(1, 1), (2, 1)]
+
+    def test_filters_by_attribute(self, db_session: Session) -> None:
+        paper = _make_paper_with_extractions(db_session, [])
+        self._insert(db_session, paper.id, page_number=1, attribute="salinity")
+        self._insert(db_session, paper.id, page_number=2, attribute="nitrate")
+        assert store.pages_for_paper(db_session, paper.id, attribute="nitrate") == [(2, 1)]
+
+    def test_filters_by_ecosystem_type(self, db_session: Session) -> None:
+        paper = _make_paper_with_extractions(db_session, [])
+        self._insert(db_session, paper.id, page_number=1, ecosystem_type="salt_marsh")
+        self._insert(db_session, paper.id, page_number=2, ecosystem_type="estuary")
+        assert store.pages_for_paper(
+            db_session, paper.id, ecosystem_type="estuary"
+        ) == [(2, 1)]
+
+    def test_empty_paper_returns_empty_list(self, db_session: Session) -> None:
+        paper = _make_paper_with_extractions(db_session, [])
+        assert store.pages_for_paper(db_session, paper.id) == []
 
 
 class TestExportExtractions:

@@ -484,11 +484,19 @@ def insert_extraction(
     paper_id: int,
     result: ExtractionResult,
     session: Session,
+    page_number: int | None = None,
+    page_matched: bool | None = None,
 ) -> Extraction:
     """Insert a single extraction result row.
 
     Always adds a new row — never overwrites — so re-running with a new model
     version accumulates rows without discarding prior results.
+
+    `page_number`/`page_matched` are the site's find_snippet() heuristic
+    result — not part of `ExtractionResult` because they're derived by the
+    caller (worker.py) from the paper's OCR text, not produced by the
+    extraction adapter itself. Default to None so existing call sites that
+    don't compute them still work.
 
     Returns:
         The flushed (but not yet committed) Extraction object.
@@ -502,6 +510,8 @@ def insert_extraction(
         provenance=result.provenance,
         latitude=result.latitude,
         longitude=result.longitude,
+        page_number=page_number,
+        page_matched=page_matched,
     )
     session.add(extraction)
     session.flush()
@@ -755,6 +765,53 @@ def list_extractions(
         limit=page_size,
         offset=(page - 1) * page_size,
     )
+
+
+def pages_for_paper(
+    session: Session,
+    paper_id: int,
+    attribute: str | None = None,
+    ecosystem_type: str | None = None,
+) -> list[Any]:
+    """Rows of (page_number, count) for one paper's extractions, grouped and
+    ordered by page. Each row supports `[0]`/`[1]` (or `.page_number`/
+    `.count` via SQLAlchemy's Row) access to (page_number: int | None,
+    count: int) — typed `list[Any]` to match `_extraction_rows`' row typing
+    elsewhere in this module.
+
+    Reads the stored `page_number` column directly — no live find_snippet()
+    calls (see migration e4f5a6b7c8d9 / worker.py). Uses the same
+    `DISTINCT ON (paper_id, attribute, value, units)` dedup key as
+    `_extraction_rows` so a paper re-extracted with a new model version
+    doesn't double-count a page. `page_number=None` (find_snippet() found no
+    page tags at all) sorts last.
+    """
+    dedup_key = (
+        Extraction.paper_id,
+        Extraction.data["attribute"].astext,
+        Extraction.data["value"].astext,
+        Extraction.data["units"].astext,
+    )
+    narrow = select(
+        Extraction.id,
+        Extraction.page_number,
+        Extraction.paper_id,
+        Extraction.data["attribute"].astext,
+        Extraction.data["value"].astext,
+        Extraction.data["units"].astext,
+    ).where(Extraction.paper_id == paper_id)
+    if attribute:
+        narrow = narrow.where(Extraction.data["attribute"].astext == attribute)
+    if ecosystem_type:
+        narrow = narrow.where(Extraction.data["ecosystem_type"].astext == ecosystem_type)
+    deduped = narrow.distinct(*dedup_key).order_by(*dedup_key, Extraction.id.desc()).subquery()
+
+    stmt = (
+        select(deduped.c.page_number, func.count())
+        .group_by(deduped.c.page_number)
+        .order_by(deduped.c.page_number.asc().nulls_last())
+    )
+    return list(session.execute(stmt).all())
 
 
 def export_extractions(

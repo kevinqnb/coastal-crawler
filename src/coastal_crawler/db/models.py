@@ -73,6 +73,12 @@ class Extraction(Base):
     provenance: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     latitude: Mapped[float | None] = mapped_column(Double)
     longitude: Mapped[float | None] = mapped_column(Double)
+    # site/snippets.py's find_snippet() heuristic result, computed once at
+    # insert time (worker.py) instead of live per request. NULL until
+    # scripts/backfill_page_numbers.py runs for rows written before this
+    # column existed, or if find_snippet() found no page tags to search.
+    page_number: Mapped[int | None] = mapped_column(Integer)
+    page_matched: Mapped[bool | None] = mapped_column(Boolean)
     # Majority vote outcome ('valid'/'invalid'), recomputed from `votes` on
     # every new vote. NULL until at least one vote is cast.
     judgement: Mapped[str | None] = mapped_column(String)

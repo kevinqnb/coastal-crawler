@@ -241,6 +241,79 @@ class TestRunWorkerSuccess:
 
 
 # ---------------------------------------------------------------------------
+# run_worker — page_number/page_matched persistence (find_snippet() at
+# insert time — see 2026-08-11-page-number-persistence-01)
+# ---------------------------------------------------------------------------
+
+class TestRunWorkerPageNumberPersistence:
+    def test_matched_value_stores_page_number_and_matched_true(
+        self, worker_db: Engine, tmp_path: Path
+    ) -> None:
+        """A value that literally appears on one OCR page gets that page's
+        number and matched=True, exactly like site/app.py's live
+        find_snippet() call would compute for the same row."""
+        _insert(worker_db, make_paper())
+        paper_id = _paper(worker_db).id
+        ocr_text = (
+            '<page number="1">intro, no numbers here</page>'
+            '<page number="2">soil carbon measured at 42.5 g/kg</page>'
+        )
+        _write_ocr(tmp_path, paper_id, text=ocr_text)
+        result = make_result(data={"value": "42.5", "attribute": "soil carbon", "units": "g/kg"})
+        adapter = MagicMock()
+        adapter.extract_batch.return_value = [[result]]
+
+        run_worker(batch_size=10, adapter=adapter, ocr_dir=tmp_path)
+
+        ext = _extractions(worker_db)[0]
+        assert ext.page_number == 2
+        assert ext.page_matched is True
+
+    def test_unmatched_value_falls_back_to_first_page_matched_false(
+        self, worker_db: Engine, tmp_path: Path
+    ) -> None:
+        """A value that appears nowhere in the OCR text falls back to page 1
+        with matched=False — find_snippet()'s documented "best guess" path."""
+        _insert(worker_db, make_paper())
+        paper_id = _paper(worker_db).id
+        ocr_text = (
+            '<page number="1">unrelated text</page>'
+            '<page number="2">also unrelated</page>'
+        )
+        _write_ocr(tmp_path, paper_id, text=ocr_text)
+        result = make_result(data={"value": "999.9", "attribute": "nitrogen", "units": "mg/L"})
+        adapter = MagicMock()
+        adapter.extract_batch.return_value = [[result]]
+
+        run_worker(batch_size=10, adapter=adapter, ocr_dir=tmp_path)
+
+        ext = _extractions(worker_db)[0]
+        assert ext.page_number == 1
+        assert ext.page_matched is False
+
+    def test_multiple_results_each_get_their_own_page(self, worker_db: Engine, tmp_path: Path) -> None:
+        """Each measurement in a paper's outcome is snippet-matched against
+        the same OCR text independently, not all pinned to one page."""
+        _insert(worker_db, make_paper())
+        paper_id = _paper(worker_db).id
+        ocr_text = (
+            '<page number="1">depth: 3.2 m</page>'
+            '<page number="2">salinity: 18.7 ppt</page>'
+        )
+        _write_ocr(tmp_path, paper_id, text=ocr_text)
+        depth_result = make_result(data={"value": "3.2", "attribute": "depth", "units": "m"})
+        salinity_result = make_result(data={"value": "18.7", "attribute": "salinity", "units": "ppt"})
+        adapter = MagicMock()
+        adapter.extract_batch.return_value = [[depth_result, salinity_result]]
+
+        run_worker(batch_size=10, adapter=adapter, ocr_dir=tmp_path)
+
+        pages = sorted(ext.page_number for ext in _extractions(worker_db))
+        assert pages == [1, 2]
+        assert all(ext.page_matched is True for ext in _extractions(worker_db))
+
+
+# ---------------------------------------------------------------------------
 # run_worker — missing OCR text file
 # ---------------------------------------------------------------------------
 
