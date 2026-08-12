@@ -274,6 +274,56 @@ class TestListViewShowsPapers:
         assert "Measurements:</span> 2" in resp.text  # extraction_count, not one row per measurement
 
 
+class TestListViewMapData:
+    """GET / embeds map_locations() as MAP_LOCATIONS for map.js — see
+    notes/coastal-crawler/builds/2026-08-12-location-map-01.md."""
+
+    def test_embeds_located_paper_as_map_location(
+        self, client: TestClient, clean_db: Engine
+    ) -> None:
+        _paper_id, location_id = _seed_paper_with_located_extraction(
+            clean_db,
+            title="Coastal Marsh Study",
+            data={"attribute": "salinity", "value": "28.4", "units": None},
+            location_kwargs={"name": "Great Bay", "latitude": 41.5, "longitude": -70.6},
+        )
+        resp = client.get("/")
+        assert resp.status_code == 200
+        assert "const MAP_LOCATIONS" in resp.text
+        assert '"location_id": %d' % location_id in resp.text
+        assert '"location_name": "Great Bay"' in resp.text
+        assert '"latitude": 41.5' in resp.text
+        assert '"paper_count": 1' in resp.text
+
+    def test_unlocated_paper_not_in_map_data(self, client: TestClient, clean_db: Engine) -> None:
+        _seed_paper_with_extraction(
+            clean_db,
+            title="Unlocated Paper",
+            data={"attribute": "salinity", "value": "1", "units": None},
+        )
+        resp = client.get("/")
+        assert resp.status_code == 200
+        assert "const MAP_LOCATIONS = [];" in resp.text
+
+    def test_filter_narrows_map_data(self, client: TestClient, clean_db: Engine) -> None:
+        _paper_id, matching_location_id = _seed_paper_with_located_extraction(
+            clean_db,
+            title="Reef Paper",
+            data={"attribute": "salinity", "value": "1", "units": None, "ecosystem_type": "reef"},
+            location_kwargs={"name": "Reef Site", "latitude": 10.0, "longitude": 20.0},
+        )
+        _seed_paper_with_located_extraction(
+            clean_db,
+            title="Marsh Paper",
+            data={"attribute": "salinity", "value": "2", "units": None, "ecosystem_type": "marsh"},
+            location_kwargs={"name": "Marsh Site", "latitude": 30.0, "longitude": 40.0},
+        )
+        resp = client.get("/", params={"ecosystem_type": "reef"})
+        assert resp.status_code == 200
+        assert '"location_id": %d' % matching_location_id in resp.text
+        assert "Marsh Site" not in resp.text
+
+
 class TestPaperViewShowsPages:
     def test_lists_page_links_with_counts(self, client: TestClient, clean_db: Engine) -> None:
         paper_id, _ = _seed_paper_with_paged_extraction(
@@ -376,6 +426,84 @@ class TestPageView:
     def test_404_for_missing_paper(self, client: TestClient, clean_db: Engine) -> None:
         resp = client.get("/papers/999999/pages/0")
         assert resp.status_code == 404
+
+
+class TestLocationPapersRoute:
+    def test_lists_papers_at_location(self, client: TestClient, clean_db: Engine) -> None:
+        paper_id, location_id = _seed_paper_with_located_extraction(
+            clean_db,
+            title="Great Bay Nutrient Study",
+            data={"attribute": "salinity", "value": "1", "units": None},
+            location_kwargs={"name": "Great Bay", "latitude": 41.5, "longitude": -70.6},
+        )
+        resp = client.get(f"/locations/{location_id}/papers")
+        assert resp.status_code == 200
+        assert "Great Bay" in resp.text
+        assert f'href="/papers/{paper_id}' in resp.text
+
+    def test_excludes_papers_at_other_locations(
+        self, client: TestClient, clean_db: Engine
+    ) -> None:
+        _paper_id, location_id = _seed_paper_with_located_extraction(
+            clean_db,
+            title="Included Paper",
+            data={"attribute": "salinity", "value": "1", "units": None},
+            location_kwargs={"latitude": 41.5, "longitude": -70.6},
+        )
+        _seed_paper_with_located_extraction(
+            clean_db,
+            title="Excluded Paper",
+            data={"attribute": "salinity", "value": "2", "units": None},
+            location_kwargs={"latitude": 42.0, "longitude": -71.0},
+        )
+        resp = client.get(f"/locations/{location_id}/papers")
+        assert "Included Paper" in resp.text
+        assert "Excluded Paper" not in resp.text
+
+    def test_filter_narrows_papers_at_location(
+        self, client: TestClient, clean_db: Engine
+    ) -> None:
+        _match_id, location_id = _seed_paper_with_located_extraction(
+            clean_db,
+            title="Matching Paper",
+            data={"attribute": "salinity", "value": "1", "units": None},
+            location_kwargs={"latitude": 41.5, "longitude": -70.6},
+        )
+        other_paper_id, _other_location_id = _seed_paper_with_located_extraction(
+            clean_db,
+            title="Non-Matching Paper",
+            data={"attribute": "nitrate", "value": "2", "units": None},
+            location_kwargs={"latitude": 41.5, "longitude": -70.6},
+        )
+        # Point the second paper's extraction at the same location so both
+        # papers are candidates for /locations/{id}/papers — only the
+        # attribute filter should decide which one shows.
+        with Session(clean_db) as session:
+            paper = session.get(Paper, other_paper_id)
+            assert paper is not None
+            for extraction in paper.extractions:
+                extraction.location_id = location_id
+            session.commit()
+
+        resp = client.get(f"/locations/{location_id}/papers", params={"attribute": "salinity"})
+        assert resp.status_code == 200
+        assert "Matching Paper" in resp.text
+        assert "Non-Matching Paper" not in resp.text
+
+    def test_404_for_missing_location(self, client: TestClient, clean_db: Engine) -> None:
+        resp = client.get("/locations/999999/papers")
+        assert resp.status_code == 404
+
+    def test_back_link_carries_filter(self, client: TestClient, clean_db: Engine) -> None:
+        _paper_id, location_id = _seed_paper_with_located_extraction(
+            clean_db,
+            title="Filtered Back Link Paper",
+            data={"attribute": "salinity", "value": "1", "units": None},
+            location_kwargs={"latitude": 41.5, "longitude": -70.6},
+        )
+        resp = client.get(f"/locations/{location_id}/papers", params={"attribute": "salinity"})
+        assert resp.status_code == 200
+        assert 'href="/?attribute=salinity"' in resp.text
 
 
 class TestExtractionDetailRouteRemoved:

@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}coastal-crawler{% endblock %}</title>
   <link rel="stylesheet" href="/static/style.css">
+  {% block extra_head %}{% endblock %}
 </head>
 <body>
   <a class="site-title" href="/">Coastal Crawler 🦀</a>
@@ -17,5 +18,6 @@
   </main>
   <footer>coastal-crawler &mdash; extracted measurements are model-generated; vote on whether each one looks right.</footer>
   <script src="/static/search.js" defer></script>
+  {% block extra_scripts %}{% endblock %}
 </body>
 </html>

@@ -763,6 +763,7 @@ def list_papers_with_extractions(
     title: str | None = None,
     attribute: str | None = None,
     ecosystem_type: str | None = None,
+    location_id: int | None = None,
 ) -> tuple[list[Any], int]:
     """Paginated distinct papers with at least one filter-matching
     extraction, for the results website's paper-list view (`GET /`). One
@@ -778,6 +779,15 @@ def list_papers_with_extractions(
     `DISTINCT ON (paper_id, attribute, value, units)` dedup key, so
     `extraction_count` matches what `_extraction_rows`/`pages_for_paper`
     would count for that paper under the same filter.
+
+    `location_id`, for the results website's `GET /locations/{id}/papers`
+    (site/app.py's `location_papers_view`), narrows to one location's
+    papers — applied as a pre-dedup filter, same place `title`/`attribute`/
+    `ecosystem_type` are applied, not folded into the dedup key: every row
+    surviving a `location_id` filter already shares that one location_id,
+    so the two keys are equivalent on the filtered subset (unlike
+    `map_locations`, which spans multiple locations at once and does need
+    `location_id` in its own dedup key — see that function's docstring).
     """
     dedup_key = (
         Extraction.paper_id,
@@ -801,6 +811,8 @@ def list_papers_with_extractions(
         narrow = narrow.where(Extraction.data["attribute"].astext == attribute)
     if ecosystem_type:
         narrow = narrow.where(Extraction.data["ecosystem_type"].astext == ecosystem_type)
+    if location_id is not None:
+        narrow = narrow.where(Extraction.location_id == location_id)
     deduped = narrow.distinct(*dedup_key).order_by(*dedup_key, Extraction.id.desc()).subquery()
 
     paper_agg = (
@@ -841,6 +853,93 @@ def list_papers_with_extractions(
     )
     rows = list(session.execute(hydrate_stmt).all())
     return rows, total
+
+
+def map_locations(
+    session: Session,
+    title: str | None = None,
+    attribute: str | None = None,
+    ecosystem_type: str | None = None,
+) -> list[Any]:
+    """Locations with known coordinates that have at least one
+    filter-matching extraction, for the results website's map (`GET /`).
+    One row per location: `.location_id`, `.location_name`, `.latitude`,
+    `.longitude`, `.paper_count` (count of *distinct papers*, not
+    extractions, matching the map's marker-popup requirement). `title`/
+    `attribute`/`ecosystem_type` filter the same way
+    `list_papers_with_extractions` does (per-row `ecosystem_type`, not the
+    location-majority semantics `export_extractions` uses — see
+    notes/coastal-crawler/builds/2026-08-12-location-map-01.md).
+
+    Dedup key is `(paper_id, location_id, attribute, value, units)` —
+    unlike every other dedup query in this module, `location_id` is
+    included. This matters specifically because this query spans multiple
+    locations at once: 126 `(paper_id, attribute, value, units)` groups on
+    the live DB have rows resolved to more than one location (e.g. the same
+    reported value at two different stations in one paper). Without
+    `location_id` in the key, `DISTINCT ON` would pick a single winning row
+    across locations and silently drop that measurement from every location
+    that didn't win, undercounting `paper_count` for the losing locations.
+    Including it is safe against the usual reason dedup exists (re-extraction
+    duplicates): a paper re-extracted with a new model version resolves to
+    the same `location_id` each time (locations aren't re-resolved per
+    extraction pass), so those rows still collapse to one.
+    `list_papers_with_extractions`'s own dedup key is deliberately left
+    unchanged — its `location_id` kwarg filters *before* dedup, so every
+    surviving row already shares one location_id and the extra key column
+    would be a no-op there.
+
+    A location with zero rows matching the current filter doesn't appear
+    (inner join to the per-location paper counts) — "every currently-filtered
+    location," not every location with coordinates full stop.
+    """
+    dedup_key = (
+        Extraction.paper_id,
+        Extraction.location_id,
+        Extraction.data["attribute"].astext,
+        Extraction.data["value"].astext,
+        Extraction.data["units"].astext,
+    )
+    narrow = select(
+        Extraction.id,
+        Extraction.paper_id,
+        Extraction.location_id,
+        Extraction.data["attribute"].astext,
+        Extraction.data["value"].astext,
+        Extraction.data["units"].astext,
+    ).where(Extraction.location_id.is_not(None))
+    if title:
+        narrow = narrow.join(Paper, Paper.id == Extraction.paper_id).where(
+            Paper.title.icontains(title, autoescape=True)
+        )
+    if attribute:
+        narrow = narrow.where(Extraction.data["attribute"].astext == attribute)
+    if ecosystem_type:
+        narrow = narrow.where(Extraction.data["ecosystem_type"].astext == ecosystem_type)
+    deduped = narrow.distinct(*dedup_key).order_by(*dedup_key, Extraction.id.desc()).subquery()
+
+    paper_counts = (
+        select(
+            deduped.c.location_id,
+            func.count(func.distinct(deduped.c.paper_id)).label("paper_count"),
+        )
+        .group_by(deduped.c.location_id)
+        .subquery()
+    )
+
+    stmt = (
+        select(
+            Location.id.label("location_id"),
+            Location.name.label("location_name"),
+            Location.latitude,
+            Location.longitude,
+            paper_counts.c.paper_count,
+        )
+        .join(paper_counts, paper_counts.c.location_id == Location.id)
+        .where(Location.latitude.is_not(None))
+        .where(Location.longitude.is_not(None))
+    )
+    return list(session.execute(stmt).all())
 
 
 def list_extractions(
@@ -1062,6 +1161,17 @@ def list_ecosystem_types(session: Session) -> list[str]:
 def get_paper(session: Session, paper_id: int) -> Paper | None:
     """Return one paper by id, for the site's paper-detail page header."""
     return session.get(Paper, paper_id)
+
+
+def get_location(session: Session, location_id: int) -> Location | None:
+    """Return one location by id, for the site's location-papers page header.
+
+    Deliberately minimal (not a general accessor) — see
+    notes/coastal-crawler/builds/2026-08-11-location-resolution-01.md,
+    which cut `get_location`/`list_locations` from its own scope and
+    deferred them to whichever build needed them.
+    """
+    return session.get(Location, location_id)
 
 
 def search_papers_by_title(session: Session, query: str, limit: int) -> list[Any]:

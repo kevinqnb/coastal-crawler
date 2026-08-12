@@ -219,6 +219,29 @@ footer {
   min-width: 0;
 }
 
+/* -------------------------------------------------- map */
+
+.map-container {
+  height: 400px;
+  width: 100%;
+  margin-bottom: 1.5rem;
+  border: 1px solid var(--sea);
+  border-radius: 6px;
+}
+
+.map-container[hidden] {
+  display: none;
+}
+
+.leaflet-popup-content strong {
+  display: block;
+  margin-bottom: 0.25rem;
+}
+
+.leaflet-popup-content a {
+  color: var(--sea-deep);
+}
+
 .section-header {
   display: flex;
   align-items: baseline;

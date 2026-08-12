@@ -957,6 +957,153 @@ class TestListPapersWithExtractions:
         assert rows == []
         assert total == 0
 
+    def test_location_id_narrows_to_one_location(self, db_session: Session) -> None:
+        at_location = _make_paper_with_extractions(
+            db_session, [{"attribute": "salinity", "value": "1", "units": None}]
+        )
+        location = _assign_location(db_session, at_location)
+        _make_paper_with_extractions(
+            db_session, [{"attribute": "salinity", "value": "2", "units": None}]
+        )
+        rows, total = store.list_papers_with_extractions(db_session, location_id=location.id)
+        assert total == 1
+        assert rows[0].id == at_location.id
+
+
+class TestMapLocations:
+    def test_returns_only_coordinate_bearing_locations(self, db_session: Session) -> None:
+        with_coords = _make_paper_with_extractions(
+            db_session, [{"attribute": "salinity", "value": "1", "units": None}]
+        )
+        _assign_location(db_session, with_coords, latitude=41.5, longitude=-70.6)
+        no_coords = _make_paper_with_extractions(
+            db_session, [{"attribute": "salinity", "value": "2", "units": None}]
+        )
+        _assign_location(db_session, no_coords, latitude=None, longitude=None)
+
+        rows = store.map_locations(db_session)
+        assert len(rows) == 1
+        assert rows[0].latitude == 41.5
+        assert rows[0].longitude == -70.6
+
+    def test_paper_count_is_distinct_papers_not_extractions(self, db_session: Session) -> None:
+        paper = _make_paper_with_extractions(
+            db_session,
+            [
+                {"attribute": "salinity", "value": "1", "units": None},
+                {"attribute": "nitrate", "value": "2", "units": None},
+            ],
+        )
+        _assign_location(db_session, paper, latitude=41.5, longitude=-70.6)
+
+        rows = store.map_locations(db_session)
+        assert len(rows) == 1
+        assert rows[0].paper_count == 1  # one paper, two extractions
+
+    def test_two_papers_at_same_location_count_as_two(self, db_session: Session) -> None:
+        location = _assign_location(
+            db_session,
+            _make_paper_with_extractions(
+                db_session, [{"attribute": "salinity", "value": "1", "units": None}]
+            ),
+            latitude=41.5, longitude=-70.6,
+        )
+        second_paper = _make_paper_with_extractions(
+            db_session, [{"attribute": "salinity", "value": "2", "units": None}]
+        )
+        for extraction in second_paper.extractions:
+            extraction.location_id = location.id
+        db_session.flush()
+
+        rows = store.map_locations(db_session)
+        assert len(rows) == 1
+        assert rows[0].paper_count == 2
+
+    def test_same_measurement_value_at_two_locations_counted_at_both(
+        self, db_session: Session
+    ) -> None:
+        """Regression case caught at Stage 1: a paper reporting the identical
+        (attribute, value, units) at two different sites must not lose one
+        of them to cross-location dedup — see map_locations' docstring."""
+        paper = _make_paper_with_extractions(
+            db_session,
+            [
+                {"attribute": "salinity", "value": "28.4", "units": "PSU"},
+                {"attribute": "salinity", "value": "28.4", "units": "PSU"},
+            ],
+        )
+        extractions = list(paper.extractions)
+        loc_a = Location(resolution_method="coordinate", latitude=41.5, longitude=-70.6)
+        loc_b = Location(resolution_method="coordinate", latitude=42.0, longitude=-71.0)
+        db_session.add_all([loc_a, loc_b])
+        db_session.flush()
+        extractions[0].location_id = loc_a.id
+        extractions[1].location_id = loc_b.id
+        db_session.flush()
+
+        rows = store.map_locations(db_session)
+        assert {r.location_id for r in rows} == {loc_a.id, loc_b.id}
+        assert all(r.paper_count == 1 for r in rows)
+
+    def test_zero_matching_rows_excludes_location(self, db_session: Session) -> None:
+        paper = _make_paper_with_extractions(
+            db_session, [{"attribute": "salinity", "value": "1", "units": None}]
+        )
+        _assign_location(db_session, paper, latitude=41.5, longitude=-70.6)
+
+        rows = store.map_locations(db_session, attribute="nitrate")
+        assert rows == []
+
+    def test_filters_narrow_like_papers_list(self, db_session: Session) -> None:
+        matching = _make_paper_with_extractions(
+            db_session,
+            [{"attribute": "salinity", "value": "1", "units": None, "ecosystem_type": "reef"}],
+        )
+        _assign_location(db_session, matching, latitude=41.5, longitude=-70.6)
+        other = _make_paper_with_extractions(
+            db_session,
+            [{"attribute": "salinity", "value": "2", "units": None, "ecosystem_type": "marsh"}],
+        )
+        _assign_location(db_session, other, latitude=42.0, longitude=-71.0)
+
+        rows = store.map_locations(db_session, ecosystem_type="reef")
+        assert len(rows) == 1
+        assert rows[0].latitude == 41.5
+
+    def test_dedupes_repeated_extraction_pass(self, db_session: Session) -> None:
+        paper = _make_paper_with_extractions(
+            db_session, [{"attribute": "salinity", "value": "28.4", "units": "PSU"}]
+        )
+        _assign_location(db_session, paper, latitude=41.5, longitude=-70.6)
+        store.insert_extraction(
+            paper.id,
+            make_extraction_result(data={"attribute": "salinity", "value": "28.4", "units": "PSU"}),
+            db_session,
+        )
+        # New extraction row from a re-extraction pass has no location_id yet
+        # (only resolve_locations.py assigns it) — assign it to the same
+        # location a real re-resolution run would.
+        newest = max(paper.extractions, key=lambda e: e.id)
+        newest.location_id = paper.extractions[0].location_id
+        db_session.flush()
+
+        rows = store.map_locations(db_session)
+        assert len(rows) == 1
+        assert rows[0].paper_count == 1
+
+
+class TestGetLocation:
+    def test_returns_existing_location(self, db_session: Session) -> None:
+        location = Location(resolution_method="coordinate", name="Bay X", latitude=1.0, longitude=2.0)
+        db_session.add(location)
+        db_session.flush()
+        result = store.get_location(db_session, location.id)
+        assert result is not None
+        assert result.name == "Bay X"
+
+    def test_returns_none_for_missing_id(self, db_session: Session) -> None:
+        assert store.get_location(db_session, 999999) is None
+
 
 class TestPagesForPaper:
     def _insert(

@@ -1,5 +1,10 @@
 {% extends "base.html" %}
 {% block title %}coastal-crawler &mdash; papers{% endblock %}
+{% block extra_head %}
+<link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css">
+<link rel="stylesheet" href="/static/vendor/leaflet.markercluster/MarkerCluster.css">
+<link rel="stylesheet" href="/static/vendor/leaflet.markercluster/MarkerCluster.Default.css">
+{% endblock %}
 {% block content %}
 
 {% macro qs(attr, eco, ttl) %}{% if attr %}attribute={{ attr | urlencode }}{% endif %}{% if attr and eco %}&{% endif %}{% if eco %}ecosystem_type={{ eco | urlencode }}{% endif %}{% if (attr or eco) and ttl %}&{% endif %}{% if ttl %}title={{ ttl | urlencode }}{% endif %}{% endmacro %}
@@ -33,6 +38,11 @@
   </aside>
 
   <div class="content">
+    <div id="map" class="map-container" data-filter-qs="{{ qs(attribute, ecosystem_type, title) }}"></div>
+    <script>
+      const MAP_LOCATIONS = {{ map_locations | tojson }};
+    </script>
+
     <div class="section-header">
       <h2 class="section-title">Papers</h2>
       <span class="count">{{ total }} paper{{ 's' if total != 1 }}{% if attribute %} with {{ attribute | replace("_", " ") }}{% endif %}{% if ecosystem_type %} in {{ ecosystem_type | replace("_", " ") }}{% endif %}{% if title %} matching &ldquo;{{ title }}&rdquo;{% endif %}</span>
@@ -65,4 +75,9 @@
   </div>
 </div>
 
+{% endblock %}
+{% block extra_scripts %}
+<script src="/static/vendor/leaflet/leaflet.js"></script>
+<script src="/static/vendor/leaflet.markercluster/leaflet.markercluster.js"></script>
+<script src="/static/map.js" defer></script>
 {% endblock %}

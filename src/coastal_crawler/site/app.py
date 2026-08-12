@@ -183,7 +183,23 @@ def list_view(
             ecosystem_type=ecosystem_type,
         )
         ecosystem_types = store.list_ecosystem_types(session)
+        map_rows = store.map_locations(
+            session, title=title, attribute=attribute, ecosystem_type=ecosystem_type
+        )
     total_pages = max(1, math.ceil(total / _PAGE_SIZE))
+    # Built as plain dicts, not passed as raw Row objects — Row is a tuple
+    # subclass, so `|tojson` in the template would serialize it positionally
+    # as a JSON array instead of {"location_id": ..., ...}.
+    map_locations = [
+        {
+            "location_id": r.location_id,
+            "location_name": r.location_name,
+            "latitude": r.latitude,
+            "longitude": r.longitude,
+            "paper_count": r.paper_count,
+        }
+        for r in map_rows
+    ]
     return templates.TemplateResponse(
         request,
         "list.html",
@@ -198,6 +214,7 @@ def list_view(
             "ecosystem_type": ecosystem_type,
             "ecosystem_types": ecosystem_types,
             "row_offset": (page - 1) * _PAGE_SIZE,
+            "map_locations": map_locations,
         },
     )
 
@@ -304,6 +321,47 @@ def paper_view(
                 "title": title,
                 "attribute": attribute,
                 "ecosystem_type": ecosystem_type,
+            },
+        )
+
+
+@app.get("/locations/{location_id}/papers")
+def location_papers_view(
+    request: Request,
+    location_id: int,
+    page: int = 1,
+    title: str | None = None,
+    attribute: str | None = None,
+    ecosystem_type: str | None = None,
+) -> Response:
+    page = max(page, 1)
+    with get_session() as session:
+        location = store.get_location(session, location_id)
+        if location is None:
+            raise HTTPException(status_code=404, detail="Location not found")
+        rows, total = store.list_papers_with_extractions(
+            session,
+            page=page,
+            page_size=_PAGE_SIZE,
+            title=title,
+            attribute=attribute,
+            ecosystem_type=ecosystem_type,
+            location_id=location_id,
+        )
+        total_pages = max(1, math.ceil(total / _PAGE_SIZE))
+        return templates.TemplateResponse(
+            request,
+            "location_papers.html",
+            {
+                "location": location,
+                "rows": rows,
+                "page": page,
+                "total_pages": total_pages,
+                "total": total,
+                "title": title,
+                "attribute": attribute,
+                "ecosystem_type": ecosystem_type,
+                "row_offset": (page - 1) * _PAGE_SIZE,
             },
         )
 
