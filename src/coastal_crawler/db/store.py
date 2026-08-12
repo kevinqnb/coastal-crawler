@@ -637,12 +637,14 @@ def _extraction_rows(
     attribute: str | None = None,
     ecosystem_type: str | None = None,
     paper_id: int | None = None,
+    page_number: int | None = None,
     limit: int | None = None,
     offset: int = 0,
 ) -> tuple[list[Any], int]:
-    """Shared narrow+hydrate dedup query behind `list_extractions` and
-    `export_extractions`. `limit=None` returns every matching row
-    (unpaginated, for CSV export); a given `limit` paginates via `offset`.
+    """Shared narrow+hydrate dedup query behind `list_extractions`,
+    `export_extractions`, and `page_extractions`. `limit=None` returns every
+    matching row (unpaginated, for CSV export); a given `limit` paginates via
+    `offset`.
 
     Deduped on (paper_id, attribute, value, units), keeping the highest `id`
     — extraction rows accumulate across re-extraction passes (see
@@ -650,6 +652,12 @@ def _extraction_rows(
     would appear once per pass. `paper_id` narrows to one paper's page
     (site/app.py's paper_view) while reusing this same dedup — a
     re-extracted paper is exactly where duplicate rows are most visible.
+    `page_number` (site/app.py's page_view) further narrows within that
+    paper; it's applied to the same pre-dedup narrow stage as `paper_id` so
+    dedup always happens across the *whole* paper first — filtering to a
+    page before deduping could let a row that lost the global dedup
+    resurface, making `pages_for_paper`'s per-page count disagree with this
+    function's row count for that page.
 
     Two-stage query, deliberately: every extraction row carries a ~55KB
     embedded copy of its paper's full OCR text (in `data->'context'`), and
@@ -698,6 +706,8 @@ def _extraction_rows(
         narrow = narrow.where(Extraction.data["ecosystem_type"].astext == ecosystem_type)
     if paper_id is not None:
         narrow = narrow.where(Extraction.paper_id == paper_id)
+    if page_number is not None:
+        narrow = narrow.where(Extraction.page_number == page_number)
     deduped_ids = narrow.distinct(*dedup_key).order_by(*dedup_key, Extraction.id.desc()).subquery()
 
     total = session.execute(select(func.count()).select_from(deduped_ids)).scalar_one()
@@ -736,6 +746,93 @@ def _extraction_rows(
         .join(Paper, Paper.id == Extraction.paper_id)
         .where(Extraction.id.in_(page_ids))
         .order_by(Extraction.created_at.desc())
+    )
+    rows = list(session.execute(hydrate_stmt).all())
+    return rows, total
+
+
+def list_papers_with_extractions(
+    session: Session,
+    page: int = 1,
+    page_size: int = 25,
+    title: str | None = None,
+    attribute: str | None = None,
+    ecosystem_type: str | None = None,
+) -> tuple[list[Any], int]:
+    """Paginated distinct papers with at least one filter-matching
+    extraction, for the results website's paper-list view (`GET /`). One
+    row per paper: `.id`, `.title`, `.authors`, `.publication_date`, `.doi`,
+    `.extraction_count`, `.last_extracted`. Ordered by `last_extracted`
+    (`MAX(extractions.created_at)` among that paper's filter-matching rows)
+    descending — filter-scoped, unlike `Paper.extracted_at` (used by the
+    unrelated `papers_with_extractions`), which has no way to reflect an
+    active `attribute`/`ecosystem_type`/`title` filter.
+
+    Same two-stage narrow-then-hydrate shape as `_extraction_rows` (avoids
+    detoasting `data`'s embedded OCR-context blob per row) and the same
+    `DISTINCT ON (paper_id, attribute, value, units)` dedup key, so
+    `extraction_count` matches what `_extraction_rows`/`pages_for_paper`
+    would count for that paper under the same filter.
+    """
+    dedup_key = (
+        Extraction.paper_id,
+        Extraction.data["attribute"].astext,
+        Extraction.data["value"].astext,
+        Extraction.data["units"].astext,
+    )
+    narrow = select(
+        Extraction.id,
+        Extraction.paper_id,
+        Extraction.data["attribute"].astext,
+        Extraction.data["value"].astext,
+        Extraction.data["units"].astext,
+        Extraction.created_at,
+    )
+    if title:
+        narrow = narrow.join(Paper, Paper.id == Extraction.paper_id).where(
+            Paper.title.icontains(title, autoescape=True)
+        )
+    if attribute:
+        narrow = narrow.where(Extraction.data["attribute"].astext == attribute)
+    if ecosystem_type:
+        narrow = narrow.where(Extraction.data["ecosystem_type"].astext == ecosystem_type)
+    deduped = narrow.distinct(*dedup_key).order_by(*dedup_key, Extraction.id.desc()).subquery()
+
+    paper_agg = (
+        select(
+            deduped.c.paper_id,
+            func.count().label("extraction_count"),
+            func.max(deduped.c.created_at).label("last_extracted"),
+        )
+        .group_by(deduped.c.paper_id)
+        .subquery()
+    )
+
+    total = session.execute(select(func.count()).select_from(paper_agg)).scalar_one()
+
+    page_ids_stmt = (
+        select(paper_agg.c.paper_id)
+        .order_by(paper_agg.c.last_extracted.desc())
+        .limit(page_size)
+        .offset((page - 1) * page_size)
+    )
+    page_paper_ids = list(session.scalars(page_ids_stmt).all())
+    if not page_paper_ids:
+        return [], total
+
+    hydrate_stmt = (
+        select(
+            Paper.id,
+            Paper.title,
+            Paper.authors,
+            Paper.publication_date,
+            Paper.doi,
+            paper_agg.c.extraction_count,
+            paper_agg.c.last_extracted,
+        )
+        .join(paper_agg, paper_agg.c.paper_id == Paper.id)
+        .where(Paper.id.in_(page_paper_ids))
+        .order_by(paper_agg.c.last_extracted.desc())
     )
     rows = list(session.execute(hydrate_stmt).all())
     return rows, total
@@ -812,6 +909,35 @@ def pages_for_paper(
         .order_by(deduped.c.page_number.asc().nulls_last())
     )
     return list(session.execute(stmt).all())
+
+
+def page_extractions(
+    session: Session,
+    paper_id: int,
+    page_number: int,
+    title: str | None = None,
+    attribute: str | None = None,
+    ecosystem_type: str | None = None,
+) -> list[Any]:
+    """All (measurement, paper) rows on one page of one paper, filter-scoped
+    — the results website's page-detail view (site/app.py's page_view).
+
+    Thin wrapper over `_extraction_rows` with `paper_id`+`page_number` set —
+    see that function's docstring for why `page_number` is applied there
+    (pre-dedup) rather than as a separate post-dedup filter: it keeps this
+    row count consistent with `pages_for_paper`'s per-page count for the
+    same paper. Same dedup and row shape as `list_extractions`, unpaginated
+    (one page's measurement count is small).
+    """
+    rows, _total = _extraction_rows(
+        session,
+        title=title,
+        attribute=attribute,
+        ecosystem_type=ecosystem_type,
+        paper_id=paper_id,
+        page_number=page_number,
+    )
+    return rows
 
 
 def export_extractions(

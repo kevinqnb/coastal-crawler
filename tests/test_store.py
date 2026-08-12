@@ -7,10 +7,10 @@ The SKIP LOCKED test uses ``clean_db`` (commits real transactions, truncates aft
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
@@ -852,6 +852,112 @@ class TestListExtractions:
         assert r.additional_details == "high tide"
 
 
+class TestListPapersWithExtractions:
+    def test_returns_extraction_count_and_last_extracted(self, db_session: Session) -> None:
+        paper = _make_paper_with_extractions(
+            db_session,
+            [
+                {"attribute": "salinity", "value": "1", "units": None},
+                {"attribute": "nitrate", "value": "2", "units": None},
+            ],
+        )
+        rows, total = store.list_papers_with_extractions(db_session)
+        assert total == 1
+        assert rows[0].id == paper.id
+        assert rows[0].extraction_count == 2
+        assert rows[0].last_extracted is not None
+
+    def test_orders_by_last_extracted_desc(self, db_session: Session) -> None:
+        older = _make_paper_with_extractions(
+            db_session, [{"attribute": "salinity", "value": "1", "units": None}]
+        )
+        newer = _make_paper_with_extractions(
+            db_session, [{"attribute": "salinity", "value": "2", "units": None}]
+        )
+        # created_at's server_default=func.now() returns the *transaction*
+        # start time in Postgres, not per-statement wall-clock time — inside
+        # one uncommitted db_session transaction every row gets the same
+        # timestamp, so real insert order can't be relied on here. Set
+        # explicit, distinct values instead.
+        now = datetime.now(timezone.utc)
+        db_session.execute(
+            update(Extraction)
+            .where(Extraction.paper_id == older.id)
+            .values(created_at=now - timedelta(hours=1))
+        )
+        db_session.execute(
+            update(Extraction).where(Extraction.paper_id == newer.id).values(created_at=now)
+        )
+        db_session.flush()
+        rows, _total = store.list_papers_with_extractions(db_session)
+        assert [r.id for r in rows] == [newer.id, older.id]
+
+    def test_dedupes_repeated_extraction_passes(self, db_session: Session) -> None:
+        paper = _make_paper_with_extractions(
+            db_session, [{"attribute": "salinity", "value": "28.4", "units": "PSU"}]
+        )
+        store.insert_extraction(
+            paper.id,
+            make_extraction_result(data={"attribute": "salinity", "value": "28.4", "units": "PSU"}),
+            db_session,
+        )
+        rows, total = store.list_papers_with_extractions(db_session)
+        assert total == 1
+        assert rows[0].extraction_count == 1  # not 2 — same measurement re-extracted
+
+    def test_filters_by_attribute_excludes_non_matching_papers(self, db_session: Session) -> None:
+        matching = _make_paper_with_extractions(
+            db_session, [{"attribute": "salinity", "value": "1", "units": None}]
+        )
+        _make_paper_with_extractions(
+            db_session, [{"attribute": "nitrate", "value": "2", "units": None}]
+        )
+        rows, total = store.list_papers_with_extractions(db_session, attribute="salinity")
+        assert total == 1
+        assert rows[0].id == matching.id
+
+    def test_filters_by_ecosystem_type(self, db_session: Session) -> None:
+        matching = _make_paper_with_extractions(
+            db_session,
+            [{"attribute": "salinity", "value": "1", "units": None, "ecosystem_type": "reef"}],
+        )
+        _make_paper_with_extractions(
+            db_session,
+            [{"attribute": "salinity", "value": "2", "units": None, "ecosystem_type": "marsh"}],
+        )
+        rows, total = store.list_papers_with_extractions(db_session, ecosystem_type="reef")
+        assert total == 1
+        assert rows[0].id == matching.id
+
+    def test_filters_by_title(self, db_session: Session) -> None:
+        uid = _uid()
+        matching = _make_paper_with_extractions_titled(
+            db_session, f"Nutrient Cycling in {uid} Marshes",
+            [{"attribute": "salinity", "value": "1", "units": None}],
+        )
+        _make_paper_with_extractions_titled(
+            db_session, f"Unrelated Paper {_uid()}",
+            [{"attribute": "salinity", "value": "2", "units": None}],
+        )
+        rows, total = store.list_papers_with_extractions(db_session, title=uid)
+        assert total == 1
+        assert rows[0].id == matching.id
+
+    def test_pagination(self, db_session: Session) -> None:
+        for _ in range(5):
+            _make_paper_with_extractions(
+                db_session, [{"attribute": "salinity", "value": "1", "units": None}]
+            )
+        rows, total = store.list_papers_with_extractions(db_session, page=1, page_size=2)
+        assert total == 5
+        assert len(rows) == 2
+
+    def test_no_matching_extractions_returns_empty(self, db_session: Session) -> None:
+        rows, total = store.list_papers_with_extractions(db_session, attribute="nonexistent")
+        assert rows == []
+        assert total == 0
+
+
 class TestPagesForPaper:
     def _insert(
         self, session: Session, paper_id: int, page_number: int | None, **data_kwargs
@@ -916,6 +1022,72 @@ class TestPagesForPaper:
     def test_empty_paper_returns_empty_list(self, db_session: Session) -> None:
         paper = _make_paper_with_extractions(db_session, [])
         assert store.pages_for_paper(db_session, paper.id) == []
+
+
+class TestPageExtractions:
+    def _insert(
+        self, session: Session, paper_id: int, page_number: int | None, **data_kwargs
+    ) -> Extraction:
+        data = {"attribute": "salinity", "value": _uid(), "units": "PSU", **data_kwargs}
+        return store.insert_extraction(
+            paper_id,
+            make_extraction_result(data=data),
+            session,
+            page_number=page_number,
+            page_matched=True,
+        )
+
+    def test_returns_only_rows_on_requested_page(self, db_session: Session) -> None:
+        paper = _make_paper_with_extractions(db_session, [])
+        self._insert(db_session, paper.id, page_number=1)
+        self._insert(db_session, paper.id, page_number=2)
+        rows = store.page_extractions(db_session, paper.id, 1)
+        assert len(rows) == 1
+
+    def test_row_count_matches_pages_for_paper_count(self, db_session: Session) -> None:
+        """The critical invariant: pages_for_paper's per-page count and
+        page_extractions' row count for that same page must agree, even
+        when a paper has been re-extracted (duplicate rows) — both dedupe
+        across the whole paper first, then narrow to the page, not the
+        other way around (see _extraction_rows' docstring)."""
+        paper = _make_paper_with_extractions(db_session, [])
+        self._insert(db_session, paper.id, page_number=1, attribute="salinity", value="28.4")
+        # Re-extraction pass: same (attribute, value, units) on the same page.
+        self._insert(db_session, paper.id, page_number=1, attribute="salinity", value="28.4")
+        self._insert(db_session, paper.id, page_number=1, attribute="nitrate", value="5.0")
+
+        pages = dict(store.pages_for_paper(db_session, paper.id))
+        rows = store.page_extractions(db_session, paper.id, 1)
+        assert pages[1] == len(rows) == 2
+
+    def test_filters_by_attribute(self, db_session: Session) -> None:
+        paper = _make_paper_with_extractions(db_session, [])
+        self._insert(db_session, paper.id, page_number=1, attribute="salinity")
+        self._insert(db_session, paper.id, page_number=1, attribute="nitrate")
+        rows = store.page_extractions(db_session, paper.id, 1, attribute="nitrate")
+        assert len(rows) == 1
+        assert rows[0].attribute == "nitrate"
+
+    def test_filters_by_ecosystem_type(self, db_session: Session) -> None:
+        paper = _make_paper_with_extractions(db_session, [])
+        self._insert(db_session, paper.id, page_number=1, ecosystem_type="salt_marsh")
+        self._insert(db_session, paper.id, page_number=1, ecosystem_type="estuary")
+        rows = store.page_extractions(db_session, paper.id, 1, ecosystem_type="estuary")
+        assert len(rows) == 1
+
+    def test_scoped_to_one_paper(self, db_session: Session) -> None:
+        paper_a = _make_paper_with_extractions(db_session, [])
+        paper_b = _make_paper_with_extractions(db_session, [])
+        self._insert(db_session, paper_a.id, page_number=1)
+        self._insert(db_session, paper_b.id, page_number=1)
+        rows = store.page_extractions(db_session, paper_a.id, 1)
+        assert len(rows) == 1
+        assert rows[0].paper_id == paper_a.id
+
+    def test_no_matches_returns_empty(self, db_session: Session) -> None:
+        paper = _make_paper_with_extractions(db_session, [])
+        self._insert(db_session, paper.id, page_number=1)
+        assert store.page_extractions(db_session, paper.id, 99) == []
 
 
 class TestExportExtractions:

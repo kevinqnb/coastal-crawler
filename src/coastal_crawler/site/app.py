@@ -1,10 +1,10 @@
-"""Results website — read-only list/detail of extracted measurements, plus voting.
+"""Results website — read-only papers -> pages -> measurements browsing, plus voting.
 
 Phase 0 of the site roadmap: runs against the live cluster DB (see
 scripts/db_env.sh). A later phase points the same app at a periodically
 synced copy on an external host instead — no app-code changes needed, since
-`find_snippet` already works from `data['context']` embedded on each
-extraction row rather than requiring OCR_DIR filesystem access.
+the page view's OCR text comes from PaperOcrContext (a DB table, via
+get_paper_ocr_context), not OCR_DIR filesystem access.
 """
 
 from __future__ import annotations
@@ -16,6 +16,7 @@ import math
 import re
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlencode
 
 import markdown as md
 import nh3
@@ -27,7 +28,7 @@ from fastapi.templating import Jinja2Templates
 from coastal_crawler.db import store
 from coastal_crawler.db.engine import get_session
 from coastal_crawler.measurement_schema import ATTRIBUTE_INFO_DICT
-from coastal_crawler.site.snippets import find_snippet
+from coastal_crawler.site.snippets import split_pages
 
 app = FastAPI(title="coastal-crawler")
 
@@ -156,17 +157,6 @@ def _voter_hash(request: Request) -> str:
     return hashlib.sha256(f"{ip}|{ua}".encode()).hexdigest()[:16]
 
 
-def _split_model_version(model_version: str) -> tuple[str | None, str | None]:
-    """`model_version` defaults to "doc_lm={ocr model}+meas_lm={extraction model}"
-    (see adapter.py's build_measurement_adapter) — split it back into the two
-    models for display. Falls back to (None, raw string) if it doesn't match
-    that format (e.g. MEAS_LM_MODEL_VERSION was overridden to a custom tag)."""
-    doc_lm, sep, meas_lm = model_version.partition("+meas_lm=")
-    if sep and doc_lm.startswith("doc_lm="):
-        return doc_lm.removeprefix("doc_lm="), meas_lm
-    return None, model_version
-
-
 @app.get("/")
 def list_view(
     request: Request,
@@ -177,7 +167,7 @@ def list_view(
 ) -> Response:
     page = max(page, 1)
     with get_session() as session:
-        rows, total = store.list_extractions(
+        rows, total = store.list_papers_with_extractions(
             session,
             page=page,
             page_size=_PAGE_SIZE,
@@ -275,76 +265,113 @@ def search_view(request: Request, q: str = "") -> Response:
 
 
 @app.get("/papers/{paper_id}")
-def paper_view(request: Request, paper_id: int, page: int = 1) -> Response:
-    page = max(page, 1)
+def paper_view(
+    request: Request,
+    paper_id: int,
+    title: str | None = None,
+    attribute: str | None = None,
+    ecosystem_type: str | None = None,
+) -> Response:
     with get_session() as session:
         paper = store.get_paper(session, paper_id)
         if paper is None:
             raise HTTPException(status_code=404, detail="Paper not found")
-        rows, total = store.list_extractions(
-            session, page=page, page_size=_PAGE_SIZE, paper_id=paper_id
+        # pages_for_paper takes no `title` — it's scoped to one already-
+        # identified paper, so a title filter can't change which of its
+        # extractions match (the paper either matched to appear in the list
+        # or it didn't). `title` is still threaded through so links back to
+        # `/` and down into page_view keep the active filter.
+        pages = store.pages_for_paper(
+            session, paper_id, attribute=attribute, ecosystem_type=ecosystem_type
         )
-        total_pages = max(1, math.ceil(total / _PAGE_SIZE))
+        total = sum(count for _page_number, count in pages)
         # Rendered inside the session block — the template touches `paper`'s
-        # ORM attributes, which need a live session (see detail_view below).
+        # ORM attributes, which need a live session (see page_view below).
         return templates.TemplateResponse(
             request,
             "paper.html",
             {
                 "paper": paper,
-                "rows": rows,
-                "page": page,
-                "total_pages": total_pages,
+                "pages": pages,
                 "total": total,
-                "row_offset": (page - 1) * _PAGE_SIZE,
+                "title": title,
+                "attribute": attribute,
+                "ecosystem_type": ecosystem_type,
             },
         )
 
 
-@app.get("/extraction/{extraction_id}")
-def detail_view(request: Request, extraction_id: int) -> Response:
+@app.get("/papers/{paper_id}/pages/{page_number}")
+def page_view(
+    request: Request,
+    paper_id: int,
+    page_number: int,
+    title: str | None = None,
+    attribute: str | None = None,
+    ecosystem_type: str | None = None,
+) -> Response:
+    with get_session() as session:
+        paper = store.get_paper(session, paper_id)
+        if paper is None:
+            raise HTTPException(status_code=404, detail="Paper not found")
+        rows = store.page_extractions(
+            session,
+            paper_id,
+            page_number,
+            title=title,
+            attribute=attribute,
+            ecosystem_type=ecosystem_type,
+        )
+        # `page_number` is the raw stored value (0-indexed, see
+        # extraction/ocr_lm.py) — matches what pages_for_paper/find_snippet
+        # already use; the template adds +1 for display, same convention
+        # the old detail.html used.
+        ocr_context = store.get_paper_ocr_context(session, paper_id) or ""
+        page_text = dict(split_pages(ocr_context)).get(page_number)
+        # Rendered inside the session block — the template touches `paper`'s
+        # ORM attributes, which need a live session.
+        return templates.TemplateResponse(
+            request,
+            "page.html",
+            {
+                "paper": paper,
+                "page_number": page_number,
+                "page_html": _render_ocr_markdown(page_text) if page_text is not None else None,
+                "rows": rows,
+                "title": title,
+                "attribute": attribute,
+                "ecosystem_type": ecosystem_type,
+            },
+        )
+
+
+@app.post("/extraction/{extraction_id}/vote")
+def cast_vote(
+    request: Request,
+    extraction_id: int,
+    vote: str = Form(...),
+    title: str | None = Form(None),
+    attribute: str | None = Form(None),
+    ecosystem_type: str | None = Form(None),
+) -> Response:
+    if vote not in ("valid", "invalid"):
+        raise HTTPException(status_code=400, detail="vote must be 'valid' or 'invalid'")
     with get_session() as session:
         extraction = store.get_extraction(session, extraction_id)
         if extraction is None:
             raise HTTPException(status_code=404, detail="Extraction not found")
-
-        data = extraction.data or {}
-        # Prefer the per-paper table (see PaperOcrContext) — the primary
-        # source since migration c2d3e4f5a6b7 stripped `context` out of
-        # every extraction row's `data`. Falls back to the old embedded
-        # shape for any row that predates that migration and wasn't backfilled.
-        ocr_context = store.get_paper_ocr_context(session, extraction.paper_id) or data.get(
-            "context", ""
-        )
-        snippet = find_snippet(
-            ocr_context, data.get("value"), data.get("attribute"), data.get("units")
-        )
-        valid_votes = sum(1 for v in extraction.votes if v.vote)
-        invalid_votes = sum(1 for v in extraction.votes if not v.vote)
-        ocr_model, extraction_model = _split_model_version(extraction.model_version)
-        context = {
-            "extraction": extraction,
-            "data": data,
-            "paper": extraction.paper,
-            "snippet_html": _render_ocr_markdown(snippet.text),
-            "snippet_page": snippet.page_number,
-            "snippet_matched": snippet.matched,
-            "valid_votes": valid_votes,
-            "invalid_votes": invalid_votes,
-            "ocr_model": ocr_model,
-            "extraction_model": extraction_model,
-        }
-        # Rendered inside the session block — the template touches
-        # extraction/paper ORM attributes, which need a live session.
-        return templates.TemplateResponse(request, "detail.html", context)
-
-
-@app.post("/extraction/{extraction_id}/vote")
-def cast_vote(request: Request, extraction_id: int, vote: str = Form(...)) -> Response:
-    if vote not in ("valid", "invalid"):
-        raise HTTPException(status_code=400, detail="vote must be 'valid' or 'invalid'")
-    with get_session() as session:
-        if store.get_extraction(session, extraction_id) is None:
-            raise HTTPException(status_code=404, detail="Extraction not found")
         store.record_vote(session, extraction_id, vote == "valid", _voter_hash(request))
-    return RedirectResponse(url=f"/extraction/{extraction_id}", status_code=303)
+        paper_id = extraction.paper_id
+        page_number = extraction.page_number
+
+    # page_number is None only when find_snippet found no <page number="N">
+    # tags at all for this paper (no OCR text, or pre-tag-format data) —
+    # there's no page view to send the vote back to, so fall back to the
+    # paper's page list instead.
+    redirect_url = (
+        f"/papers/{paper_id}/pages/{page_number}" if page_number is not None else f"/papers/{paper_id}"
+    )
+    filters = {k: v for k, v in (("title", title), ("attribute", attribute), ("ecosystem_type", ecosystem_type)) if v}
+    if filters:
+        redirect_url += f"?{urlencode(filters)}"
+    return RedirectResponse(url=redirect_url, status_code=303)

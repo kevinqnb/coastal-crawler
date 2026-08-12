@@ -2,7 +2,9 @@
 {% block title %}{{ paper.title if paper.title else "(untitled)" }} &mdash; coastal-crawler{% endblock %}
 {% block content %}
 
-<a class="back-link" href="/">&larr; all measurements</a>
+{% macro qs(attr, eco, ttl) %}{% if attr %}attribute={{ attr | urlencode }}{% endif %}{% if attr and eco %}&{% endif %}{% if eco %}ecosystem_type={{ eco | urlencode }}{% endif %}{% if (attr or eco) and ttl %}&{% endif %}{% if ttl %}title={{ ttl | urlencode }}{% endif %}{% endmacro %}
+
+<a class="back-link" href="/?{{ qs(attribute, ecosystem_type, title) }}">&larr; all papers</a>
 
 <div class="paper-title">
   <h1>{{ (paper.title | render_title | safe) if paper.title else "(untitled)" }}</h1>
@@ -16,30 +18,21 @@
 <hr class="detail-divider">
 
 <div class="section-header">
-  <h2 class="section-title">Recorded Measurements</h2>
-  <span class="count">{{ total }} measurement{{ 's' if total != 1 }}</span>
+  <h2 class="section-title">Pages</h2>
+  <span class="count">{{ total }} measurement{{ 's' if total != 1 }}{% if attribute %} for {{ attribute | replace("_", " ") }}{% endif %}{% if ecosystem_type %} in {{ ecosystem_type | replace("_", " ") }}{% endif %} across {{ pages | length }} page{{ 's' if (pages | length) != 1 }}</span>
 </div>
 <hr class="section-divider">
 
-{% for r in rows %}
+{% for page_number, count in pages %}
 <div class="datapoint">
-  <span class="datapoint-number data">#{{ row_offset + loop.index }}</span>
-  <p><span class="label">Ecosystem:</span> {{ r.ecosystem_type | replace("_", " ") if r.ecosystem_type else "NA" }}</p>
-  <p><span class="label">Measurement:</span> {{ r.attribute | replace("_", " ") }}{% if r.judgement %}<span class="judgement {{ r.judgement }}">{{ r.judgement }}</span>{% endif %}</p>
-  <p><span class="label">Measurement value:</span> <a class="data value" href="/extraction/{{ r.id }}">{{ r.value if r.value is not none else "?" }}{% if r.units %} {{ r.units }}{% endif %}</a></p>
+  {% if page_number is not none %}
+  <p><a class="data value" href="/papers/{{ paper.id }}/pages/{{ page_number }}?{{ qs(attribute, ecosystem_type, title) }}">page {{ page_number + 1 }}</a> &mdash; {{ count }} measurement{{ 's' if count != 1 }}</p>
+  {% else %}
+  <p>unknown page &mdash; {{ count }} measurement{{ 's' if count != 1 }}</p>
+  {% endif %}
 </div>
 {% else %}
-<p>No measurements recorded for this paper yet.</p>
+<p>No measurements recorded for this paper yet{% if attribute or ecosystem_type %} matching the active filter{% endif %}.</p>
 {% endfor %}
-
-<div class="pagination">
-  <span>
-    {% if page > 1 %}<a href="/papers/{{ paper.id }}?page={{ page - 1 }}">&larr; previous</a>{% endif %}
-  </span>
-  <span>page {{ page }} of {{ total_pages }}</span>
-  <span>
-    {% if page < total_pages %}<a href="/papers/{{ paper.id }}?page={{ page + 1 }}">next &rarr;</a>{% endif %}
-  </span>
-</div>
 
 {% endblock %}

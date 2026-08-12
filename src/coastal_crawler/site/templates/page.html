@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}Page {{ page_number + 1 }} &mdash; {{ paper.title if paper.title else "(untitled)" }} &mdash; coastal-crawler{% endblock %}
+{% block content %}
+
+{% macro qs(attr, eco, ttl) %}{% if attr %}attribute={{ attr | urlencode }}{% endif %}{% if attr and eco %}&{% endif %}{% if eco %}ecosystem_type={{ eco | urlencode }}{% endif %}{% if (attr or eco) and ttl %}&{% endif %}{% if ttl %}title={{ ttl | urlencode }}{% endif %}{% endmacro %}
+
+<a class="back-link" href="/papers/{{ paper.id }}?{{ qs(attribute, ecosystem_type, title) }}">&larr; {{ (paper.title | render_title | safe) if paper.title else "(untitled)" }}</a>
+
+<div class="paper-title">
+  <h1>Page {{ page_number + 1 }}</h1>
+  <p class="meta">
+    {% if paper.authors %}{{ paper.authors | join(", ") }}{% endif %}
+    {% if paper.publication_date %} &middot; {{ paper.publication_date }}{% endif %}
+    {% if paper.doi %} &middot; <a href="https://doi.org/{{ paper.doi }}">doi:{{ paper.doi }}</a>{% endif %}
+  </p>
+</div>
+
+<hr class="detail-divider">
+
+<div class="section-header">
+  <h2 class="section-title">Measurements on this page</h2>
+  <span class="count">{{ rows | length }} measurement{{ 's' if (rows | length) != 1 }}{% if attribute %} for {{ attribute | replace("_", " ") }}{% endif %}{% if ecosystem_type %} in {{ ecosystem_type | replace("_", " ") }}{% endif %}</span>
+</div>
+<hr class="section-divider">
+
+{% for r in rows %}
+<div class="measurement-box">
+  {% if r.judgement %}<span class="judgement {{ r.judgement }}">{{ r.judgement }}</span>{% endif %}
+  <dl>
+    <dt>measurement</dt><dd class="data">{{ r.attribute | replace("_", " ") }}</dd>
+    <dt>value</dt><dd class="data">{{ r.value if r.value is not none else "?" }}{% if r.units %} {{ r.units }}{% endif %}</dd>
+    {% if r.entity_name %}<dt>site</dt><dd class="data">{{ r.entity_name }}</dd>{% endif %}
+    {% if r.ecosystem_type %}<dt>ecosystem</dt><dd class="data">{{ r.ecosystem_type | replace("_", " ") }}</dd>{% endif %}
+    {% if r.location %}<dt>location</dt><dd class="data">{{ r.location }}</dd>{% endif %}
+    {% if r.event_date %}<dt>event date</dt><dd class="data">{{ r.event_date }}</dd>{% endif %}
+    {% if r.sub_location %}<dt>sub-location</dt><dd class="data">{{ r.sub_location }}</dd>{% endif %}
+    {% if r.confidence is not none %}<dt>confidence</dt><dd class="data">{{ "%.2f"|format(r.confidence) }}</dd>{% endif %}
+  </dl>
+  <form class="vote-form" method="post" action="/extraction/{{ r.id }}/vote">
+    <input type="hidden" name="title" value="{{ title or '' }}">
+    <input type="hidden" name="attribute" value="{{ attribute or '' }}">
+    <input type="hidden" name="ecosystem_type" value="{{ ecosystem_type or '' }}">
+    <button class="valid" name="vote" value="valid" type="submit">&#10003; valid</button>
+    <button class="invalid" name="vote" value="invalid" type="submit">&#10007; invalid</button>
+  </form>
+</div>
+{% else %}
+<p>No measurements found on this page{% if attribute or ecosystem_type or title %} matching the active filter{% endif %}.</p>
+{% endfor %}
+
+<hr class="detail-divider">
+
+<div class="snippet">
+  <p class="snippet-header">OCR text &mdash; page {{ page_number + 1 }}</p>
+  <div class="snippet-body data">
+    {% if page_html %}{{ page_html | safe }}{% else %}<p>OCR text unavailable for this page.</p>{% endif %}
+  </div>
+</div>
+
+{% endblock %}

@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}coastal-crawler &mdash; measurements{% endblock %}
+{% block title %}coastal-crawler &mdash; papers{% endblock %}
 {% block content %}
 
 {% macro qs(attr, eco, ttl) %}{% if attr %}attribute={{ attr | urlencode }}{% endif %}{% if attr and eco %}&{% endif %}{% if eco %}ecosystem_type={{ eco | urlencode }}{% endif %}{% if (attr or eco) and ttl %}&{% endif %}{% if ttl %}title={{ ttl | urlencode }}{% endif %}{% endmacro %}
@@ -34,8 +34,8 @@
 
   <div class="content">
     <div class="section-header">
-      <h2 class="section-title">Extracted Data</h2>
-      <span class="count">{{ total }} measurement{{ 's' if total != 1 }}{% if attribute %} for {{ attribute | replace("_", " ") }}{% endif %}{% if ecosystem_type %} in {{ ecosystem_type | replace("_", " ") }}{% endif %}{% if title %} matching &ldquo;{{ title }}&rdquo;{% endif %}</span>
+      <h2 class="section-title">Papers</h2>
+      <span class="count">{{ total }} paper{{ 's' if total != 1 }}{% if attribute %} with {{ attribute | replace("_", " ") }}{% endif %}{% if ecosystem_type %} in {{ ecosystem_type | replace("_", " ") }}{% endif %}{% if title %} matching &ldquo;{{ title }}&rdquo;{% endif %}</span>
       <a class="export-link" href="/export.csv?{{ qs(attribute, ecosystem_type, title) }}">Export CSV</a>
     </div>
     <hr class="section-divider">
@@ -43,15 +43,14 @@
     {% for r in rows %}
     <div class="datapoint">
       <span class="datapoint-number data">#{{ row_offset + loop.index }}</span>
-      <p><span class="label">Ecosystem:</span> {{ r.ecosystem_type | replace("_", " ") if r.ecosystem_type else "NA" }}</p>
-      <p><span class="label">Measurement:</span> {{ r.attribute | replace("_", " ") }}{% if r.judgement %}<span class="judgement {{ r.judgement }}">{{ r.judgement }}</span>{% endif %}</p>
-      <p><span class="label">Measurement value:</span> <a class="data value" href="/extraction/{{ r.id }}">{{ r.value if r.value is not none else "?" }}{% if r.units %} {{ r.units }}{% endif %}</a></p>
-      <p><span class="label">Title:</span> {{ (r.title | render_title | safe) if r.title else "(untitled)" }}</p>
+      <p><a class="data value" href="/papers/{{ r.id }}?{{ qs(attribute, ecosystem_type, title) }}">{{ (r.title | render_title | safe) if r.title else "(untitled)" }}</a></p>
       <p><span class="label">Authors:</span> {{ r.authors | join(", ") if r.authors else "NA" }}</p>
+      <p><span class="label">Date:</span> {{ r.publication_date if r.publication_date else "NA" }}</p>
       <p><span class="label">DOI:</span> {% if r.doi %}<a href="https://doi.org/{{ r.doi }}">{{ r.doi }}</a>{% else %}NA{% endif %}</p>
+      <p><span class="label">Measurements:</span> {{ r.extraction_count }}</p>
     </div>
     {% else %}
-    <p>No measurements found.</p>
+    <p>No papers found.</p>
     {% endfor %}
 
     <div class="pagination">
