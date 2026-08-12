@@ -1090,6 +1090,21 @@ class TestPageExtractions:
         assert store.page_extractions(db_session, paper.id, 99) == []
 
 
+def _assign_location(session: Session, paper: Paper, **location_kwargs) -> Location:
+    """Create a Location and point every one of `paper`'s extractions at it.
+    Same pattern as TestLocationMajorityEcosystemType's fixture helper (see
+    tests/test_store.py's TestLocationMajorityEcosystemType), duplicated
+    at module scope rather than shared, so this file's already-passing
+    location tests stay untouched by this build."""
+    location = Location(resolution_method="coordinate", **location_kwargs)
+    session.add(location)
+    session.flush()
+    for extraction in paper.extractions:
+        extraction.location_id = location.id
+    session.flush()
+    return location
+
+
 class TestExportExtractions:
     def test_returns_all_matching_rows_unpaginated(self, db_session: Session) -> None:
         _make_paper_with_extractions(
@@ -1112,24 +1127,22 @@ class TestExportExtractions:
         assert len(rows) == 1
         assert rows[0].id == second.id
 
-    def test_filters_by_title_attribute_ecosystem_type(self, db_session: Session) -> None:
+    def test_filters_by_title_and_attribute(self, db_session: Session) -> None:
         uid = _uid()
         paper = _make_paper_with_extractions_titled(
             db_session, f"{uid} Coastal Study",
-            [{"attribute": "salinity", "value": "1", "units": None, "ecosystem_type": "reef"}],
+            [{"attribute": "salinity", "value": "1", "units": None}],
         )
         _make_paper_with_extractions_titled(
             db_session, f"Other {uid} Paper",
-            [{"attribute": "nitrate", "value": "2", "units": None, "ecosystem_type": "marsh"}],
+            [{"attribute": "nitrate", "value": "2", "units": None}],
         )
-        rows = store.export_extractions(
-            db_session, title=uid, attribute="salinity", ecosystem_type="reef"
-        )
+        rows = store.export_extractions(db_session, title=uid, attribute="salinity")
         assert len(rows) == 1
         assert rows[0].paper_id == paper.id
 
     def test_row_includes_all_csv_fields(self, db_session: Session) -> None:
-        _make_paper_with_extractions(
+        paper = _make_paper_with_extractions(
             db_session,
             [{
                 "attribute": "salinity", "value": "28.4", "units": "PSU",
@@ -1140,16 +1153,91 @@ class TestExportExtractions:
                 "additional_details": "high tide",
             }],
         )
+        location = _assign_location(db_session, paper, name="Canonical Bay X", latitude=41.5, longitude=-70.6)
+
         rows = store.export_extractions(db_session)
         r = rows[0]
         for field in (
             "attribute", "value", "units", "entity_name", "identifiers",
-            "ecosystem_type", "location", "latitude", "longitude",
+            "location_description", "ecosystem_type", "location_id",
+            "location_name", "location_latitude", "location_longitude",
             "event_date", "sub_location", "additional_details",
             "judgement", "confidence", "title", "doi", "authors",
             "publication_date",
         ):
             assert hasattr(r, field)
+        assert r.entity_name == "Site A"
+        assert r.identifiers == "SITE-1"
+        assert r.location_description == "Bay X"
+        assert r.location_id == location.id
+        assert r.location_name == "Canonical Bay X"
+        assert r.location_latitude == 41.5
+        assert r.location_longitude == -70.6
+
+    def test_unlocated_row_exports_with_blank_location_fields(self, db_session: Session) -> None:
+        _make_paper_with_extractions(
+            db_session, [{"attribute": "salinity", "value": "1", "units": None}]
+        )
+        rows = store.export_extractions(db_session)
+        assert len(rows) == 1
+        assert rows[0].location_id is None
+        assert rows[0].location_name is None
+
+    def test_ecosystem_type_filter_matches_by_location_not_own_row_value(
+        self, db_session: Session
+    ) -> None:
+        """A location's majority ecosystem_type is 'marsh' (2 marsh rows,
+        1 mangrove row) — filtering by 'marsh' must return *all* of that
+        location's rows, including the one whose own recorded
+        ecosystem_type is 'mangrove', since done_when #4 filters by
+        location membership, not by the row's own value."""
+        marsh_paper = _make_paper_with_extractions(
+            db_session,
+            [
+                {"attribute": "salinity", "value": "1", "ecosystem_type": "marsh"},
+                {"attribute": "turbidity", "value": "2", "ecosystem_type": "marsh"},
+                {"attribute": "salinity", "value": "3", "ecosystem_type": "mangrove"},
+            ],
+        )
+        _assign_location(db_session, marsh_paper)
+        reef_paper = _make_paper_with_extractions(
+            db_session, [{"attribute": "salinity", "value": "9", "ecosystem_type": "reef"}]
+        )
+        _assign_location(db_session, reef_paper)
+
+        rows = store.export_extractions(db_session, ecosystem_type="marsh")
+
+        assert len(rows) == 3
+        assert {r.paper_id for r in rows} == {marsh_paper.id}
+        assert {r.ecosystem_type for r in rows} == {"marsh", "mangrove"}
+
+    def test_tied_location_matches_both_ecosystem_types(self, db_session: Session) -> None:
+        """A location tied 1 'reef' / 1 'estuary' matches *both* filter
+        values (your call at Stage 1 — a 50/50 site isn't 'really' either
+        type, so it shouldn't be silently excluded from either one)."""
+        tied_paper = _make_paper_with_extractions(
+            db_session,
+            [
+                {"attribute": "salinity", "value": "1", "ecosystem_type": "reef"},
+                {"attribute": "salinity", "value": "2", "ecosystem_type": "estuary"},
+            ],
+        )
+        _assign_location(db_session, tied_paper)
+
+        reef_rows = store.export_extractions(db_session, ecosystem_type="reef")
+        estuary_rows = store.export_extractions(db_session, ecosystem_type="estuary")
+        mangrove_rows = store.export_extractions(db_session, ecosystem_type="mangrove")
+
+        assert {r.paper_id for r in reef_rows} == {tied_paper.id}
+        assert {r.paper_id for r in estuary_rows} == {tied_paper.id}
+        assert mangrove_rows == []
+
+    def test_ecosystem_type_filter_excludes_unlocated_rows(self, db_session: Session) -> None:
+        _make_paper_with_extractions(
+            db_session, [{"attribute": "salinity", "value": "1", "ecosystem_type": "marsh"}]
+        )
+        rows = store.export_extractions(db_session, ecosystem_type="marsh")
+        assert rows == []
 
 
 class TestGetExtraction:

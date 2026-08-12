@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session
 
 from coastal_crawler.db import engine as db_engine_module
 from coastal_crawler.db import store
-from coastal_crawler.db.models import Paper
+from coastal_crawler.db.models import Location, Paper
 from coastal_crawler.site.app import app
 from tests.test_store import make_extraction_result, make_paper
 
@@ -43,6 +43,25 @@ def _seed_paper_with_extraction(engine: Engine, *, title: str, data: dict) -> in
         store.insert_extraction(paper.id, make_extraction_result(data=data), session)
         session.commit()
         return paper.id
+
+
+def _seed_paper_with_located_extraction(
+    engine: Engine, *, title: str, data: dict, location_kwargs: dict
+) -> tuple[int, int]:
+    """Like `_seed_paper_with_extraction`, plus a resolved `locations` row
+    the extraction's `location_id` points at — for exercising
+    /export.csv's canonical location columns and location-majority
+    `ecosystem_type` filter end-to-end. Returns (paper_id, location_id)."""
+    with Session(engine) as session:
+        store.upsert_papers([make_paper(status="extracted", title=title)], session)
+        paper = session.scalars(select(Paper).order_by(Paper.id.desc())).first()
+        extraction = store.insert_extraction(paper.id, make_extraction_result(data=data), session)
+        location = Location(resolution_method="coordinate", **location_kwargs)
+        session.add(location)
+        session.flush()
+        extraction.location_id = location.id
+        session.commit()
+        return paper.id, location.id
 
 
 def _seed_paper_with_paged_extraction(
@@ -76,7 +95,7 @@ class TestExportCsvRoute:
     def test_returns_csv_with_expected_columns_and_row(
         self, client: TestClient, clean_db: Engine
     ) -> None:
-        _seed_paper_with_extraction(
+        _seed_paper_with_located_extraction(
             clean_db,
             title="Nutrient Cycling in Salt Marshes",
             data={
@@ -93,6 +112,7 @@ class TestExportCsvRoute:
                 "sub_location": "T1",
                 "additional_details": "high tide",
             },
+            location_kwargs={"name": "Canonical Bay X", "latitude": 41.5, "longitude": -70.6},
         )
         resp = client.get("/export.csv")
         assert resp.status_code == 200
@@ -102,15 +122,21 @@ class TestExportCsvRoute:
         rows = list(csv.reader(io.StringIO(resp.text)))
         header, row = rows[0], rows[1]
         assert header == [
-            "attribute", "value", "units", "name", "identifiers",
-            "ecosystem_type", "location", "latitude", "longitude", "date",
+            "location_id", "location_name", "location_latitude", "location_longitude",
+            "entity_name", "identifiers", "location_description",
+            "attribute", "value", "units", "ecosystem_type", "date",
             "sub_location", "additional_details", "judgement", "confidence",
             "title", "authors", "doi", "publication_date",
         ]
         assert row[header.index("attribute")] == "salinity"
         assert row[header.index("value")] == "28.4"
         assert row[header.index("ecosystem_type")] == "salt_marsh"
-        assert row[header.index("latitude")] == "41.5"
+        assert row[header.index("entity_name")] == "Site A"
+        assert row[header.index("identifiers")] == "SITE-1"
+        assert row[header.index("location_description")] == "Bay X"
+        assert row[header.index("location_name")] == "Canonical Bay X"
+        assert row[header.index("location_latitude")] == "41.5"
+        assert row[header.index("location_longitude")] == "-70.6"
         assert row[header.index("title")] == "Nutrient Cycling in Salt Marshes"
 
     def test_filename_reflects_active_filters(
@@ -151,6 +177,44 @@ class TestExportCsvRoute:
         rows = list(csv.reader(io.StringIO(resp.text)))
         assert len(rows) == 2  # header + one matching data row
         assert rows[1][rows[0].index("title")] == "Match Paper"
+
+    def test_ecosystem_type_filter_uses_location_majority_not_own_row_value(
+        self, client: TestClient, clean_db: Engine
+    ) -> None:
+        """Row's own recorded ecosystem_type is 'mangrove', but its
+        location's majority (established by other extractions at the same
+        location) is 'marsh' — filtering by 'marsh' must still include it,
+        filtering by 'mangrove' must not (done_when #4, end-to-end through
+        an actual HTTP request)."""
+        with Session(clean_db) as session:
+            store.upsert_papers([make_paper(status="extracted", title="Marsh Site Paper")], session)
+            paper = session.scalars(select(Paper).order_by(Paper.id.desc())).first()
+            location = Location(resolution_method="coordinate")
+            session.add(location)
+            session.flush()
+            for i, ecosystem_type in enumerate(("marsh", "marsh", "mangrove")):
+                extraction = store.insert_extraction(
+                    paper.id,
+                    make_extraction_result(
+                        data={
+                            "attribute": "salinity",
+                            "value": str(i),
+                            "units": None,
+                            "ecosystem_type": ecosystem_type,
+                        }
+                    ),
+                    session,
+                )
+                extraction.location_id = location.id
+            session.commit()
+
+        marsh_resp = client.get("/export.csv", params={"ecosystem_type": "marsh"})
+        marsh_rows = list(csv.reader(io.StringIO(marsh_resp.text)))
+        assert len(marsh_rows) == 4  # header + all 3 rows at this location
+
+        mangrove_resp = client.get("/export.csv", params={"ecosystem_type": "mangrove"})
+        mangrove_rows = list(csv.reader(io.StringIO(mangrove_resp.text)))
+        assert len(mangrove_rows) == 1  # header only — location's majority is 'marsh'
 
 
 class TestListViewTitleFilter:

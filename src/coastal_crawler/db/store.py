@@ -19,7 +19,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session, selectinload
 
 from coastal_crawler.adapter import ExtractionResult
-from coastal_crawler.db.models import CrawlState, Extraction, Paper, PaperOcrContext, Vote
+from coastal_crawler.db.models import CrawlState, Extraction, Location, Paper, PaperOcrContext, Vote
 
 
 # ---------------------------------------------------------------------------
@@ -641,10 +641,15 @@ def _extraction_rows(
     limit: int | None = None,
     offset: int = 0,
 ) -> tuple[list[Any], int]:
-    """Shared narrow+hydrate dedup query behind `list_extractions`,
-    `export_extractions`, and `page_extractions`. `limit=None` returns every
-    matching row (unpaginated, for CSV export); a given `limit` paginates via
-    `offset`.
+    """Shared narrow+hydrate dedup query behind `list_extractions` and
+    `page_extractions`. `export_extractions` is deliberately *not* built on
+    this — its `ecosystem_type` filter means something different
+    (location-majority, not per-row) than every other caller here, and
+    folding that into this shared function would also change
+    `list_extractions`/`page_extractions`'s filter semantics. See
+    notes/coastal-crawler/builds/2026-08-11-location-export-01.md.
+    `limit=None` returns every matching row (unpaginated); a given `limit`
+    paginates via `offset`.
 
     Deduped on (paper_id, attribute, value, units), keeping the highest `id`
     — extraction rows accumulate across re-extraction passes (see
@@ -947,13 +952,100 @@ def export_extractions(
     ecosystem_type: str | None = None,
 ) -> list[Any]:
     """Every (measurement, paper) row matching the given filters, unpaginated
-    — for the results website's CSV export. Same dedup and row shape as
-    `list_extractions` (see `_extraction_rows`), just without a page limit.
+    — for the results website's location-centric CSV export
+    (`/export.csv`). Self-contained (not built on `_extraction_rows` — see
+    that function's docstring for why), same
+    `DISTINCT ON (paper_id, attribute, value, units)` dedup key/shape (one
+    row per individual measurement, highest `id` wins across re-extraction
+    passes) and the same two-stage narrow-then-hydrate query as
+    `_extraction_rows` (avoids detoasting each row's ~55KB embedded
+    OCR-context JSONB blob for rows that lose the dedup).
+
+    `title`/`attribute` filter the same way `_extraction_rows` does
+    (per-paper substring match / per-row exact match). `ecosystem_type`
+    filters by *location* membership, not the row's own
+    `data->>'ecosystem_type'`: it selects every extraction row belonging to
+    a location where `ecosystem_type` is among that location's top-tied
+    ecosystem types (see `_location_top_ecosystem_types`) — so a matching
+    row's own `ecosystem_type` value can be null, or something else
+    entirely, and it still exports as long as its location matches. Rows
+    with no resolved `location_id` never match a specific `ecosystem_type`
+    filter value (nothing to match against) but still export when no
+    `ecosystem_type` filter is given.
+
+    Each row exposes `.location_id`, `.location_name`, `.location_latitude`,
+    `.location_longitude` (from a `LEFT OUTER JOIN locations` — null for an
+    unresolved row, not excluded) alongside the raw per-record
+    `.entity_name`, `.identifiers`, `.location_description` (renamed from
+    the raw `location` field to avoid colliding with `.location_name`) —
+    see notes/coastal-crawler/builds/2026-08-11-location-export-01.md for
+    why both the raw and canonical fields are kept.
     """
-    rows, _total = _extraction_rows(
-        session, title=title, attribute=attribute, ecosystem_type=ecosystem_type
+    dedup_key = (
+        Extraction.paper_id,
+        Extraction.data["attribute"].astext,
+        Extraction.data["value"].astext,
+        Extraction.data["units"].astext,
     )
-    return rows
+    narrow = select(
+        Extraction.id,
+        Extraction.paper_id,
+        Extraction.data["attribute"].astext,
+        Extraction.data["value"].astext,
+        Extraction.data["units"].astext,
+        Extraction.created_at,
+    )
+    if title:
+        narrow = narrow.join(Paper, Paper.id == Extraction.paper_id).where(
+            Paper.title.icontains(title, autoescape=True)
+        )
+    if attribute:
+        narrow = narrow.where(Extraction.data["attribute"].astext == attribute)
+    if ecosystem_type:
+        top_types = _location_top_ecosystem_types().subquery()
+        matching_location_ids = select(top_types.c.location_id).where(
+            top_types.c.ecosystem_type == ecosystem_type
+        )
+        narrow = narrow.where(Extraction.location_id.in_(matching_location_ids))
+    deduped_ids = narrow.distinct(*dedup_key).order_by(*dedup_key, Extraction.id.desc()).subquery()
+
+    ids_stmt = select(deduped_ids.c.id).order_by(deduped_ids.c.created_at.desc())
+    ids = list(session.scalars(ids_stmt).all())
+    if not ids:
+        return []
+
+    hydrate_stmt = (
+        select(
+            Extraction.id,
+            Extraction.paper_id,
+            Extraction.data["attribute"].astext.label("attribute"),
+            Extraction.data["value"].astext.label("value"),
+            Extraction.data["units"].astext.label("units"),
+            Location.id.label("location_id"),
+            Location.name.label("location_name"),
+            Location.latitude.label("location_latitude"),
+            Location.longitude.label("location_longitude"),
+            Extraction.data["name"].astext.label("entity_name"),
+            Extraction.data["identifiers"].astext.label("identifiers"),
+            Extraction.data["location"].astext.label("location_description"),
+            Extraction.data["date"].astext.label("event_date"),
+            Extraction.data["sub_location"].astext.label("sub_location"),
+            Extraction.data["additional_details"].astext.label("additional_details"),
+            Extraction.data["ecosystem_type"].astext.label("ecosystem_type"),
+            Extraction.judgement,
+            Extraction.confidence,
+            Extraction.created_at,
+            Paper.title,
+            Paper.doi,
+            Paper.authors,
+            Paper.publication_date,
+        )
+        .join(Paper, Paper.id == Extraction.paper_id)
+        .outerjoin(Location, Location.id == Extraction.location_id)
+        .where(Extraction.id.in_(ids))
+        .order_by(Extraction.created_at.desc())
+    )
+    return list(session.execute(hydrate_stmt).all())
 
 
 def list_ecosystem_types(session: Session) -> list[str]:
@@ -1054,23 +1146,24 @@ def record_vote(
 # Locations
 # ---------------------------------------------------------------------------
 
-def location_majority_ecosystem_type(session: Session) -> list[Any]:
-    """Return one row per location: (location_id, ecosystem_type, count) for
-    the ecosystem_type with the highest raw `COUNT(*)` across that
-    location's extraction rows (ties broken by ecosystem_type ascending,
-    for determinism).
-
-    Deliberately a raw row count, not deduped by (paper_id, attribute,
-    value, units) the way `_extraction_rows`/`pages_for_paper` dedupe — a
-    paper re-extracted multiple times (extraction rows accumulate across
-    model-version reruns, see insert_extraction) contributes once per
-    extraction pass rather than once. See
+def _location_ecosystem_type_counts() -> Any:
+    """(location_id, ecosystem_type, count) per location per non-null
+    ecosystem_type recorded among its extractions — raw `COUNT(*)`,
+    deliberately not deduped by (paper_id, attribute, value, units) the way
+    `_extraction_rows`/`pages_for_paper` dedupe, so a paper re-extracted
+    multiple times (extraction rows accumulate across model-version
+    reruns, see insert_extraction) contributes once per extraction pass
+    rather than once. See
     notes/coastal-crawler/builds/2026-08-11-location-resolution-01.md.
 
-    Locations with no non-null `ecosystem_type` among their extractions
-    (or no extractions at all) don't appear in the result.
+    Shared base subquery for two different collapses: `location_majority_ecosystem_type`
+    picks one ecosystem_type per location (a single display answer, ties
+    broken arbitrarily-but-deterministically); `_location_top_ecosystem_types`
+    keeps every ecosystem_type tied for first (for filter *inclusion*,
+    where an arbitrary tiebreak would silently misclassify a tied location
+    — see notes/coastal-crawler/builds/2026-08-11-location-export-01.md).
     """
-    counts = (
+    return (
         select(
             Extraction.location_id,
             Extraction.data["ecosystem_type"].astext.label("ecosystem_type"),
@@ -1079,11 +1172,44 @@ def location_majority_ecosystem_type(session: Session) -> list[Any]:
         .where(Extraction.location_id.is_not(None))
         .where(Extraction.data["ecosystem_type"].astext.is_not(None))
         .group_by(Extraction.location_id, Extraction.data["ecosystem_type"].astext)
-        .subquery()
     )
+
+
+def location_majority_ecosystem_type(session: Session) -> list[Any]:
+    """Return one row per location: (location_id, ecosystem_type, count) for
+    the ecosystem_type with the highest raw `COUNT(*)` across that
+    location's extraction rows (ties broken by ecosystem_type ascending,
+    for determinism).
+
+    Locations with no non-null `ecosystem_type` among their extractions
+    (or no extractions at all) don't appear in the result.
+    """
+    counts = _location_ecosystem_type_counts().subquery()
     stmt = (
         select(counts.c.location_id, counts.c.ecosystem_type, counts.c.count)
         .distinct(counts.c.location_id)
         .order_by(counts.c.location_id, counts.c.count.desc(), counts.c.ecosystem_type.asc())
     )
     return list(session.execute(stmt).all())
+
+
+def _location_top_ecosystem_types() -> Any:
+    """(location_id, ecosystem_type) for every ecosystem_type tied for the
+    highest count at that location — one row for a clear majority, more
+    than one for a tie. Used by `export_extractions`'s `ecosystem_type`
+    filter: a tied location matches every type it's tied on (your call,
+    see notes/coastal-crawler/builds/2026-08-11-location-export-01.md) —
+    unlike `location_majority_ecosystem_type`, which picks a single
+    display answer via an ascending tiebreak, this must not silently
+    exclude a location from a filter value it's genuinely tied on.
+    """
+    counts = _location_ecosystem_type_counts().subquery()
+    max_count = (
+        select(counts.c.location_id, func.max(counts.c.count).label("max_count"))
+        .group_by(counts.c.location_id)
+        .subquery()
+    )
+    return select(counts.c.location_id, counts.c.ecosystem_type).join(
+        max_count,
+        (counts.c.location_id == max_count.c.location_id) & (counts.c.count == max_count.c.max_count),
+    )

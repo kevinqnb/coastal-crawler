@@ -43,20 +43,27 @@ _SEARCH_SUGGESTION_LIMIT = 8
 _SEARCH_RESULTS_LIMIT = 50
 _SEARCH_MIN_CHARS = 2
 
-# Column order for /export.csv — see notes/coastal-crawler/builds/
-# 2026-08-04-csv-export-01.md for the agreed set. Header names on the left;
-# the matching attribute on an `_extraction_rows` row (or, for "authors", a
-# small transform) on the right.
+# Column order for /export.csv — location-centric fields first, per
+# notes/coastal-crawler/builds/2026-08-11-location-export-01.md (which
+# superseded 2026-08-04-csv-export-01.md's flat per-measurement set).
+# Header names on the left; the matching attribute on a
+# `store.export_extractions` row (or, for "authors", a small transform) on
+# the right. Nothing from the old column set was dropped — the canonical
+# location_id/location_name/location_latitude/location_longitude columns
+# (from a LEFT JOIN to `locations`) are added alongside the raw per-record
+# entity_name/identifiers/location_description, not instead of them.
 _CSV_COLUMNS: list[tuple[str, str]] = [
+    ("location_id", "location_id"),
+    ("location_name", "location_name"),
+    ("location_latitude", "location_latitude"),
+    ("location_longitude", "location_longitude"),
+    ("entity_name", "entity_name"),
+    ("identifiers", "identifiers"),
+    ("location_description", "location_description"),
     ("attribute", "attribute"),
     ("value", "value"),
     ("units", "units"),
-    ("name", "entity_name"),
-    ("identifiers", "identifiers"),
     ("ecosystem_type", "ecosystem_type"),
-    ("location", "location"),
-    ("latitude", "latitude"),
-    ("longitude", "longitude"),
     ("date", "event_date"),
     ("sub_location", "sub_location"),
     ("additional_details", "additional_details"),
