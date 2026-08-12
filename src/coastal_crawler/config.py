@@ -304,6 +304,24 @@ class Settings(BaseSettings):
         ),
     )
 
+    # ---------------------------------------------- Location resolution
+    location_distance_threshold_km: float = Field(
+        default=1.0,
+        description=(
+            "Max great-circle (haversine) distance in km between two "
+            "coordinate-bearing extraction points for scripts/resolve_locations.py "
+            "to cluster them into the same location."
+        ),
+    )
+    location_name_similarity_threshold: float = Field(
+        default=0.85,
+        description=(
+            "Min difflib.SequenceMatcher.ratio() (0-1) between two normalized "
+            "site names for scripts/resolve_locations.py to merge coordinate-less "
+            "extraction rows into the same location."
+        ),
+    )
+
     # ------------------------------------------------------- Wiley TDM
     wiley_api_key: str | None = Field(
         default=None,

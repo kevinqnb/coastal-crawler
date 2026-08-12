@@ -65,7 +65,14 @@ def clean_db(db_engine: Engine) -> Engine:  # type: ignore[misc]
     """
     yield db_engine  # type: ignore[misc]
     with Session(db_engine) as s:
+        # `locations` isn't reached by TRUNCATE ... CASCADE from the tables
+        # below — cascade follows FKs *into* the truncated tables, and
+        # extractions.location_id points *out* to locations, the opposite
+        # direction — so it must be listed explicitly or location rows leak
+        # across tests.
         s.execute(
-            text("TRUNCATE papers, extractions, crawl_state RESTART IDENTITY CASCADE")
+            text(
+                "TRUNCATE papers, extractions, crawl_state, locations RESTART IDENTITY CASCADE"
+            )
         )
         s.commit()

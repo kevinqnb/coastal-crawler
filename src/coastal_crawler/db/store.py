@@ -922,3 +922,42 @@ def record_vote(
         update(Extraction).where(Extraction.id == extraction_id).values(judgement=judgement)
     )
     return judgement
+
+
+# ---------------------------------------------------------------------------
+# Locations
+# ---------------------------------------------------------------------------
+
+def location_majority_ecosystem_type(session: Session) -> list[Any]:
+    """Return one row per location: (location_id, ecosystem_type, count) for
+    the ecosystem_type with the highest raw `COUNT(*)` across that
+    location's extraction rows (ties broken by ecosystem_type ascending,
+    for determinism).
+
+    Deliberately a raw row count, not deduped by (paper_id, attribute,
+    value, units) the way `_extraction_rows`/`pages_for_paper` dedupe — a
+    paper re-extracted multiple times (extraction rows accumulate across
+    model-version reruns, see insert_extraction) contributes once per
+    extraction pass rather than once. See
+    notes/coastal-crawler/builds/2026-08-11-location-resolution-01.md.
+
+    Locations with no non-null `ecosystem_type` among their extractions
+    (or no extractions at all) don't appear in the result.
+    """
+    counts = (
+        select(
+            Extraction.location_id,
+            Extraction.data["ecosystem_type"].astext.label("ecosystem_type"),
+            func.count().label("count"),
+        )
+        .where(Extraction.location_id.is_not(None))
+        .where(Extraction.data["ecosystem_type"].astext.is_not(None))
+        .group_by(Extraction.location_id, Extraction.data["ecosystem_type"].astext)
+        .subquery()
+    )
+    stmt = (
+        select(counts.c.location_id, counts.c.ecosystem_type, counts.c.count)
+        .distinct(counts.c.location_id)
+        .order_by(counts.c.location_id, counts.c.count.desc(), counts.c.ecosystem_type.asc())
+    )
+    return list(session.execute(stmt).all())

@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from coastal_crawler.adapter import ExtractionResult
 from coastal_crawler.db import store
-from coastal_crawler.db.models import Extraction, Paper, Vote
+from coastal_crawler.db.models import Extraction, Location, Paper, Vote
 
 
 # ---------------------------------------------------------------------------
@@ -1123,3 +1123,64 @@ class TestRecordVote:
         assert len(votes) == 1
         assert votes[0].vote is True
         assert votes[0].voter_hash == "hash1"
+
+
+class TestLocationMajorityEcosystemType:
+    def _assign_location(self, session: Session, paper: Paper, **location_kwargs) -> Location:
+        location = Location(resolution_method="coordinate", **location_kwargs)
+        session.add(location)
+        session.flush()
+        for extraction in paper.extractions:
+            extraction.location_id = location.id
+        session.flush()
+        return location
+
+    def test_majority_is_raw_row_count_not_deduped(self, db_session: Session) -> None:
+        """Two 'marsh' rows should beat one 'mangrove' row even though
+        that's a raw row count, not a dedup by (paper_id, attribute, value,
+        units) — a deliberate choice, see location_majority_ecosystem_type's
+        docstring."""
+        paper = _make_paper_with_extractions(
+            db_session,
+            [
+                {"attribute": "salinity", "value": "1", "ecosystem_type": "marsh"},
+                {"attribute": "turbidity", "value": "2", "ecosystem_type": "marsh"},
+                {"attribute": "salinity", "value": "3", "ecosystem_type": "mangrove"},
+            ],
+        )
+        location = self._assign_location(db_session, paper)
+
+        rows = store.location_majority_ecosystem_type(db_session)
+
+        assert rows == [(location.id, "marsh", 2)]
+
+    def test_ties_broken_by_ecosystem_type_ascending(self, db_session: Session) -> None:
+        paper = _make_paper_with_extractions(
+            db_session,
+            [
+                {"attribute": "salinity", "value": "1", "ecosystem_type": "zeta"},
+                {"attribute": "salinity", "value": "2", "ecosystem_type": "alpha"},
+            ],
+        )
+        location = self._assign_location(db_session, paper)
+
+        rows = store.location_majority_ecosystem_type(db_session)
+
+        assert rows == [(location.id, "alpha", 1)]
+
+    def test_null_ecosystem_type_excluded(self, db_session: Session) -> None:
+        paper = _make_paper_with_extractions(db_session, [{"attribute": "salinity", "value": "1"}])
+        self._assign_location(db_session, paper)
+
+        rows = store.location_majority_ecosystem_type(db_session)
+
+        assert rows == []
+
+    def test_extractions_without_location_excluded(self, db_session: Session) -> None:
+        _make_paper_with_extractions(
+            db_session, [{"attribute": "salinity", "value": "1", "ecosystem_type": "marsh"}]
+        )
+
+        rows = store.location_majority_ecosystem_type(db_session)
+
+        assert rows == []
