@@ -32,6 +32,7 @@ pipeline with separate entity/attribute/event prompts.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from pydantic import BaseModel
@@ -271,6 +272,171 @@ ATTRIBUTE_INFO_DICT: dict[str, dict[str, Any]] = {
         "units": ["µmol/L", "mg/L", "µg Si/L"],
     },
 }
+
+
+# ---------------------------------------------------------------------------
+# Unit normalization/conversion — scripts/build_warehouse.py's tiered unit
+# conversion (see notes/coastal-crawler/builds/2026-08-12-warehouse-init-01.md
+# "Approach" for the full design writeup). Live-queried raw `units` strings
+# across all 23 attributes have ~600 distinct spellings, not the handful
+# ATTRIBUTE_INFO_DICT lists — that list is prompt guidance for the LLM,
+# never enforced at extraction time. Two tiers are implemented here, both
+# zero domain/substance risk:
+#
+#   Tier 1 (normalize_unit_string): pure text normalization — Unicode
+#   super/subscripts to ASCII, µ/μ unified, whitespace, "liter"/"day"/"hr"/
+#   "yr" spelled out, `X^{-1}`/`X⁻¹`/`X-1` exponent forms all folded into
+#   one slash-based form (`mg L⁻¹` -> `mg/L`), bare/prefixed Molar (`µM`)
+#   expanded to `µmol/L`. No numeric conversion — just collapses spelling
+#   variants of the same unit onto one string.
+#
+#   Tier 2 (split_numerator_prefix / convert_to_canonical): SI-prefix
+#   scaling. Fires only when two normalized unit strings share the exact
+#   same denominator chain (everything after the first `/`) AND their
+#   numerator tokens reduce to the same recognized base name (mol/g/atm/eq)
+#   after stripping a known metric prefix — e.g. `mmol/kg` -> `µmol/kg` is
+#   safe (x1000) because "mol" is a real, dimension-preserving base and the
+#   scaling doesn't depend on what's being measured. `µmol/L` is never
+#   compared against `mg/L` this way (different base entirely — would need
+#   a molar mass, which is genuinely substance-specific).
+#
+#   Everything else (molar<->mass conversions, volume<->mass-basis
+#   conversions needing density, `%`/`% saturation`->concentration, non-SI
+#   unit families) is Tier 3: left unconverted, so
+#   scripts/build_warehouse.py skips and logs that row rather than
+#   guessing at a domain-specific factor.
+#
+#   One named exception, decided with the user rather than assumed: salinity
+#   (`psu`/`ppt`/`g/kg`/`‰`) is treated as numerically interchangeable
+#   (factor 1.0) per standard oceanographic convention for seawater — see
+#   SALINITY_EQUIVALENT_UNITS below and the build note.
+# ---------------------------------------------------------------------------
+
+_SUPERSCRIPT_TABLE = str.maketrans({
+    "⁰": "0", "¹": "1", "²": "2", "³": "3", "⁴": "4", "⁵": "5",
+    "⁶": "6", "⁷": "7", "⁸": "8", "⁹": "9", "⁻": "-", "−": "-", "‑": "-",
+    "₀": "0", "₁": "1", "₂": "2", "₃": "3", "₄": "4", "₅": "5",
+    "₆": "6", "₇": "7", "₈": "8", "₉": "9", "₋": "-",
+})
+
+_EXPONENT_TOKEN_RE = re.compile(r"([A-Za-zµ]+)\^-(\d+)")
+
+
+def normalize_unit_string(raw: str | None) -> str | None:
+    """Tier 1: collapse spelling/formatting variants of a raw `units` string
+    onto one normalized form. Pure text mechanics — no numeric conversion,
+    no domain knowledge. Returns None for None/empty input."""
+    if raw is None:
+        return None
+    s = raw.strip()
+    if not s:
+        return None
+    s = s.replace("μ", "µ")  # Greek mu (U+03BC) -> micro sign (U+00B5)
+    s = s.replace(" ", " ").replace("\xa0", " ")
+    s = s.translate(_SUPERSCRIPT_TABLE)
+    s = re.sub(r"\s+", " ", s).strip()
+    s = re.sub(r"\bliters?\b", "L", s, flags=re.IGNORECASE)
+    s = re.sub(r"\blitres?\b", "L", s, flags=re.IGNORECASE)
+    s = re.sub(r"\bday\b", "d", s, flags=re.IGNORECASE)
+    s = re.sub(r"\bhr\b", "h", s, flags=re.IGNORECASE)
+    s = re.sub(r"\byr\b", "y", s, flags=re.IGNORECASE)
+    s = s.replace("^{", "^").replace("}", "")
+    # Bare ASCII "u" used as a micro-sign substitute (e.g. "umol/L").
+    s = re.sub(r"(?<![A-Za-z])u(?=mol\b|g\b|L\b|M\b|atom\b)", "µ", s)
+    # Bare/prefixed Molar symbol ("µM", "nM", "M") -> "<prefix>mol/L".
+    s = re.sub(r"\b(n|p|µ|m|c)?M\b", lambda m: (m.group(1) or "") + "mol/L", s)
+    s = re.sub(r"\bper meter\b", "/m", s, flags=re.IGNORECASE)
+    # "<unit letter>-<digits>" -> "<unit letter>^-<digits>" (negative
+    # exponent), not a compound word like "µg-atom" (no trailing digit).
+    s = re.sub(r"([A-Za-zµ])-(\d+)\b", r"\1^-\2", s)
+
+    def _exponent_to_slash(m: re.Match[str]) -> str:
+        unit, n = m.group(1), m.group(2)
+        return f"/{unit}" if n == "1" else f"/{unit}^{n}"
+
+    s = _EXPONENT_TOKEN_RE.sub(_exponent_to_slash, s)
+    s = re.sub(r"\s*/\s*", "/", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+
+_SI_PREFIX_SCALE: dict[str, float] = {
+    "p": 1e-12, "n": 1e-9, "µ": 1e-6, "m": 1e-3, "c": 1e-2, "d": 1e-1,
+    "": 1.0, "da": 1e1, "h": 1e2, "k": 1e3, "M": 1e6, "G": 1e9,
+}
+_SI_BASE_UNIT_WHITELIST = ("mol", "g", "atm", "eq")
+_SI_PREFIXES_BY_LEN = sorted(_SI_PREFIX_SCALE, key=len, reverse=True)
+
+
+def split_numerator_prefix(token: str) -> tuple[float, str] | None:
+    """`'mmol'` -> `(1e-3, 'mol')`, `'µg'` -> `(1e-6, 'g')`. Restricted to a
+    small base-unit whitelist so this never fires on a token that merely
+    happens to start with a prefix-like letter (e.g. "meq"'s "m" is a real
+    SI milli- prefix on base "eq"; "mol" itself must not be misread as
+    prefix "m" + base "ol"). Returns None if no whitelisted base matches."""
+    for prefix in _SI_PREFIXES_BY_LEN:
+        if token.startswith(prefix):
+            base = token[len(prefix):]
+            if base in _SI_BASE_UNIT_WHITELIST:
+                return _SI_PREFIX_SCALE[prefix], base
+    return None
+
+
+# Attribute -> canonical unit, taken as ATTRIBUTE_INFO_DICT's first listed
+# unit (done_when item 2's "one canonical unit per attribute"), normalized
+# once here so every comparison is normalized-vs-normalized.
+def _canonical_unit(raw: str) -> str:
+    normalized = normalize_unit_string(raw)
+    assert normalized is not None, f"empty canonical unit string: {raw!r}"
+    return normalized
+
+
+CANONICAL_UNITS: dict[str, str] = {
+    attr: _canonical_unit(info["units"][0])
+    for attr, info in ATTRIBUTE_INFO_DICT.items()
+    if info.get("units")
+}
+
+# Decided with the user (2026-08-12, see the build note): salinity's 3
+# ATTRIBUTE_INFO_DICT units plus the equally-common '‰' (per-mille, the
+# same notation as "ppt" by definition) are numerically interchangeable
+# for seawater. This is the one substance-specific tier-2-adjacent
+# conversion this build makes, and it's explicit rather than folded into
+# the generic SI-prefix logic above.
+SALINITY_EQUIVALENT_UNITS: frozenset[str] = frozenset(
+    _canonical_unit(u) for u in ("psu", "PSU", "ppt", "g/kg", "‰")
+)
+
+
+def convert_to_canonical(attribute: str, raw_units: str | None) -> tuple[str, float] | None:
+    """Return `(canonical_units, factor)` such that
+    `quantity_canonical = quantity_raw_float * factor`, or None if
+    `raw_units` can't be converted (unknown attribute, no canonical unit
+    on record, or a genuine Tier 3 case) — the caller skips and logs.
+    """
+    canonical = CANONICAL_UNITS.get(attribute)
+    if canonical is None:
+        return None
+    normalized = normalize_unit_string(raw_units)
+    if normalized is None:
+        return None
+    if attribute == "salinity" and normalized in SALINITY_EQUIVALENT_UNITS:
+        return canonical, 1.0
+    if normalized == canonical:
+        return canonical, 1.0
+    c_parts = normalized.split("/", 1)
+    k_parts = canonical.split("/", 1)
+    if len(c_parts) != 2 or len(k_parts) != 2 or c_parts[1] != k_parts[1]:
+        return None
+    candidate_split = split_numerator_prefix(c_parts[0])
+    canonical_split = split_numerator_prefix(k_parts[0])
+    if candidate_split is None or canonical_split is None:
+        return None
+    candidate_scale, candidate_base = candidate_split
+    canonical_scale, canonical_base = canonical_split
+    if candidate_base != canonical_base:
+        return None
+    return canonical, candidate_scale / canonical_scale
 
 
 # ---------------------------------------------------------------------------

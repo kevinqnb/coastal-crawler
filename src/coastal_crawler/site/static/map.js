@@ -1,4 +1,4 @@
-// Leaflet map on the main papers list (list.html). MAP_LOCATIONS and the
+// Leaflet map on the main papers list (list.html). MAP_ENTITIES and the
 // #map element's data-filter-qs attribute are set by that template's inline
 // script — this file only reads them, same "vanilla JS reads server-embedded
 // data" pattern as search.js reads /search.json.
@@ -7,7 +7,7 @@
   const DEFAULT_ZOOM = 2;
 
   const mapEl = document.getElementById("map");
-  if (!mapEl || typeof MAP_LOCATIONS === "undefined" || MAP_LOCATIONS.length === 0) {
+  if (!mapEl || typeof MAP_ENTITIES === "undefined" || MAP_ENTITIES.length === 0) {
     if (mapEl) mapEl.hidden = true;
     return;
   }
@@ -23,17 +23,17 @@
   const clusterGroup = L.markerClusterGroup();
   const bounds = [];
 
-  for (const loc of MAP_LOCATIONS) {
+  for (const loc of MAP_ENTITIES) {
     const marker = L.marker([loc.latitude, loc.longitude]);
-    const papersUrl = `/locations/${loc.location_id}/papers${filterQs ? `?${filterQs}` : ""}`;
+    const papersUrl = `/entities/${loc.entity_id}/papers${filterQs ? `?${filterQs}` : ""}`;
 
     // Built via DOM nodes, not an HTML string passed to bindPopup —
-    // loc.location_name is LLM output read off third-party PDFs (same
+    // loc.entity_name is LLM output read off third-party PDFs (same
     // untrusted-input treatment as paper titles get from _render_title/nh3
     // server-side), so it must never be interpreted as HTML.
     const popup = document.createElement("div");
     const nameEl = document.createElement("strong");
-    nameEl.textContent = loc.location_name || "(unnamed location)";
+    nameEl.textContent = loc.entity_name || "(unnamed entity)";
     const countEl = document.createElement("div");
     countEl.textContent = `${loc.paper_count} paper${loc.paper_count === 1 ? "" : "s"}`;
     const link = document.createElement("a");

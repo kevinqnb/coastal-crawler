@@ -309,16 +309,26 @@ class Settings(BaseSettings):
         default=1.0,
         description=(
             "Max great-circle (haversine) distance in km between two "
-            "coordinate-bearing extraction points for scripts/resolve_locations.py "
-            "to cluster them into the same location."
+            "coordinate-bearing extraction points for scripts/build_warehouse.py's "
+            "entity resolution to cluster them into the same entity."
         ),
     )
     location_name_similarity_threshold: float = Field(
         default=0.85,
         description=(
             "Min difflib.SequenceMatcher.ratio() (0-1) between two normalized "
-            "site names for scripts/resolve_locations.py to merge coordinate-less "
-            "extraction rows into the same location."
+            "site names for scripts/build_warehouse.py's entity resolution to merge "
+            "coordinate-less extraction rows into the same entity."
+        ),
+    )
+
+    # ---------------------------------------------------------- Warehouse
+    warehouse_path: str = Field(
+        default="data/warehouse.duckdb",
+        description=(
+            "Output path for scripts/build_warehouse.py's DuckDB star-schema "
+            "warehouse file. Rebuilt atomically (written to a temp path, then "
+            "renamed into place) on every run."
         ),
     )
 

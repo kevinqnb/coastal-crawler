@@ -1,10 +1,14 @@
 """Results website — read-only papers -> pages -> measurements browsing, plus voting.
 
-Phase 0 of the site roadmap: runs against the live cluster DB (see
-scripts/db_env.sh). A later phase points the same app at a periodically
-synced copy on an external host instead — no app-code changes needed, since
-the page view's OCR text comes from PaperOcrContext (a DB table, via
-get_paper_ocr_context), not OCR_DIR filesystem access.
+Paper/extraction/entity reads come from the DuckDB warehouse
+(`db/warehouse_reader.py`, `Settings.warehouse_path`) — a periodically
+rebuilt snapshot (`scripts/build_warehouse.py`), not a live query. Two
+fields can't live in that snapshot and are still read live from Postgres
+per request: `judgement` (recomputed on every vote — see
+`store.get_judgements`) and the OCR text itself (`paper_ocr_context`, which
+has no warehouse equivalent at all). See
+notes/coastal-crawler/builds/2026-08-12-warehouse-site-01.md for the full
+design writeup.
 """
 
 from __future__ import annotations
@@ -15,6 +19,7 @@ import io
 import math
 import re
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from urllib.parse import urlencode
 
@@ -25,8 +30,9 @@ from fastapi.responses import JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from coastal_crawler.db import store
+from coastal_crawler.db import store, warehouse_reader
 from coastal_crawler.db.engine import get_session
+from coastal_crawler.db.warehouse_reader import get_warehouse_connection
 from coastal_crawler.measurement_schema import ATTRIBUTE_INFO_DICT
 from coastal_crawler.site.snippets import split_pages
 
@@ -43,21 +49,19 @@ _SEARCH_SUGGESTION_LIMIT = 8
 _SEARCH_RESULTS_LIMIT = 50
 _SEARCH_MIN_CHARS = 2
 
-# Column order for /export.csv — location-centric fields first, per
-# notes/coastal-crawler/builds/2026-08-11-location-export-01.md (which
-# superseded 2026-08-04-csv-export-01.md's flat per-measurement set).
-# Header names on the left; the matching attribute on a
-# `store.export_extractions` row (or, for "authors", a small transform) on
-# the right. Nothing from the old column set was dropped — the canonical
-# location_id/location_name/location_latitude/location_longitude columns
-# (from a LEFT JOIN to `locations`) are added alongside the raw per-record
-# entity_name/identifiers/location_description, not instead of them.
+# Column order for /export.csv — entity-centric fields first, per
+# notes/coastal-crawler/builds/2026-08-11-location-export-01.md (superseded
+# by 2026-08-12-warehouse-site-01.md, which re-points this at the DuckDB
+# warehouse). `entity_name`/`entity_latitude`/`entity_longitude` are the
+# canonical per-entity fields (`entity_dim`) — the old CSV's separate raw
+# `entity_name` (as extracted, pre-resolution) column no longer exists:
+# the warehouse never carries a raw per-row name forward, only the
+# resolved `entity_dim.name` (see the build note's audit).
 _CSV_COLUMNS: list[tuple[str, str]] = [
-    ("location_id", "location_id"),
-    ("location_name", "location_name"),
-    ("location_latitude", "location_latitude"),
-    ("location_longitude", "location_longitude"),
+    ("entity_id", "entity_id"),
     ("entity_name", "entity_name"),
+    ("entity_latitude", "entity_latitude"),
+    ("entity_longitude", "entity_longitude"),
     ("identifiers", "identifiers"),
     ("location_description", "location_description"),
     ("attribute", "attribute"),
@@ -164,6 +168,20 @@ def _voter_hash(request: Request) -> str:
     return hashlib.sha256(f"{ip}|{ua}".encode()).hexdigest()[:16]
 
 
+def _attach_judgements(rows: list[SimpleNamespace]) -> list[SimpleNamespace]:
+    """Live-join `judgement` from Postgres onto a batch of warehouse fact
+    rows (each already carrying `.id` == `extractions.id`) — the one field
+    that can't be baked into the warehouse snapshot since it's recomputed
+    on every vote. See `store.get_judgements`."""
+    if not rows:
+        return rows
+    with get_session() as session:
+        judgements = store.get_judgements(session, [r.id for r in rows])
+    for r in rows:
+        r.judgement = judgements.get(r.id)
+    return rows
+
+
 @app.get("/")
 def list_view(
     request: Request,
@@ -173,27 +191,20 @@ def list_view(
     ecosystem_type: str | None = None,
 ) -> Response:
     page = max(page, 1)
-    with get_session() as session:
-        rows, total = store.list_papers_with_extractions(
-            session,
-            page=page,
-            page_size=_PAGE_SIZE,
-            title=title,
-            attribute=attribute,
+    with get_warehouse_connection() as con:
+        rows, total = warehouse_reader.list_papers(
+            con, page=page, page_size=_PAGE_SIZE, title=title, attribute=attribute,
             ecosystem_type=ecosystem_type,
         )
-        ecosystem_types = store.list_ecosystem_types(session)
-        map_rows = store.map_locations(
-            session, title=title, attribute=attribute, ecosystem_type=ecosystem_type
+        ecosystem_types = warehouse_reader.list_ecosystem_types(con)
+        map_rows = warehouse_reader.map_entities(
+            con, title=title, attribute=attribute, ecosystem_type=ecosystem_type
         )
     total_pages = max(1, math.ceil(total / _PAGE_SIZE))
-    # Built as plain dicts, not passed as raw Row objects — Row is a tuple
-    # subclass, so `|tojson` in the template would serialize it positionally
-    # as a JSON array instead of {"location_id": ..., ...}.
-    map_locations = [
+    map_entities = [
         {
-            "location_id": r.location_id,
-            "location_name": r.location_name,
+            "entity_id": r.entity_id,
+            "entity_name": r.entity_name,
             "latitude": r.latitude,
             "longitude": r.longitude,
             "paper_count": r.paper_count,
@@ -214,7 +225,7 @@ def list_view(
             "ecosystem_type": ecosystem_type,
             "ecosystem_types": ecosystem_types,
             "row_offset": (page - 1) * _PAGE_SIZE,
-            "map_locations": map_locations,
+            "map_entities": map_entities,
         },
     )
 
@@ -227,10 +238,11 @@ def export_csv(
 ) -> Response:
     """Every measurement matching the list view's current filter, as CSV
     (unpaginated) — see _CSV_COLUMNS for the agreed column set/order."""
-    with get_session() as session:
-        rows = store.export_extractions(
-            session, title=title, attribute=attribute, ecosystem_type=ecosystem_type
+    with get_warehouse_connection() as con:
+        rows = warehouse_reader.export_rows(
+            con, title=title, attribute=attribute, ecosystem_type=ecosystem_type
         )
+    _attach_judgements(rows)
 
     buffer = io.StringIO()
     writer = csv.writer(buffer)
@@ -257,19 +269,19 @@ def search_json(q: str = "") -> Response:
     q = q.strip()
     if len(q) < _SEARCH_MIN_CHARS:
         return JSONResponse([])
-    with get_session() as session:
-        rows = store.search_papers_by_title(session, q, _SEARCH_SUGGESTION_LIMIT)
-        results = [
-            {
-                "id": paper_id,
-                # Sanitized/title-cased server-side (same as list/detail pages)
-                # so the frontend can insert it via innerHTML directly.
-                "title": _render_title(title) if title else "(untitled)",
-                "authors": authors or [],
-                "year": publication_date.year if publication_date else None,
-            }
-            for paper_id, title, authors, publication_date, _doi in rows
-        ]
+    with get_warehouse_connection() as con:
+        rows = warehouse_reader.search_papers(con, q, _SEARCH_SUGGESTION_LIMIT)
+    results = [
+        {
+            "id": r.id,
+            # Sanitized/title-cased server-side (same as list/detail pages)
+            # so the frontend can insert it via innerHTML directly.
+            "title": _render_title(r.title) if r.title else "(untitled)",
+            "authors": r.authors or [],
+            "year": r.publication_date.year if r.publication_date else None,
+        }
+        for r in rows
+    ]
     return JSONResponse(results)
 
 
@@ -279,8 +291,8 @@ def search_view(request: Request, q: str = "") -> Response:
     q = q.strip()
     rows: list[Any] = []
     if len(q) >= _SEARCH_MIN_CHARS:
-        with get_session() as session:
-            rows = store.search_papers_by_title(session, q, _SEARCH_RESULTS_LIMIT)
+        with get_warehouse_connection() as con:
+            rows = warehouse_reader.search_papers(con, q, _SEARCH_RESULTS_LIMIT)
     return templates.TemplateResponse(
         request,
         "search.html",
@@ -296,74 +308,67 @@ def paper_view(
     attribute: str | None = None,
     ecosystem_type: str | None = None,
 ) -> Response:
-    with get_session() as session:
-        paper = store.get_paper(session, paper_id)
+    with get_warehouse_connection() as con:
+        paper = warehouse_reader.get_paper(con, paper_id)
         if paper is None:
             raise HTTPException(status_code=404, detail="Paper not found")
         # pages_for_paper takes no `title` — it's scoped to one already-
         # identified paper, so a title filter can't change which of its
-        # extractions match (the paper either matched to appear in the list
+        # fact rows match (the paper either matched to appear in the list
         # or it didn't). `title` is still threaded through so links back to
         # `/` and down into page_view keep the active filter.
-        pages = store.pages_for_paper(
-            session, paper_id, attribute=attribute, ecosystem_type=ecosystem_type
+        pages = warehouse_reader.pages_for_paper(
+            con, paper_id, attribute=attribute, ecosystem_type=ecosystem_type
         )
-        total = sum(count for _page_number, count in pages)
-        # Rendered inside the session block — the template touches `paper`'s
-        # ORM attributes, which need a live session (see page_view below).
-        return templates.TemplateResponse(
-            request,
-            "paper.html",
-            {
-                "paper": paper,
-                "pages": pages,
-                "total": total,
-                "title": title,
-                "attribute": attribute,
-                "ecosystem_type": ecosystem_type,
-            },
-        )
+    total = sum(count for _page_number, count in pages)
+    return templates.TemplateResponse(
+        request,
+        "paper.html",
+        {
+            "paper": paper,
+            "pages": pages,
+            "total": total,
+            "title": title,
+            "attribute": attribute,
+            "ecosystem_type": ecosystem_type,
+        },
+    )
 
 
-@app.get("/locations/{location_id}/papers")
-def location_papers_view(
+@app.get("/entities/{entity_id}/papers")
+def entity_papers_view(
     request: Request,
-    location_id: int,
+    entity_id: int,
     page: int = 1,
     title: str | None = None,
     attribute: str | None = None,
     ecosystem_type: str | None = None,
 ) -> Response:
     page = max(page, 1)
-    with get_session() as session:
-        location = store.get_location(session, location_id)
-        if location is None:
-            raise HTTPException(status_code=404, detail="Location not found")
-        rows, total = store.list_papers_with_extractions(
-            session,
-            page=page,
-            page_size=_PAGE_SIZE,
-            title=title,
-            attribute=attribute,
-            ecosystem_type=ecosystem_type,
-            location_id=location_id,
+    with get_warehouse_connection() as con:
+        entity = warehouse_reader.get_entity(con, entity_id)
+        if entity is None:
+            raise HTTPException(status_code=404, detail="Entity not found")
+        rows, total = warehouse_reader.list_papers(
+            con, page=page, page_size=_PAGE_SIZE, title=title, attribute=attribute,
+            ecosystem_type=ecosystem_type, entity_id=entity_id,
         )
-        total_pages = max(1, math.ceil(total / _PAGE_SIZE))
-        return templates.TemplateResponse(
-            request,
-            "location_papers.html",
-            {
-                "location": location,
-                "rows": rows,
-                "page": page,
-                "total_pages": total_pages,
-                "total": total,
-                "title": title,
-                "attribute": attribute,
-                "ecosystem_type": ecosystem_type,
-                "row_offset": (page - 1) * _PAGE_SIZE,
-            },
-        )
+    total_pages = max(1, math.ceil(total / _PAGE_SIZE))
+    return templates.TemplateResponse(
+        request,
+        "entity_papers.html",
+        {
+            "entity": entity,
+            "rows": rows,
+            "page": page,
+            "total_pages": total_pages,
+            "total": total,
+            "title": title,
+            "attribute": attribute,
+            "ecosystem_type": ecosystem_type,
+            "row_offset": (page - 1) * _PAGE_SIZE,
+        },
+    )
 
 
 @app.get("/papers/{paper_id}/pages/{page_number}")
@@ -375,39 +380,35 @@ def page_view(
     attribute: str | None = None,
     ecosystem_type: str | None = None,
 ) -> Response:
-    with get_session() as session:
-        paper = store.get_paper(session, paper_id)
+    with get_warehouse_connection() as con:
+        paper = warehouse_reader.get_paper(con, paper_id)
         if paper is None:
             raise HTTPException(status_code=404, detail="Paper not found")
-        rows = store.page_extractions(
-            session,
-            paper_id,
-            page_number,
-            title=title,
-            attribute=attribute,
+        rows = warehouse_reader.page_extractions(
+            con, paper_id, page_number, title=title, attribute=attribute,
             ecosystem_type=ecosystem_type,
         )
+    _attach_judgements(rows)
+    with get_session() as session:
         # `page_number` is the raw stored value (0-indexed, see
         # extraction/ocr_lm.py) — matches what pages_for_paper/find_snippet
         # already use; the template adds +1 for display, same convention
         # the old detail.html used.
         ocr_context = store.get_paper_ocr_context(session, paper_id) or ""
-        page_text = dict(split_pages(ocr_context)).get(page_number)
-        # Rendered inside the session block — the template touches `paper`'s
-        # ORM attributes, which need a live session.
-        return templates.TemplateResponse(
-            request,
-            "page.html",
-            {
-                "paper": paper,
-                "page_number": page_number,
-                "page_html": _render_ocr_markdown(page_text) if page_text is not None else None,
-                "rows": rows,
-                "title": title,
-                "attribute": attribute,
-                "ecosystem_type": ecosystem_type,
-            },
-        )
+    page_text = dict(split_pages(ocr_context)).get(page_number)
+    return templates.TemplateResponse(
+        request,
+        "page.html",
+        {
+            "paper": paper,
+            "page_number": page_number,
+            "page_html": _render_ocr_markdown(page_text) if page_text is not None else None,
+            "rows": rows,
+            "title": title,
+            "attribute": attribute,
+            "ecosystem_type": ecosystem_type,
+        },
+    )
 
 
 @app.post("/extraction/{extraction_id}/vote")

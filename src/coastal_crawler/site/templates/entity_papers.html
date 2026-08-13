@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}{{ location.name if location.name else "unnamed location" }} &mdash; coastal-crawler{% endblock %}
+{% block title %}{{ entity.name if entity.name else "unnamed entity" }} &mdash; coastal-crawler{% endblock %}
 {% block content %}
 
 {% macro qs(attr, eco, ttl) %}{% if attr %}attribute={{ attr | urlencode }}{% endif %}{% if attr and eco %}&{% endif %}{% if eco %}ecosystem_type={{ eco | urlencode }}{% endif %}{% if (attr or eco) and ttl %}&{% endif %}{% if ttl %}title={{ ttl | urlencode }}{% endif %}{% endmacro %}
@@ -7,10 +7,10 @@
 <a class="back-link" href="/?{{ qs(attribute, ecosystem_type, title) }}">&larr; all papers</a>
 
 <div class="paper-title">
-  <h1>{{ location.name if location.name else "(unnamed location)" }}</h1>
+  <h1>{{ entity.name if entity.name else "(unnamed entity)" }}</h1>
   <p class="meta">
-    {% if location.latitude is not none and location.longitude is not none %}
-    {{ "%.4f"|format(location.latitude) }}, {{ "%.4f"|format(location.longitude) }}
+    {% if entity.latitude is not none and entity.longitude is not none %}
+    {{ "%.4f"|format(entity.latitude) }}, {{ "%.4f"|format(entity.longitude) }}
     {% endif %}
   </p>
 </div>
@@ -33,16 +33,16 @@
   <p><span class="label">Measurements:</span> {{ r.extraction_count }}</p>
 </div>
 {% else %}
-<p>No papers found for this location{% if attribute or ecosystem_type or title %} matching the active filter{% endif %}.</p>
+<p>No papers found for this entity{% if attribute or ecosystem_type or title %} matching the active filter{% endif %}.</p>
 {% endfor %}
 
 <div class="pagination">
   <span>
-    {% if page > 1 %}<a href="/locations/{{ location.id }}/papers?page={{ page - 1 }}{% if attribute or ecosystem_type or title %}&{{ qs(attribute, ecosystem_type, title) }}{% endif %}">&larr; previous</a>{% endif %}
+    {% if page > 1 %}<a href="/entities/{{ entity.id }}/papers?page={{ page - 1 }}{% if attribute or ecosystem_type or title %}&{{ qs(attribute, ecosystem_type, title) }}{% endif %}">&larr; previous</a>{% endif %}
   </span>
   <span>page {{ page }} of {{ total_pages }}</span>
   <span>
-    {% if page < total_pages %}<a href="/locations/{{ location.id }}/papers?page={{ page + 1 }}{% if attribute or ecosystem_type or title %}&{{ qs(attribute, ecosystem_type, title) }}{% endif %}">next &rarr;</a>{% endif %}
+    {% if page < total_pages %}<a href="/entities/{{ entity.id }}/papers?page={{ page + 1 }}{% if attribute or ecosystem_type or title %}&{{ qs(attribute, ecosystem_type, title) }}{% endif %}">next &rarr;</a>{% endif %}
   </span>
 </div>
 

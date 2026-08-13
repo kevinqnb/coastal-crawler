@@ -62,10 +62,7 @@ class Paper(Base):
 
 class Extraction(Base):
     __tablename__ = "extractions"
-    __table_args__ = (
-        Index("ix_extractions_paper_id", "paper_id"),
-        Index("ix_extractions_location_id", "location_id"),
-    )
+    __table_args__ = (Index("ix_extractions_paper_id", "paper_id"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     paper_id: Mapped[int] = mapped_column(Integer, ForeignKey("papers.id"), nullable=False)
@@ -85,9 +82,6 @@ class Extraction(Base):
     # Majority vote outcome ('valid'/'invalid'), recomputed from `votes` on
     # every new vote. NULL until at least one vote is cast.
     judgement: Mapped[str | None] = mapped_column(String)
-    # NULL until scripts/resolve_locations.py runs (see that script and
-    # migration f5a6b7c8d9e0 for how it's populated).
-    location_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("locations.id"))
     created_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -96,34 +90,6 @@ class Extraction(Base):
     votes: Mapped[list[Vote]] = relationship(
         "Vote", back_populates="extraction", cascade="all, delete-orphan"
     )
-    location: Mapped[Location | None] = relationship("Location", back_populates="extractions")
-
-
-class Location(Base):
-    """A canonical physical site derived from clustering extraction rows'
-    embedded entity fields (name/latitude/longitude) — see
-    scripts/resolve_locations.py, the one-shot job that populates this
-    table and backfills Extraction.location_id.
-    """
-
-    __tablename__ = "locations"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    name: Mapped[str | None] = mapped_column(Text)
-    latitude: Mapped[float | None] = mapped_column(Double)
-    longitude: Mapped[float | None] = mapped_column(Double)
-    # 'coordinate': clustered by proximity to other coordinate-bearing rows.
-    # 'name': clustered by fuzzy name match among coordinate-less rows.
-    # 'unresolved': neither coordinates nor a usable name — its own singleton.
-    resolution_method: Mapped[str] = mapped_column(String, nullable=False)
-    # The normalized name a 'name'-method location matched on. NULL for
-    # 'coordinate'/'unresolved' locations.
-    resolution_key: Mapped[str | None] = mapped_column(Text)
-    created_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
-
-    extractions: Mapped[list[Extraction]] = relationship("Extraction", back_populates="location")
 
 
 class PaperOcrContext(Base):
