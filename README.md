@@ -168,6 +168,118 @@ Or with a scheduler (example cron — discover daily, filter and extract hourly)
 
 ---
 
+## Data model
+
+Two databases, two jobs:
+
+- **Postgres** is the pipeline's operational store. Every worker's `SELECT ... FOR UPDATE SKIP LOCKED` claim and status transition (`discovered → ... → extracted`) happens against `papers`/`extractions` here — a landing zone, not something shaped for reporting.
+- **DuckDB** holds a derived, read-optimized **star schema**, rebuilt from Postgres by `scripts/build_warehouse.py` (transform logic in `coastal_crawler/warehouse.py`). This is what the results site actually queries.
+
+```mermaid
+graph LR
+    PG[("Postgres<br/>papers · extractions")] -- "build_warehouse.py" --> DW[("DuckDB<br/>star-schema warehouse")]
+    DW --> SITE["Results site"]
+
+    classDef pg   fill:#E4E9EF,stroke:#8a96a3,color:#0b0b0b,stroke-width:1.5px
+    classDef hub  fill:#22303F,stroke:#4a6178,color:#ffffff,stroke-width:2px
+    classDef site fill:#49BF95,stroke:#1baf7a,color:#0b0b0b,stroke-width:1.5px
+
+    class PG pg
+    class DW hub
+    class SITE site
+```
+
+### The warehouse star schema
+
+One `extractions_fact` row per extracted measurement, radiating out to five dimension tables — everything that would otherwise repeat across rows (a paper's title, a model's prompt version, a location's coordinates) is pulled out into its own dimension and referenced by id instead:
+
+```mermaid
+erDiagram
+    extractions_fact }o--|| paper_dim      : "for paper"
+    extractions_fact }o--|| model_dim      : "produced by"
+    extractions_fact }o--|| entity_dim     : "measured at"
+    extractions_fact }o--|| event_dim      : "during event"
+    extractions_fact }o--o| qualifier_dim  : "qualified by"
+
+    classDef hub          fill:#22303F,stroke:#4a6178,color:#ffffff,stroke-width:2px
+    classDef paperDim     fill:#5593DE,stroke:#2a78d6,color:#0b0b0b,stroke-width:1.5px
+    classDef modelDim     fill:#49BF95,stroke:#1baf7a,color:#0b0b0b,stroke-width:1.5px
+    classDef entityDim    fill:#EF865D,stroke:#eb6834,color:#0b0b0b,stroke-width:1.5px
+    classDef eventDim     fill:#6E61B9,stroke:#4a3aa7,color:#ffffff,stroke-width:1.5px
+    classDef qualifierDim fill:#ED95B6,stroke:#e87ba4,color:#0b0b0b,stroke-width:1.5px
+
+    extractions_fact:::hub {
+        int      fact_id PK
+        int      source_extraction_id
+        int      paper_id FK
+        int      extraction_model_id FK
+        int      entity_id FK
+        int      event_id FK
+        string   attribute
+        string   quantity_raw
+        string   units_raw
+        double   quantity_canonical
+        string   units_canonical
+        int      qualifier_id FK
+        int      page_number
+        double   confidence
+    }
+
+    paper_dim:::paperDim {
+        int      paper_id PK
+        string   doi
+        string   title
+        string   authors "list"
+        date     publication_date
+        string   publisher
+        string   discovered_from
+        string   openalex_id
+        string   semantic_scholar_id
+    }
+
+    model_dim:::modelDim {
+        int      model_id PK
+        string   model_name
+        string   role
+        string   prompt_version
+        int      seed
+        double   temperature
+    }
+
+    entity_dim:::entityDim {
+        int      entity_id PK
+        double   latitude
+        double   longitude
+        string   name
+        string   location_description
+        string   identifiers
+        string   ecosystem_type
+        string   resolution_method
+    }
+
+    event_dim:::eventDim {
+        int      event_id PK
+        string   date_measured
+        string   sub_location
+        string   additional_details
+    }
+
+    qualifier_dim:::qualifierDim {
+        int      qualifier_id PK
+        string   confidence_region
+        double   confidence_min
+        double   confidence_max
+        double   range_min
+        double   range_max
+        double   less_than_or_equal
+        double   greater_than
+    }
+```
+
+`fact_id`'s `source_extraction_id` traces each row back to Postgres's `extractions.id`. Rebuilds are full replacements (`CREATE OR REPLACE TABLE`), not incremental — see `notes/coastal-crawler/builds/2026-08-12-warehouse-init-01.md` for the design rationale (fact grain, dimension resolution, what got cut). The fact table stays a dark, unpastelled hub so it still reads as the center of the star; the five dimensions each get a distinct pastel tint (a tab10-style qualitative set — blue/aqua/orange/violet/magenta — lightened toward white, spot-checked for colorblind-safe separation and contrast).
+
+---
+
 ## Environment variables
 
 | Variable | Required | Default | Description |
