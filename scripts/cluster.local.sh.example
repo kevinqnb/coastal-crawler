@@ -13,6 +13,14 @@ module load python3/3.12.4
 module load cuda/12.5
 module load postgresql/18.1
 
+# scholarlm's DocumentLM (used by `coastal-crawler ocr`) shells out to the
+# `tesseract` binary for orientation detection, even in fast=True mode.
+# Without it on PATH, fit() warns and silently skips the file, producing no
+# OCR text rather than raising — make sure tesseract (plus its own shared-lib
+# dependencies, e.g. leptonica/libicu if your tesseract build needs them) is
+# on PATH here, however your environment provides it (module load, apt
+# package, etc).
+
 # --- HuggingFace cache used by vLLM / serve_model.sh -------------------------
 export HF_HOME=/path/to/your/hf-cache
 

@@ -12,7 +12,6 @@ dependencies = [
     "jinja2>=3.1",
     "markdown>=3.7",
     "nh3>=0.2",
-    "olmocr>=0.4.27",
     "openai>=1.0",
     "pillow>=10.0",
     "psycopg2-binary>=2.9",
@@ -20,11 +19,18 @@ dependencies = [
     "pypdf>=4.0",
     "python-multipart>=0.0.9",
     "pyyaml>=6.0",
+    "scholarlm",
     "sqlalchemy>=2.0",
     "structlog>=24.0",
     "typer>=0.12",
     "uvicorn>=0.30",
 ]
+
+[tool.uv.sources]
+# Pinned to a full commit SHA (not a floating branch ref) for reproducibility;
+# `advances` is recorded here only as provenance for where that commit lives.
+# See notes/coastal-crawler/builds/2026-08-18-scholarlm-migration-01.md.
+scholarlm = { git = "https://github.com/kevinqnb/scholarlm.git", rev = "d9579cc0b11bda05925cc58a99c325fc7f8a1b79" }  # branch: advances
 
 [project.optional-dependencies]
 dev = [

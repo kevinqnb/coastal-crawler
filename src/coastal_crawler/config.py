@@ -225,6 +225,31 @@ class Settings(BaseSettings):
         default=4,
         description="Maximum concurrent extraction API calls the client sends at once (client-side concurrency, not a vLLM server flag). Was hardcoded to 1.",
     )
+    meas_lm_temperature: float = Field(
+        default=0.90,
+        description=(
+            "Sampling temperature passed to scholarlm.MeasurementLM's sampling_params. "
+            "Must always be passed explicitly (never omit sampling_params on construction) — "
+            "MeasurementLM's default-arg handling silently drops all sampling params if the "
+            "kwarg is omitted. Default matches scholarlm's own documented default."
+        ),
+    )
+    meas_lm_top_p: float = Field(
+        default=0.95,
+        description="Nucleus sampling top-p passed to scholarlm.MeasurementLM's sampling_params.",
+    )
+    meas_lm_top_k: int = Field(
+        default=64,
+        description="Top-k sampling passed to scholarlm.MeasurementLM's sampling_params (forwarded via extra_body).",
+    )
+    meas_lm_repetition_penalty: float = Field(
+        default=1.0,
+        description="Repetition penalty passed to scholarlm.MeasurementLM's sampling_params (forwarded via extra_body).",
+    )
+    meas_lm_enable_thinking: bool = Field(
+        default=False,
+        description="Whether to enable chain-of-thought/reasoning mode, passed to scholarlm.MeasurementLM's sampling_params (forwarded via extra_body's chat_template_kwargs).",
+    )
 
     # Serving parameters — used only by scripts/serve_model.sh MEAS_LM.
     meas_lm_port: int = Field(
