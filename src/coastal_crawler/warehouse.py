@@ -399,7 +399,18 @@ SCHEMA_DDL: list[str] = [
         units_canonical VARCHAR,
         qualifier_id INTEGER REFERENCES qualifier_dim (qualifier_id),
         page_number INTEGER,
-        confidence DOUBLE
+        confidence DOUBLE,
+        probe_score DOUBLE
+    )
+    """,
+    """
+    CREATE OR REPLACE TABLE attribution_fact (
+        source_extraction_id INTEGER NOT NULL,
+        method VARCHAR NOT NULL,
+        snippet VARCHAR NOT NULL,
+        tokens VARCHAR[] NOT NULL,
+        scores DOUBLE[] NOT NULL,
+        PRIMARY KEY (source_extraction_id, method)
     )
     """,
 ]
@@ -407,4 +418,16 @@ SCHEMA_DDL: list[str] = [
 exists) by scripts/build_warehouse.py inside a single transaction —
 `CREATE OR REPLACE TABLE` makes each rebuild a full replacement, matching
 the fact-grain decision (one row per source `extractions.id`, no
-cross-rebuild accumulation — see the build note)."""
+cross-rebuild accumulation — see the build note).
+
+`attribution_fact` is a straight passthrough copy of Postgres
+`attributions` — no dedup/skip logic (unlike `extractions_fact`, nothing
+here can fail to parse) — keyed by `source_extraction_id` (Postgres
+`extractions.id`), not `extractions_fact.fact_id`, since an attribution row
+can exist for an extraction that `extractions_fact` skipped (unparseable
+value, unknown attribute/unit); such rows are simply unreachable from the
+site, which only ever looks up attributions for ids it already has a fact
+row for. `token_indices` (JudgementLM prompt-token positions) is
+deliberately not carried over — display only needs `tokens`/`scores` in
+their stored order, not their position in the judge prompt. See
+notes/coastal-crawler/builds/2026-08-19-judge-attribution-display-01.md."""

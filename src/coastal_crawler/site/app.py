@@ -73,6 +73,7 @@ _CSV_COLUMNS: list[tuple[str, str]] = [
     ("additional_details", "additional_details"),
     ("judgement", "judgement"),
     ("confidence", "confidence"),
+    ("probe_score", "probe_score"),
     ("title", "title"),
     ("authors", "authors"),
     ("doi", "doi"),
@@ -152,6 +153,18 @@ def _render_title(raw: str) -> str:
 
 
 templates.env.filters["render_title"] = _render_title
+
+
+def _format_score(value: float) -> str:
+    """`confidence`/`probe_score` values observed in real judge output span
+    from ~1e-12 to ~1 — a fixed `%.2f` renders anything below ~0.005 as a
+    misleadingly blank "0.00" (see the build note's resolution). 3
+    significant figures, switching to scientific notation outside a normal
+    range, same as Python's `g` format."""
+    return f"{value:.3g}"
+
+
+templates.env.filters["format_score"] = _format_score
 
 
 def _render_ocr_markdown(text: str) -> str:
@@ -388,6 +401,7 @@ def page_view(
             con, paper_id, page_number, title=title, attribute=attribute,
             ecosystem_type=ecosystem_type,
         )
+        attribution_rows = warehouse_reader.get_attributions(con, [r.id for r in rows])
     _attach_judgements(rows)
     with get_session() as session:
         # `page_number` is the raw stored value (0-indexed, see
@@ -396,6 +410,18 @@ def page_view(
         # the old detail.html used.
         ocr_context = store.get_paper_ocr_context(session, paper_id) or ""
     page_text = dict(split_pages(ocr_context)).get(page_number)
+
+    # One entry per extraction id that has attribution data — `tokens` is
+    # shared across methods for a given extraction (judge_worker.py asserts
+    # both methods tokenize identically), so it's stored once; `methods`
+    # carries each method's own per-token score array. The client does the
+    # per-snippet min/max normalization and coloring (see the build note's
+    # client/server split decision) so this is raw data, not rendered HTML.
+    attribution_data: dict[int, dict[str, Any]] = {}
+    for a in attribution_rows:
+        entry = attribution_data.setdefault(a.extraction_id, {"tokens": a.tokens, "methods": {}})
+        entry["methods"][a.method] = a.scores
+
     return templates.TemplateResponse(
         request,
         "page.html",
@@ -404,6 +430,7 @@ def page_view(
             "page_number": page_number,
             "page_html": _render_ocr_markdown(page_text) if page_text is not None else None,
             "rows": rows,
+            "attribution_data": attribution_data,
             "title": title,
             "attribute": attribute,
             "ecosystem_type": ecosystem_type,

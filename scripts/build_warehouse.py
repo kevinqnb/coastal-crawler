@@ -36,7 +36,7 @@ from sqlalchemy import select
 
 from coastal_crawler.config import get_settings
 from coastal_crawler.db.engine import get_session
-from coastal_crawler.db.models import Extraction, Paper
+from coastal_crawler.db.models import Attribution, Extraction, Paper
 from coastal_crawler.measurement_schema import ATTRIBUTE_INFO_DICT, convert_to_canonical
 from coastal_crawler.warehouse import (
     SCHEMA_DDL,
@@ -64,6 +64,10 @@ def _load_extractions(session: Any) -> list[Extraction]:
     return list(session.scalars(select(Extraction)).all())
 
 
+def _load_attributions(session: Any) -> list[Attribution]:
+    return list(session.scalars(select(Attribution)).all())
+
+
 def main() -> None:
     settings = get_settings()
     skip_records: list[dict[str, Any]] = []
@@ -78,6 +82,7 @@ def main() -> None:
     with get_session() as session:
         papers = _load_papers(session)
         extractions = _load_extractions(session)
+        attributions = _load_attributions(session)
         # Detach plain values while the session is open — Extraction.data is
         # a JSONB dict, safe to read after close, but keeping the read
         # inside the session block is simplest.
@@ -92,8 +97,13 @@ def main() -> None:
                 "longitude": e.longitude,
                 "page_number": e.page_number,
                 "confidence": e.confidence,
+                "probe_score": e.probe_score,
             }
             for e in extractions
+        ]
+        attribution_dim_rows = [
+            (a.extraction_id, a.method, a.snippet, list(a.tokens), list(a.scores))
+            for a in attributions
         ]
         paper_rows = [
             {
@@ -109,7 +119,12 @@ def main() -> None:
             for p in papers
         ]
 
-    log.info("loaded_from_postgres", papers=len(paper_rows), extractions=len(extraction_rows))
+    log.info(
+        "loaded_from_postgres",
+        papers=len(paper_rows),
+        extractions=len(extraction_rows),
+        attributions=len(attribution_dim_rows),
+    )
 
     # ---------------------------------------------------------------- model_dim
     current_model_version = settings.extraction_model_version or (
@@ -283,6 +298,7 @@ def main() -> None:
             "qualifier_id": qualifier_id,
             "page_number": r["page_number"],
             "confidence": r["confidence"],
+            "probe_score": r["probe_score"],
         })
 
     # Drop fact rows that are exact duplicates of another (same measurement
@@ -314,6 +330,7 @@ def main() -> None:
             row["qualifier_id"],
             row["page_number"],
             row["confidence"],
+            row["probe_score"],
         )
         for i, row in enumerate(kept_rows, start=1)
     ]
@@ -361,8 +378,11 @@ def main() -> None:
         )
         _insert_many(
             con,
-            "INSERT INTO extractions_fact VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO extractions_fact VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             fact_rows,
+        )
+        _insert_many(
+            con, "INSERT INTO attribution_fact VALUES (?, ?, ?, ?, ?)", attribution_dim_rows
         )
     finally:
         con.close()

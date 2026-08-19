@@ -235,6 +235,7 @@ def map_entities(
 _FACT_ROW_SELECT = """
     SELECT f.source_extraction_id AS id, f.paper_id, f.attribute,
            f.quantity_raw AS value, f.units_raw AS units, f.confidence,
+           f.probe_score,
            e.entity_id, e.name AS entity_name, e.identifiers,
            e.location_description AS location, e.ecosystem_type,
            ev.date_measured AS event_date, ev.sub_location, ev.additional_details
@@ -328,6 +329,7 @@ def export_rows(
         f"""
         SELECT f.source_extraction_id AS id, f.paper_id, f.attribute,
                f.quantity_raw AS value, f.units_raw AS units, f.confidence,
+               f.probe_score,
                e.entity_id, e.name AS entity_name, e.identifiers,
                e.location_description, e.ecosystem_type, e.latitude AS entity_latitude,
                e.longitude AS entity_longitude,
@@ -341,4 +343,29 @@ def export_rows(
         ORDER BY f.source_extraction_id
         """,
         params,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Attributions
+# ---------------------------------------------------------------------------
+
+def get_attributions(
+    con: duckdb.DuckDBPyConnection, extraction_ids: list[int]
+) -> list[SimpleNamespace]:
+    """One row per `(extraction_id, method)` for the given extraction ids —
+    `.extraction_id`, `.method`, `.snippet`, `.tokens`, `.scores`. Empty
+    list in, empty list out (DuckDB's `IN ()` needs at least one param)."""
+    if not extraction_ids:
+        return []
+    placeholders = ", ".join("?" for _ in extraction_ids)
+    return _rows(
+        con,
+        f"""
+        SELECT source_extraction_id AS extraction_id, method, snippet, tokens, scores
+        FROM attribution_fact
+        WHERE source_extraction_id IN ({placeholders})
+        ORDER BY source_extraction_id, method
+        """,
+        list(extraction_ids),
     )

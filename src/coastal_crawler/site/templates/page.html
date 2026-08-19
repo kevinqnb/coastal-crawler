@@ -24,7 +24,7 @@
 <hr class="section-divider">
 
 {% for r in rows %}
-<div class="measurement-box">
+<div class="measurement-box{% if r.id in attribution_data %} has-attribution{% endif %}" data-extraction-id="{{ r.id }}">
   {% if r.judgement %}<span class="judgement {{ r.judgement }}">{{ r.judgement }}</span>{% endif %}
   <dl>
     <dt>measurement</dt><dd class="data">{{ r.attribute | replace("_", " ") }}</dd>
@@ -34,8 +34,10 @@
     {% if r.location %}<dt>location</dt><dd class="data">{{ r.location }}</dd>{% endif %}
     {% if r.event_date %}<dt>event date</dt><dd class="data">{{ r.event_date }}</dd>{% endif %}
     {% if r.sub_location %}<dt>sub-location</dt><dd class="data">{{ r.sub_location }}</dd>{% endif %}
-    {% if r.confidence is not none %}<dt>confidence</dt><dd class="data">{{ "%.2f"|format(r.confidence) }}</dd>{% endif %}
+    {% if r.confidence is not none %}<dt>confidence</dt><dd class="data">{{ r.confidence | format_score }}</dd>{% endif %}
+    {% if r.probe_score is not none %}<dt>probe score</dt><dd class="data">{{ r.probe_score | format_score }}</dd>{% endif %}
   </dl>
+  {% if r.id in attribution_data %}<p class="attribution-hint">click to view attributed context &darr;</p>{% endif %}
   <form class="vote-form" method="post" action="/extraction/{{ r.id }}/vote">
     <input type="hidden" name="title" value="{{ title or '' }}">
     <input type="hidden" name="attribute" value="{{ attribute or '' }}">
@@ -51,10 +53,23 @@
 <hr class="detail-divider">
 
 <div class="snippet">
-  <p class="snippet-header">OCR text &mdash; page {{ page_number + 1 }}</p>
-  <div class="snippet-body data">
+  <div class="snippet-controls">
+    <p class="snippet-header" id="snippet-title">OCR text &mdash; page {{ page_number + 1 }}</p>
+    {% if attribution_data %}
+    <div class="attribution-toggle" role="group" aria-label="Attribution method">
+      <button type="button" class="method-btn active" data-method="probe">probe</button>
+      <button type="button" class="method-btn" data-method="contrastive_gradient">contrastive gradient</button>
+    </div>
+    {% endif %}
+  </div>
+  <div class="snippet-body data" id="snippet-body">
     {% if page_html %}{{ page_html | safe }}{% else %}<p>OCR text unavailable for this page.</p>{% endif %}
   </div>
 </div>
+
+{% if attribution_data %}
+<script type="application/json" id="attribution-data">{{ attribution_data | tojson }}</script>
+<script src="/static/attribution.js"></script>
+{% endif %}
 
 {% endblock %}

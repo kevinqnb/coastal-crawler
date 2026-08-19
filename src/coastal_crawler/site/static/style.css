@@ -8,6 +8,12 @@
   --line: #bcdff1;
   --valid: #2f7a4f;
   --invalid: #b04a3f;
+  /* Attribution token coloring (page.html's per-measurement context view) —
+     deliberately separate from --valid/--invalid, which mean human vote
+     judgement, not attribution score. RGB triples (not hex) so JS can build
+     rgba() strings with a computed alpha directly from these. */
+  --attr-high-rgb: 176, 74, 63;
+  --attr-low-rgb: 27, 84, 148;
 }
 
 * {
@@ -473,6 +479,62 @@ footer {
 .vote-tally {
   color: var(--ink-soft);
   font-size: 0.85rem;
+}
+
+/* -------------------------------------------------- attribution display */
+
+.measurement-box.has-attribution {
+  cursor: pointer;
+}
+
+.measurement-box.has-attribution:hover {
+  background: var(--sea-light);
+}
+
+.measurement-box.selected {
+  background: var(--sea-light);
+  border-left: 3px solid var(--sea-deep);
+  padding-left: 0.75rem;
+  margin-left: -0.75rem;
+}
+
+.attribution-hint {
+  margin: 0.5rem 0 0;
+  font-size: 0.8rem;
+  color: var(--ink-soft);
+}
+
+.snippet-controls {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.attribution-toggle {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.method-btn {
+  font-family: inherit;
+  font-size: 0.8rem;
+  padding: 0.3rem 0.7rem;
+  border-radius: 999px;
+  border: 1px solid var(--sea);
+  background: var(--foam);
+  color: var(--sea-deep);
+  cursor: pointer;
+}
+
+.method-btn.active {
+  background: var(--sea-deep);
+  color: var(--foam);
+}
+
+.attribution-token {
+  border-radius: 2px;
 }
 
 .back-link {

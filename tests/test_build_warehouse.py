@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session
 
 from coastal_crawler.config import Settings
 from coastal_crawler.db import store
-from coastal_crawler.db.models import Extraction, Paper
+from coastal_crawler.db.models import Attribution, Extraction, Paper
 
 _SCRIPT_PATH = Path(__file__).resolve().parent.parent / "scripts" / "build_warehouse.py"
 _spec = importlib.util.spec_from_file_location("build_warehouse", _SCRIPT_PATH)
@@ -99,6 +99,7 @@ def _insert_extraction(
     model_version: str = "doc_lm=X+meas_lm=Y",
     page_number: int | None = None,
     confidence: float | None = None,
+    probe_score: float | None = None,
 ) -> int:
     with Session(engine) as s:
         ext = Extraction(
@@ -108,10 +109,33 @@ def _insert_extraction(
             data=data,
             page_number=page_number,
             confidence=confidence,
+            probe_score=probe_score,
         )
         s.add(ext)
         s.commit()
         return ext.id
+
+
+def _insert_attribution(
+    engine: Engine,
+    extraction_id: int,
+    method: str,
+    scores: list[float],
+    tokens: list[str],
+    snippet: str = "the quick brown fox",
+) -> None:
+    with Session(engine) as s:
+        s.add(
+            Attribution(
+                extraction_id=extraction_id,
+                method=method,
+                scores=scores,
+                token_indices=list(range(len(scores))),
+                tokens=tokens,
+                snippet=snippet,
+            )
+        )
+        s.commit()
 
 
 def _tables(warehouse_path: Path) -> dict[str, list[tuple]]:
@@ -121,7 +145,7 @@ def _tables(warehouse_path: Path) -> dict[str, list[tuple]]:
             t: con.execute(f"SELECT * FROM {t}").fetchall()
             for t in (
                 "paper_dim", "entity_dim", "event_dim", "qualifier_dim",
-                "model_dim", "extractions_fact",
+                "model_dim", "extractions_fact", "attribution_fact",
             )
         }
     finally:
@@ -330,6 +354,72 @@ class TestBuildWarehouseEndToEnd:
         duplicate_records = [r for r in records if r["reason"] == "duplicate_fact_row"]
         assert len(duplicate_records) == 1
         assert duplicate_records[0]["extraction_id"] == first_id
+
+    def test_probe_score_carries_through(self, warehouse_db: tuple[Engine, Path]) -> None:
+        """extractions_fact.probe_score is a plain carry-through from the
+        source Postgres row, same treatment as .confidence — see
+        notes/coastal-crawler/builds/2026-08-19-judge-attribution-display-01.md."""
+        engine, warehouse_path = warehouse_db
+        paper_id = _make_paper(engine)
+        _insert_extraction(
+            engine, paper_id, {"attribute": "salinity", "value": "28.4", "units": "psu"},
+            confidence=1.07e-6, probe_score=3.25e-12,
+        )
+
+        build_warehouse.main()
+
+        tables = _tables(warehouse_path)
+        assert len(tables["extractions_fact"]) == 1
+        fact = tables["extractions_fact"][0]
+        assert fact[13] == pytest.approx(1.07e-6)  # confidence
+        assert fact[14] == pytest.approx(3.25e-12)  # probe_score
+
+    def test_attributions_load_into_attribution_fact(
+        self, warehouse_db: tuple[Engine, Path]
+    ) -> None:
+        engine, warehouse_path = warehouse_db
+        paper_id = _make_paper(engine)
+        extraction_id = _insert_extraction(
+            engine, paper_id, {"attribute": "salinity", "value": "28.4", "units": "psu"},
+        )
+        _insert_attribution(
+            engine, extraction_id, "probe", scores=[0.1, 0.9], tokens=["foo", "bar"]
+        )
+        _insert_attribution(
+            engine, extraction_id, "contrastive_gradient", scores=[-0.2, 0.3], tokens=["foo", "bar"]
+        )
+
+        build_warehouse.main()
+
+        tables = _tables(warehouse_path)
+        assert len(tables["attribution_fact"]) == 2
+        by_method = {row[1]: row for row in tables["attribution_fact"]}
+        assert by_method["probe"][0] == extraction_id  # source_extraction_id
+        assert by_method["probe"][3] == ["foo", "bar"]  # tokens
+        assert by_method["probe"][4] == pytest.approx([0.1, 0.9])  # scores
+        assert by_method["contrastive_gradient"][4] == pytest.approx([-0.2, 0.3])
+
+    def test_attribution_for_a_fact_table_skipped_row_still_loads(
+        self, warehouse_db: tuple[Engine, Path]
+    ) -> None:
+        """An extraction row that extractions_fact skips (e.g. unknown
+        attribute) can still have attribution data — build_warehouse must
+        not crash, and the orphaned attribution row is simply unreachable
+        from the site (no fact row to join against), not an error."""
+        engine, warehouse_path = warehouse_db
+        paper_id = _make_paper(engine)
+        extraction_id = _insert_extraction(
+            engine, paper_id, {"attribute": "not_a_real_attribute", "value": "1"}
+        )
+        _insert_attribution(
+            engine, extraction_id, "probe", scores=[0.5], tokens=["foo"]
+        )
+
+        build_warehouse.main()  # must not raise
+
+        tables = _tables(warehouse_path)
+        assert tables["extractions_fact"] == []
+        assert len(tables["attribution_fact"]) == 1
 
     def test_rebuild_fully_replaces_prior_contents(self, warehouse_db: tuple[Engine, Path]) -> None:
         """Fact-grain decision: each run is a full replacement, not an

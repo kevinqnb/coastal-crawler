@@ -134,6 +134,21 @@ def _seed_paper_with_located_extraction(
         return paper.id
 
 
+def _seed_attribution(
+    engine: Engine,
+    extraction_id: int,
+    method: str,
+    scores: list[float],
+    tokens: list[str],
+    snippet: str = "the quick brown fox",
+) -> None:
+    with Session(engine) as session:
+        store.insert_attribution(
+            extraction_id, method, scores, list(range(len(scores))), tokens, snippet, session
+        )
+        session.commit()
+
+
 def _seed_paper_with_paged_extraction(
     engine: Engine,
     *,
@@ -141,6 +156,8 @@ def _seed_paper_with_paged_extraction(
     data: dict,
     page_number: int | None,
     ocr_context: str | None = None,
+    confidence: float | None = None,
+    probe_score: float | None = None,
 ) -> tuple[int, int]:
     """Like `_seed_paper_with_extraction`, plus a stored `page_number` and
     (optionally) a `paper_ocr_context` row — for exercising page_view/paper_view's
@@ -150,13 +167,18 @@ def _seed_paper_with_paged_extraction(
         paper = session.scalars(select(Paper).order_by(Paper.id.desc())).first()
         if ocr_context is not None:
             store.upsert_paper_ocr_context(paper.id, ocr_context, session)
+        extraction_kwargs = {"data": data}
+        if confidence is not None:
+            extraction_kwargs["confidence"] = confidence
         extraction = store.insert_extraction(
             paper.id,
-            make_extraction_result(data=data),
+            make_extraction_result(**extraction_kwargs),
             session,
             page_number=page_number,
             page_matched=True,
         )
+        if probe_score is not None:
+            extraction.probe_score = probe_score
         session.commit()
         return paper.id, extraction.id
 
@@ -196,7 +218,7 @@ class TestExportCsvRoute:
             "identifiers", "location_description",
             "attribute", "value", "units", "ecosystem_type", "date",
             "sub_location", "additional_details", "judgement", "confidence",
-            "title", "authors", "doi", "publication_date",
+            "probe_score", "title", "authors", "doi", "publication_date",
         ]
         assert row[header.index("attribute")] == "salinity"
         assert row[header.index("value")] == "28.4"
@@ -207,6 +229,21 @@ class TestExportCsvRoute:
         assert row[header.index("entity_latitude")] == "41.5"
         assert row[header.index("entity_longitude")] == "-70.6"
         assert row[header.index("title")] == "Nutrient Cycling in Salt Marshes"
+
+    def test_probe_score_column_populated(
+        self, client: TestClient, clean_db: Engine, rebuild_warehouse: Callable[[], None]
+    ) -> None:
+        paper_id, extraction_id = _seed_paper_with_paged_extraction(
+            clean_db,
+            data={"attribute": "salinity", "value": "1", "units": "psu"},
+            page_number=0,
+            probe_score=3.25e-12,
+        )
+        rebuild_warehouse()
+        resp = client.get("/export.csv")
+        rows = list(csv.reader(io.StringIO(resp.text)))
+        header, row = rows[0], rows[1]
+        assert float(row[header.index("probe_score")]) == pytest.approx(3.25e-12)
 
     def test_filename_reflects_active_filters(
         self, client: TestClient, clean_db: Engine, rebuild_warehouse: Callable[[], None]
@@ -503,6 +540,65 @@ class TestPageView:
         rebuild_warehouse()  # even an empty warehouse must exist for get_paper() to run
         resp = client.get("/papers/999999/pages/0")
         assert resp.status_code == 404
+
+    def test_confidence_and_probe_score_use_significant_figure_formatting(
+        self, client: TestClient, clean_db: Engine, rebuild_warehouse: Callable[[], None]
+    ) -> None:
+        """Real judge output is astronomically small (~1e-6/~1e-12) — a
+        fixed %.2f would render both as "0.00" (see the build note's
+        display-format resolution)."""
+        paper_id, _ = _seed_paper_with_paged_extraction(
+            clean_db,
+            data={"attribute": "salinity", "value": "1", "units": "psu"},
+            page_number=0,
+            confidence=1.07e-6,
+            probe_score=3.25e-12,
+        )
+        rebuild_warehouse()
+        resp = client.get(f"/papers/{paper_id}/pages/0")
+        assert resp.status_code == 200
+        assert "1.07e-06" in resp.text
+        assert "3.25e-12" in resp.text
+        assert "0.00" not in resp.text
+
+    def test_attribution_data_embedded_for_judged_extraction(
+        self, client: TestClient, clean_db: Engine, rebuild_warehouse: Callable[[], None]
+    ) -> None:
+        paper_id, extraction_id = _seed_paper_with_paged_extraction(
+            clean_db,
+            data={"attribute": "salinity", "value": "1", "units": "psu"},
+            page_number=0,
+        )
+        _seed_attribution(
+            clean_db, extraction_id, "probe", scores=[0.1, 0.9], tokens=["foo", "bar"]
+        )
+        _seed_attribution(
+            clean_db, extraction_id, "contrastive_gradient",
+            scores=[-0.2, 0.3], tokens=["foo", "bar"],
+        )
+        rebuild_warehouse()
+        resp = client.get(f"/papers/{paper_id}/pages/0")
+        assert resp.status_code == 200
+        assert 'id="attribution-data"' in resp.text
+        assert f'has-attribution" data-extraction-id="{extraction_id}"' in resp.text
+        assert '"foo"' in resp.text and '"bar"' in resp.text
+        assert 'data-method="contrastive_gradient"' in resp.text
+        assert '/static/attribution.js' in resp.text
+
+    def test_no_attribution_data_for_unjudged_extraction(
+        self, client: TestClient, clean_db: Engine, rebuild_warehouse: Callable[[], None]
+    ) -> None:
+        paper_id, extraction_id = _seed_paper_with_paged_extraction(
+            clean_db,
+            data={"attribute": "salinity", "value": "1", "units": "psu"},
+            page_number=0,
+        )
+        rebuild_warehouse()
+        resp = client.get(f"/papers/{paper_id}/pages/0")
+        assert resp.status_code == 200
+        assert 'id="attribution-data"' not in resp.text
+        assert "has-attribution" not in resp.text
+        assert f'data-extraction-id="{extraction_id}"' in resp.text  # box still rendered, just inert
 
 
 class TestEntityPapersRoute:
