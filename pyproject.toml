@@ -12,6 +12,14 @@ dependencies = [
     "jinja2>=3.1",
     "markdown>=3.7",
     "nh3>=0.2",
+    # Pinned to exactly what scholarlm's own [gpu] extra specifies (see
+    # notes/coastal-crawler/builds/2026-08-18-judgement-attribution-01.md) —
+    # added directly rather than depending on scholarlm[gpu] itself, which
+    # also pulls in olmocr/gliner2 and ~30 unrelated transitive packages
+    # (boto3, google-cloud-storage, socketio, ...) not needed by
+    # JudgementLM/attribution.py.
+    "nnsight==0.5.11",
+    "nnterp>=1.2.1",
     "openai>=1.0",
     "pillow>=10.0",
     "psycopg2-binary>=2.9",

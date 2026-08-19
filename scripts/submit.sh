@@ -32,13 +32,23 @@ print(config.get('params', {}).get('stage', ''))
 " "$CONFIG_PATH")"
 
 # GPU profile per stage — copied from submit_filter_job.sh / submit_ocr_job.sh
-# / submit_extract_job.sh's #$ directives.
+# / submit_extract_job.sh's #$ directives. judge has no legacy submit_*_job.sh
+# precedent (new stage, no vLLM server — see run_experiment_job.sh's
+# NEEDS_SERVER branch); GPU_MEMORY=80G/GPU_C=9.0 reuse MEAS_LM's profile as
+# the closest existing "80GB-class GPU" precedent in this repo, based on
+# scholarlm's own finding that a 1x16GB V100 OOM's loading Qwen2.5-7B alone
+# (~15.2GB bf16) plus attribution's backward graph, but an 80GB GPU works
+# (see research-notes/scholarlm/builds/2026-08-18-token-attribution-01.md).
+# H_RT=24:00:00 is an unvalidated placeholder (matches extract's, since judge
+# is also per-row/per-transaction rather than continuously batched) — revisit
+# once a real judge-stage run's actual walltime is known.
 case "$STAGE" in
     filter)  ROLE=FILTER;  H_RT=2:00:00;  GPU_MEMORY=8G;  GPU_C=7.0 ;;
     ocr)     ROLE=DOC_LM;  H_RT=72:00:00; GPU_MEMORY=24G; GPU_C=7.0 ;;
     extract) ROLE=MEAS_LM; H_RT=24:00:00; GPU_MEMORY=80G; GPU_C=9.0 ;;
+    judge)   ROLE=JUDGE;   H_RT=24:00:00; GPU_MEMORY=80G; GPU_C=9.0 ;;
     *)
-        echo "Error: configs/${ID}.yaml params.stage must be filter, ocr, or extract (got '$STAGE')." >&2
+        echo "Error: configs/${ID}.yaml params.stage must be filter, ocr, extract, or judge (got '$STAGE')." >&2
         exit 1
         ;;
 esac
@@ -55,7 +65,7 @@ QSUB_ARGS=(
     -o "$REPO_DIR/out/${ID}_out.txt"
     -e "$REPO_DIR/out/${ID}_error.txt"
     -m e
-    -v "REPO_DIR=$REPO_DIR,ROLE=$ROLE,EXPERIMENT_ID=$ID"
+    -v "REPO_DIR=$REPO_DIR,ROLE=$ROLE,EXPERIMENT_ID=$ID,STAGE=$STAGE"
 )
 if [ -n "${SGE_PROJECT:-}" ]; then
     QSUB_ARGS=(-P "$SGE_PROJECT" "${QSUB_ARGS[@]}")

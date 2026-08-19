@@ -19,7 +19,14 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session, selectinload
 
 from coastal_crawler.adapter import ExtractionResult
-from coastal_crawler.db.models import CrawlState, Extraction, Paper, PaperOcrContext, Vote
+from coastal_crawler.db.models import (
+    Attribution,
+    CrawlState,
+    Extraction,
+    Paper,
+    PaperOcrContext,
+    Vote,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -512,6 +519,10 @@ def insert_extraction(
         longitude=result.longitude,
         page_number=page_number,
         page_matched=page_matched,
+        # 'pending' only on newly created rows, going forward — see the
+        # judge_status column's docstring on Extraction (models.py) and the
+        # alembic migration for why pre-existing rows are NOT backfilled.
+        judge_status="pending",
     )
     session.add(extraction)
     session.flush()
@@ -696,3 +707,126 @@ def record_vote(
         update(Extraction).where(Extraction.id == extraction_id).values(judgement=judgement)
     )
     return judgement
+
+
+# ---------------------------------------------------------------------------
+# Judge / attribution
+# ---------------------------------------------------------------------------
+
+def claim_batch_for_judge(batch_size: int, session: Session) -> list[Extraction]:
+    """Atomically claim up to *batch_size* extraction rows for judgement.
+
+    Uses ``SELECT … FOR UPDATE SKIP LOCKED`` so multiple judge worker
+    processes can run concurrently without ever claiming the same row —
+    same pattern as ``claim_batch_for_filter``/``claim_batch_for_ocr``/
+    ``claim_batch``, but at extraction-row granularity via
+    ``judge_status`` instead of ``papers.status``. Only rows with
+    ``judge_status='pending'`` are eligible — pre-existing rows from
+    before this stage existed are ``NULL`` and never claimed (see
+    ``insert_extraction``'s docstring and the alembic migration).
+
+    Returns:
+        List of claimed Extraction objects (may be shorter than
+        batch_size if fewer pending rows exist).
+    """
+    stmt = (
+        select(Extraction)
+        .where(Extraction.judge_status == "pending")
+        .with_for_update(skip_locked=True)
+        .limit(batch_size)
+    )
+    extractions = list(session.scalars(stmt).all())
+    for extraction in extractions:
+        extraction.judge_status = "judging"
+    session.flush()
+    return extractions
+
+
+def reset_judging_to_pending(extraction_id: int, session: Session) -> bool:
+    """Reset one claimed extraction from ``judging`` back to ``pending``.
+
+    Used when a claimed extraction's paper has no PaperOcrContext row (e.g.
+    a data inconsistency, not a real judge failure) — mirrors
+    ``reset_processing_to_relevant``'s per-row, status-guarded reset so this
+    can't stomp a concurrent transition.
+
+    Returns:
+        True if the row was updated, False if it was no longer 'judging'.
+    """
+    result = session.execute(
+        update(Extraction)
+        .where(Extraction.id == extraction_id, Extraction.judge_status == "judging")
+        .values(judge_status="pending")
+    )
+    return result.rowcount > 0
+
+
+def mark_judged(
+    extraction_id: int,
+    confidence: float | None,
+    probe_score: float | None,
+    session: Session,
+) -> None:
+    """Flip an extraction to ``judge_status='judged'`` and store its scores."""
+    session.execute(
+        update(Extraction)
+        .where(Extraction.id == extraction_id)
+        .values(judge_status="judged", confidence=confidence, probe_score=probe_score)
+    )
+
+
+def mark_judge_failed(extraction_id: int, error: str, session: Session) -> None:
+    """Flip an extraction to ``judge_status='judge_failed'`` and store the error text."""
+    session.execute(
+        update(Extraction)
+        .where(Extraction.id == extraction_id)
+        .values(judge_status="judge_failed", judge_error=error)
+    )
+
+
+def requeue_judge_processing(session: Session) -> int:
+    """Reset all ``judging`` extractions back to ``pending``.
+
+    Extraction rows are left in ``judge_status='judging'`` if a judge job is
+    killed mid-batch (e.g. walltime limit, OOM, node preemption). Call this
+    before resubmitting to rescue those stranded rows.
+
+    Returns:
+        Count of extraction rows requeued.
+    """
+    result = session.execute(
+        update(Extraction)
+        .where(Extraction.judge_status == "judging")
+        .values(judge_status="pending")
+    )
+    return result.rowcount
+
+
+def insert_attribution(
+    extraction_id: int,
+    method: str,
+    scores: list[float],
+    token_indices: list[int],
+    tokens: list[str],
+    snippet: str,
+    session: Session,
+) -> Attribution:
+    """Insert one attribution-method result row for an extraction.
+
+    One row per (extraction_id, method) — called once per method
+    (``contrastive_gradient``, ``probe``) per judged extraction.
+
+    Returns:
+        The flushed (but not yet committed) Attribution object.
+    """
+    attribution = Attribution(
+        extraction_id=extraction_id,
+        method=method,
+        scores=scores,
+        token_indices=token_indices,
+        tokens=tokens,
+        snippet=snippet,
+    )
+    session.add(attribution)
+    session.flush()
+    return attribution

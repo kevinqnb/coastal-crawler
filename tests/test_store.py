@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from coastal_crawler.adapter import ExtractionResult
 from coastal_crawler.db import store
-from coastal_crawler.db.models import Extraction, Paper, Vote
+from coastal_crawler.db.models import Attribution, Extraction, Paper, Vote
 
 
 # ---------------------------------------------------------------------------
@@ -809,3 +809,176 @@ class TestRecordVote:
 # majority-vote ecosystem_type is now computed once per entity at warehouse
 # rebuild time (coastal_crawler.warehouse.majority_value), not queried live.
 # See notes/coastal-crawler/builds/2026-08-12-warehouse-init-01.md.
+
+
+# ---------------------------------------------------------------------------
+# Judge / attribution (notes/coastal-crawler/builds/2026-08-18-judgement-attribution-01.md)
+# ---------------------------------------------------------------------------
+
+def _set_judge_status(session: Session, extraction_id: int, judge_status: str | None) -> None:
+    session.execute(
+        update(Extraction).where(Extraction.id == extraction_id).values(judge_status=judge_status)
+    )
+
+
+class TestClaimBatchForJudge:
+    def test_claims_pending_extractions(self, db_session: Session) -> None:
+        _make_paper_with_extractions(db_session, [{"attribute": "salinity", "value": "1"}])
+        claimed = store.claim_batch_for_judge(10, db_session)
+        assert len(claimed) == 1
+
+    def test_sets_judge_status_to_judging(self, db_session: Session) -> None:
+        _make_paper_with_extractions(db_session, [{"attribute": "salinity", "value": "1"}])
+        claimed = store.claim_batch_for_judge(10, db_session)
+        assert all(e.judge_status == "judging" for e in claimed)
+
+    def test_respects_batch_size(self, db_session: Session) -> None:
+        _make_paper_with_extractions(
+            db_session,
+            [{"attribute": "salinity", "value": str(i)} for i in range(5)],
+        )
+        claimed = store.claim_batch_for_judge(3, db_session)
+        assert len(claimed) == 3
+
+    def test_returns_empty_when_nothing_pending(self, db_session: Session) -> None:
+        assert store.claim_batch_for_judge(10, db_session) == []
+
+    def test_skips_null_judge_status(self, db_session: Session) -> None:
+        """Pre-existing rows from before this stage existed are NULL, not
+        'pending' — deliberately not backfilled (see insert_extraction)."""
+        _make_paper_with_extractions(db_session, [{"attribute": "salinity", "value": "1"}])
+        extraction = db_session.scalars(select(Extraction)).one()
+        _set_judge_status(db_session, extraction.id, None)
+        assert store.claim_batch_for_judge(10, db_session) == []
+
+    def test_skips_judging_extractions(self, db_session: Session) -> None:
+        _make_paper_with_extractions(db_session, [{"attribute": "salinity", "value": "1"}])
+        extraction = db_session.scalars(select(Extraction)).one()
+        _set_judge_status(db_session, extraction.id, "judging")
+        assert store.claim_batch_for_judge(10, db_session) == []
+
+    def test_skips_judged_extractions(self, db_session: Session) -> None:
+        _make_paper_with_extractions(db_session, [{"attribute": "salinity", "value": "1"}])
+        extraction = db_session.scalars(select(Extraction)).one()
+        _set_judge_status(db_session, extraction.id, "judged")
+        assert store.claim_batch_for_judge(10, db_session) == []
+
+    def test_skip_locked_no_double_claim(self, clean_db: Engine) -> None:
+        with Session(clean_db) as setup:
+            _make_paper_with_extractions(setup, [{"attribute": "salinity", "value": "1"}])
+            setup.commit()
+
+        s1 = Session(clean_db)
+        s2 = Session(clean_db)
+        try:
+            batch1 = store.claim_batch_for_judge(10, s1)
+            batch2 = store.claim_batch_for_judge(10, s2)
+
+            assert len(batch1) == 1
+            assert len(batch2) == 0
+        finally:
+            s1.rollback()
+            s1.close()
+            s2.rollback()
+            s2.close()
+
+
+class TestResetJudgingToPending:
+    def test_resets_judging_extraction(self, db_session: Session) -> None:
+        _make_paper_with_extractions(db_session, [{"attribute": "salinity", "value": "1"}])
+        extraction = db_session.scalars(select(Extraction)).one()
+        _set_judge_status(db_session, extraction.id, "judging")
+        assert store.reset_judging_to_pending(extraction.id, db_session) is True
+        db_session.expire(extraction)
+        assert extraction.judge_status == "pending"
+
+    def test_no_op_when_not_judging(self, db_session: Session) -> None:
+        _make_paper_with_extractions(db_session, [{"attribute": "salinity", "value": "1"}])
+        extraction = db_session.scalars(select(Extraction)).one()
+        assert extraction.judge_status == "pending"
+        assert store.reset_judging_to_pending(extraction.id, db_session) is False
+        db_session.expire(extraction)
+        assert extraction.judge_status == "pending"
+
+
+class TestMarkJudged:
+    def test_sets_judge_status_and_scores(self, db_session: Session) -> None:
+        _make_paper_with_extractions(db_session, [{"attribute": "salinity", "value": "1"}])
+        extraction = db_session.scalars(select(Extraction)).one()
+        store.mark_judged(extraction.id, 0.87, 0.62, db_session)
+        db_session.expire(extraction)
+        assert extraction.judge_status == "judged"
+        assert extraction.confidence == pytest.approx(0.87)
+        assert extraction.probe_score == pytest.approx(0.62)
+
+
+class TestMarkJudgeFailed:
+    def test_sets_judge_status_and_error(self, db_session: Session) -> None:
+        _make_paper_with_extractions(db_session, [{"attribute": "salinity", "value": "1"}])
+        extraction = db_session.scalars(select(Extraction)).one()
+        store.mark_judge_failed(extraction.id, "judge model timed out", db_session)
+        db_session.expire(extraction)
+        assert extraction.judge_status == "judge_failed"
+        assert extraction.judge_error == "judge model timed out"
+
+
+class TestRequeueJudgeProcessing:
+    def test_resets_all_judging_to_pending(self, db_session: Session) -> None:
+        _make_paper_with_extractions(
+            db_session,
+            [{"attribute": "salinity", "value": "1"}, {"attribute": "nitrate", "value": "2"}],
+        )
+        for extraction in db_session.scalars(select(Extraction)).all():
+            _set_judge_status(db_session, extraction.id, "judging")
+        n = store.requeue_judge_processing(db_session)
+        assert n == 2
+        statuses = {e.judge_status for e in db_session.scalars(select(Extraction)).all()}
+        assert statuses == {"pending"}
+
+    def test_does_not_touch_other_statuses(self, db_session: Session) -> None:
+        _make_paper_with_extractions(db_session, [{"attribute": "salinity", "value": "1"}])
+        extraction = db_session.scalars(select(Extraction)).one()
+        _set_judge_status(db_session, extraction.id, "judged")
+        n = store.requeue_judge_processing(db_session)
+        assert n == 0
+        db_session.expire(extraction)
+        assert extraction.judge_status == "judged"
+
+    def test_returns_zero_when_nothing_judging(self, db_session: Session) -> None:
+        assert store.requeue_judge_processing(db_session) == 0
+
+
+class TestInsertAttribution:
+    def test_inserts_row_with_expected_fields(self, db_session: Session) -> None:
+        _make_paper_with_extractions(db_session, [{"attribute": "salinity", "value": "1"}])
+        extraction = db_session.scalars(select(Extraction)).one()
+        attribution = store.insert_attribution(
+            extraction.id,
+            "contrastive_gradient",
+            [0.1, -0.2, 0.3],
+            [4, 5, 6],
+            ["the", "salt", "marsh"],
+            "the salt marsh snippet",
+            db_session,
+        )
+        assert attribution.id is not None
+        assert attribution.extraction_id == extraction.id
+        assert attribution.method == "contrastive_gradient"
+        assert attribution.scores == [0.1, -0.2, 0.3]
+        assert attribution.token_indices == [4, 5, 6]
+        assert attribution.tokens == ["the", "salt", "marsh"]
+        assert attribution.snippet == "the salt marsh snippet"
+
+    def test_one_row_per_method_per_extraction(self, db_session: Session) -> None:
+        _make_paper_with_extractions(db_session, [{"attribute": "salinity", "value": "1"}])
+        extraction = db_session.scalars(select(Extraction)).one()
+        store.insert_attribution(
+            extraction.id, "contrastive_gradient", [0.1], [0], ["x"], "snippet", db_session
+        )
+        store.insert_attribution(
+            extraction.id, "probe", [0.2], [0], ["x"], "snippet", db_session
+        )
+        rows = db_session.scalars(
+            select(Attribution).where(Attribution.extraction_id == extraction.id)
+        ).all()
+        assert {r.method for r in rows} == {"contrastive_gradient", "probe"}

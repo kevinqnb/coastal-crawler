@@ -281,6 +281,106 @@ class Settings(BaseSettings):
         description="Path to a vLLM Singularity .sif image. If set, scripts/serve_model.sh runs ExtractionLM inside the container.",
     )
 
+    # -------------------------------------------------------- Judge/attribution
+    # No port/base_url/serving params here — JudgementLM loads weights
+    # directly in-process via nnsight (no vLLM server), unlike FILTER/
+    # DOC_LM/MEAS_LM. See judge_worker.py and
+    # notes/coastal-crawler/builds/2026-08-18-judgement-attribution-01.md.
+    judge_instructions_prompt: str | None = Field(
+        default=None,
+        description=(
+            "System-role instructions describing how to judge whether an "
+            "extracted measurement is valid, given its source snippet as "
+            "context. Mirrors FILTER_RELEVANCE_PROMPT/"
+            "MEAS_LM_ENTITY_IDENTIFICATION_PROMPT's role — a static prompt "
+            "the user supplies; the per-extraction query (attribute/value/"
+            "units) is built programmatically by judge_worker.py, not "
+            "configured here."
+        ),
+    )
+    judge_model: str | None = Field(
+        default=None,
+        description=(
+            "HuggingFace model id for the judgement LLM (e.g. "
+            "Qwen/Qwen2.5-7B-Instruct), passed directly to "
+            "scholarlm.JudgementLM. Not a scholarlm INTERP_JUDGE_REGISTRY "
+            "key — that registry lives outside scholarlm's installed "
+            "package (experiments/, not src/scholarlm/) and isn't importable "
+            "here."
+        ),
+    )
+    judge_dtype: str = Field(
+        default="bfloat16",
+        description=(
+            "torch dtype name (e.g. bfloat16, float16, float32) passed to "
+            "JudgementLM's nnsight_kwargs as torch_dtype."
+        ),
+    )
+    judge_max_new_tokens: int = Field(
+        default=1,
+        description=(
+            "Passed to JudgementLM's sampling_params. Must stay 1 for "
+            "ProbeAttribution's construction-time assertion to hold (the "
+            "probe was trained on a single prefill forward pass) — exposed "
+            "as a setting rather than hardcoded per CLAUDE.md's no-magic-"
+            "numbers rule, not because it's expected to change."
+        ),
+    )
+    judge_use_chat_template: bool = Field(
+        default=True,
+        description=(
+            "Whether to wrap the (instructions, context, query) prompt in "
+            "the tokenizer's chat template. True for instruction-tuned "
+            "judge models (the default here); base models trained without "
+            "one should set this False."
+        ),
+    )
+    judge_seed: int = Field(
+        default=0,
+        description="RNG seed. JudgementLM's sampling_params use do_sample=False (greedy) by default, so this mainly documents intended reproducibility rather than affecting output.",
+    )
+    judge_probe_path: str | None = Field(
+        default=None,
+        description=(
+            "Absolute path to a trained head probe pickle (joblib), e.g. "
+            "scholarlm's data/experiments/pond/synthetic_probe/"
+            "qwen-2.5-7b/trained_probe/head_probe_noplatt.pkl — must be the "
+            "no-Platt ('_noplatt') variant, a bare sklearn Pipeline, per "
+            "attribution.ProbeAttribution's assertion. Loaded directly via "
+            "joblib.load(); scholarlm's analysis.loaders.load_trained_probe "
+            "path-construction helper isn't used since analysis/ isn't part "
+            "of the installed scholarlm package."
+        ),
+    )
+    judge_probe_model_key: str | None = Field(
+        default=None,
+        description=(
+            "Expected value of the loaded probe pickle's own 'judge_model' "
+            "field. adapter.build_judge() asserts the two match, so this "
+            "catches JUDGE_PROBE_PATH silently pointing at the wrong pickle "
+            "file (fail loud rather than compute attribution against a "
+            "probe you didn't intend). It is NOT the same string as "
+            "JUDGE_MODEL and does NOT by itself guarantee the probe is "
+            "trained for whatever model JUDGE_MODEL currently names: "
+            "scholarlm's trained-probe artifacts self-identify with the "
+            "short scholarlm-internal registry key they were trained under "
+            "(e.g. 'qwen-2.5-7b'), not the full HuggingFace model id (e.g. "
+            "'Qwen/Qwen2.5-7B-Instruct') — confirmed by directly loading "
+            "head_probe_noplatt.pkl (see notes/coastal-crawler/builds/"
+            "2026-08-18-judgement-attribution-01.md, Stage 1 item 2) — and "
+            "scholarlm's registry itself isn't importable here (see "
+            "JUDGE_MODEL's description), so there is no way to derive one "
+            "from the other automatically. Keeping this value correct when "
+            "either JUDGE_MODEL or JUDGE_PROBE_PATH changes is the "
+            "operator's responsibility; this field only catches drift "
+            "against itself, not against JUDGE_MODEL."
+        ),
+    )
+    judge_batch_size: int = Field(
+        default=10,
+        description="Extraction rows claimed per judge run.",
+    )
+
     # ------------------------------------------------------- Extraction
     extraction_schema_name: str = Field(
         default="coastal_measurement_v1",

@@ -13,6 +13,12 @@
 # overrides them on the command line with the resource profile that matches
 # ROLE, since that varies per stage (see submit.sh's ROLE_RESOURCES).
 #
+# judge is the one stage with no vLLM server — JudgementLM loads weights
+# directly in-process via nnsight (see adapter.build_judge), so there is no
+# OpenAI-compatible endpoint to serve, no port to pick, and nothing for
+# wait_for_health.sh to poll. STAGE (passed by submit.sh via `qsub -v`)
+# selects that branch below.
+#
 #$ -l h_rt=24:00:00
 #$ -pe omp 8
 #$ -l gpus=1
@@ -23,6 +29,7 @@
 : "${REPO_DIR:?REPO_DIR must be exported by the submitter (scripts/submit.sh does this)}"
 : "${ROLE:?ROLE must be exported by the submitter (scripts/submit.sh does this)}"
 : "${EXPERIMENT_ID:?EXPERIMENT_ID must be exported by the submitter (scripts/submit.sh does this)}"
+: "${STAGE:?STAGE must be exported by the submitter (scripts/submit.sh does this)}"
 cd "$REPO_DIR"
 
 # Load .env first — same ordering rationale as the other submit_*_job.sh
@@ -45,32 +52,38 @@ fi
 set -euo pipefail
 mkdir -p logs out
 
-# Pick a private port for this job's model server rather than using the
-# static <ROLE>_PORT from .env: two same-role experiments (e.g. two "ocr"
-# configs) submitted at once can land on the same host, and a shared static
-# port means the second server fails to bind. PORT_OVERRIDE tells
-# serve_model.sh to use this port instead; exporting <ROLE>_BASE_URL points
-# this job's Settings (and thus run_experiment.py's client) at it too —
-# both override .env's static values for this process only.
-ROLE_PORT="$(python3 "$REPO_DIR/scripts/find_free_port.py")"
-export PORT_OVERRIDE="$ROLE_PORT"
-declare "${ROLE}_BASE_URL=http://localhost:${ROLE_PORT}/v1"
-export "${ROLE}_BASE_URL"
-
 # ---- Preflight: fail fast if the DB isn't reachable --------------------------
 python3 scripts/check_db.py
 
-# ---- Start the server in the background --------------------------------------
-# No gpu_id argument: standalone single-GPU job, so SGE's own
-# CUDA_VISIBLE_DEVICES assignment for the allocated GPU stands.
-cd scripts
-./serve_model.sh "$ROLE" &
-SERVER_PID=$!
+if [ "$STAGE" != "judge" ]; then
+    # Pick a private port for this job's model server rather than using the
+    # static <ROLE>_PORT from .env: two same-role experiments (e.g. two "ocr"
+    # configs) submitted at once can land on the same host, and a shared static
+    # port means the second server fails to bind. PORT_OVERRIDE tells
+    # serve_model.sh to use this port instead; exporting <ROLE>_BASE_URL points
+    # this job's Settings (and thus run_experiment.py's client) at it too —
+    # both override .env's static values for this process only.
+    ROLE_PORT="$(python3 "$REPO_DIR/scripts/find_free_port.py")"
+    export PORT_OVERRIDE="$ROLE_PORT"
+    declare "${ROLE}_BASE_URL=http://localhost:${ROLE_PORT}/v1"
+    export "${ROLE}_BASE_URL"
 
-trap 'echo "Stopping vLLM server (PID $SERVER_PID)..."; kill "$SERVER_PID" 2>/dev/null || true; wait "$SERVER_PID" 2>/dev/null || true' EXIT
+    # ---- Start the server in the background --------------------------------------
+    # No gpu_id argument: standalone single-GPU job, so SGE's own
+    # CUDA_VISIBLE_DEVICES assignment for the allocated GPU stands.
+    cd scripts
+    ./serve_model.sh "$ROLE" &
+    SERVER_PID=$!
 
-./wait_for_health.sh "$ROLE_PORT" "$SERVER_PID"
+    trap 'echo "Stopping vLLM server (PID $SERVER_PID)..."; kill "$SERVER_PID" 2>/dev/null || true; wait "$SERVER_PID" 2>/dev/null || true' EXIT
+
+    ./wait_for_health.sh "$ROLE_PORT" "$SERVER_PID"
+    cd "$REPO_DIR"
+else
+    # judge: JudgementLM loads weights directly in-process via nnsight (see
+    # adapter.build_judge) — no vLLM server, no port, nothing to health-check.
+    echo "STAGE=judge: no model server to start (JudgementLM loads in-process)."
+fi
 
 # ---- Run the experiment --------------------------------------------------------
-cd "$REPO_DIR"
 python3 scripts/run_experiment.py "configs/${EXPERIMENT_ID}.yaml"

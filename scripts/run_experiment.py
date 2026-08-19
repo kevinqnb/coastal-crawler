@@ -3,39 +3,44 @@
 
 Translates a configs/<id>.yaml into a call to whichever pipeline stage
 entry point this repo already has — run_filter() / run_ocr_worker() /
-run_worker() — and writes the standardized run directory. It does not
-reimplement any pipeline logic; it only wires config -> existing function
-call -> standardized output.
+run_worker() / run_judge_worker() — and writes the standardized run
+directory. It does not reimplement any pipeline logic; it only wires
+config -> existing function call -> standardized output.
 
 Usage:
     python scripts/run_experiment.py configs/<id>.yaml
 
 Config `params` (free-form per the contract, but this adapter reads):
-    stage:         "filter" | "ocr" | "extract"   (required)
+    stage:         "filter" | "ocr" | "extract" | "judge"   (required)
     batch_size:    int, passed straight through to the stage function.
                    Defaults to that stage's existing default (Settings'
-                   FILTER_BATCH_SIZE for filter; 10 for ocr/extract, same
-                   as the CLI's --batch-size default).
+                   FILTER_BATCH_SIZE for filter; 10 for ocr/extract;
+                   JUDGE_BATCH_SIZE for judge — same as each CLI command's
+                   --batch-size default).
     chunk_size:    int, passed straight through. Defaults to the stage's
-                   OCR_CHUNK_SIZE / EXTRACTION_CHUNK_SIZE setting.
+                   OCR_CHUNK_SIZE / EXTRACTION_CHUNK_SIZE setting. Not used
+                   by judge (one extraction row at a time — see
+                   judge_worker.py).
     poll_interval: float, extract only. Default 60.0 (CLI default).
     idle_timeout:  float, extract only. Default 0.0 = single batch, no
                    polling loop (CLI default).
     env:           mapping of environment variables to set for this run
                    before Settings is constructed — e.g. FILTER_MODEL,
                    FILTER_RELEVANCE_PROMPT, DOC_LM_MODEL, MEAS_LM_MODEL,
-                   MEAS_LM_ENTITY_IDENTIFICATION_PROMPT. This is how a
-                   config reaches values that normally live in the shared
-                   .env, without touching it. The config's top-level `seed`
-                   is applied to the stage's own <ROLE>_SEED (FILTER_SEED /
-                   DOC_LM_SEED / MEAS_LM_SEED) unless `env` already sets it.
+                   MEAS_LM_ENTITY_IDENTIFICATION_PROMPT, JUDGE_MODEL. This
+                   is how a config reaches values that normally live in the
+                   shared .env, without touching it. The config's top-level
+                   `seed` is applied to the stage's own <ROLE>_SEED
+                   (FILTER_SEED / DOC_LM_SEED / MEAS_LM_SEED / JUDGE_SEED)
+                   unless `env` already sets it.
 
-Metrics shim: run_filter/run_ocr_worker/run_worker each already return a
-3-tuple of counts (e.g. relevant/irrelevant/errors). That tuple is written
-to metrics.json verbatim under the names in STAGE_METRICS below — no
-retry/quality metric exists anywhere in this repo today (confirmed by
-reading relevance_filter.py/ocr_worker.py/worker.py), so metrics.json
-reports batch throughput/outcome counts, not an accuracy/quality score.
+Metrics shim: run_filter/run_ocr_worker/run_worker/run_judge_worker each
+already return a 3-tuple of counts (e.g. relevant/irrelevant/errors). That
+tuple is written to metrics.json verbatim under the names in STAGE_METRICS
+below — no retry/quality metric exists anywhere in this repo today
+(confirmed by reading relevance_filter.py/ocr_worker.py/worker.py/
+judge_worker.py), so metrics.json reports batch throughput/outcome counts,
+not an accuracy/quality score.
 """
 
 from __future__ import annotations
@@ -63,11 +68,13 @@ STAGE_METRICS: dict[str, tuple[str, str, str]] = {
     "filter": ("relevant", "irrelevant", "errors"),
     "ocr": ("ocr_done", "failed", "requeued"),
     "extract": ("extracted", "failed", "requeued"),
+    "judge": ("judged", "failed", "requeued"),
 }
 STAGE_SEED_ENV: dict[str, str] = {
     "filter": "FILTER_SEED",
     "ocr": "DOC_LM_SEED",
     "extract": "MEAS_LM_SEED",
+    "judge": "JUDGE_SEED",
 }
 
 
@@ -143,6 +150,14 @@ def _run_stage(stage: str, params: dict[str, Any]) -> tuple[int, int, int]:
                 idle_timeout=idle_timeout,
             )
         return run_worker(batch_size=batch_size, adapter=adapter, chunk_size=chunk_size, ocr_dir=ocr_dir)
+
+    if stage == "judge":
+        from coastal_crawler.adapter import build_judge
+        from coastal_crawler.judge_worker import run_judge_worker
+
+        components = build_judge(settings)
+        batch_size = params.get("batch_size", settings.judge_batch_size)
+        return run_judge_worker(batch_size=batch_size, components=components)
 
     raise ValueError(f"params.stage must be one of {sorted(STAGE_METRICS)}, got {stage!r}")
 

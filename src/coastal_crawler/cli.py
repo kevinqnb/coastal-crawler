@@ -130,6 +130,27 @@ def extract(
 
 
 @app.command()
+def judge(
+    batch_size: int = typer.Option(
+        None, "--batch-size", help="Extraction rows to process per run. Defaults to JUDGE_BATCH_SIZE in .env."
+    ),
+) -> None:
+    """Claim and judge a batch of extractions: JudgementLM p_true + probe validity score + attribution."""
+    from coastal_crawler.adapter import build_judge
+    from coastal_crawler.config import get_settings
+    from coastal_crawler.judge_worker import run_judge_worker
+
+    settings = get_settings()
+    components = build_judge(settings)
+    size = batch_size if batch_size is not None else settings.judge_batch_size
+    judged, failed, requeued = run_judge_worker(batch_size=size, components=components)
+    message = f"Judged {judged}, failed {failed}."
+    if requeued:
+        message += f" Requeued {requeued} (paper OCR context missing)."
+    typer.echo(message)
+
+
+@app.command()
 def show(
     paper_ids: Optional[list[int]] = typer.Argument(default=None, help="Paper IDs to inspect. Omit to list by filter."),
     status_filter: Optional[str] = typer.Option(None, "--status", "-s", help="Filter by status (e.g. relevant, irrelevant, inaccessible, extracted)."),
@@ -319,6 +340,15 @@ def requeue_ocr_processing() -> None:
 
     count = _requeue()
     typer.echo(f"Requeued {count} stranded paper(s) back to 'relevant'.")
+
+
+@app.command()
+def requeue_judge_processing() -> None:
+    """Reset extractions stuck in judge_status='judging' back to 'pending' (use after a killed judge job)."""
+    from coastal_crawler.judge_worker import requeue_judge_processing as _requeue
+
+    count = _requeue()
+    typer.echo(f"Requeued {count} stranded extraction(s) back to 'pending'.")
 
 
 @app.command()

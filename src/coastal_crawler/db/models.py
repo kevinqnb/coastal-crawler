@@ -80,8 +80,20 @@ class Extraction(Base):
     page_number: Mapped[int | None] = mapped_column(Integer)
     page_matched: Mapped[bool | None] = mapped_column(Boolean)
     # Majority vote outcome ('valid'/'invalid'), recomputed from `votes` on
-    # every new vote. NULL until at least one vote is cast.
+    # every new vote. NULL until at least one vote is cast. Unrelated to LLM
+    # judgement below — this is the human-vote column.
     judgement: Mapped[str | None] = mapped_column(String)
+    # JudgementLM's trained-probe validity score (see judge_worker.py).
+    # Distinct from `judgement` (human-vote) and from `confidence` above,
+    # which the judge stage now writes with JudgementLM's next-token p_true.
+    probe_score: Mapped[float | None] = mapped_column(REAL)
+    # Descriptive error text on a judge failure (mirrors Paper.error).
+    judge_error: Mapped[str | None] = mapped_column(Text)
+    # Claim/queue state for `coastal-crawler judge`: NULL/'pending'/'judging'/
+    # 'judged'/'judge_failed'. NULL for every row inserted before this stage
+    # existed (deliberately not backfilled — see the alembic migration);
+    # insert_extraction() sets 'pending' on newly created rows going forward.
+    judge_status: Mapped[str | None] = mapped_column(String)
     created_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -89,6 +101,9 @@ class Extraction(Base):
     paper: Mapped[Paper] = relationship("Paper", back_populates="extractions")
     votes: Mapped[list[Vote]] = relationship(
         "Vote", back_populates="extraction", cascade="all, delete-orphan"
+    )
+    attributions: Mapped[list[Attribution]] = relationship(
+        "Attribution", back_populates="extraction", cascade="all, delete-orphan"
     )
 
 
@@ -130,6 +145,38 @@ class Vote(Base):
     )
 
     extraction: Mapped[Extraction] = relationship("Extraction", back_populates="votes")
+
+
+class Attribution(Base):
+    """One attribution method's per-context-token scores for one extraction.
+
+    One row per (extraction_id, method) — e.g. 'contrastive_gradient' and
+    'probe' each get their own row for the same extraction. `scores` is a
+    float array, one score per context token, aligned index-for-index with
+    `token_indices` (positions in JudgementLM's tokenized prompt — not
+    character offsets into `snippet`, see build note
+    2026-08-18-judgement-attribution-01.md "attributions storage shape") and
+    `tokens` (each index's own decoded token string). `snippet` is the exact
+    context text the judge/attribution call was run against.
+    """
+
+    __tablename__ = "attributions"
+    __table_args__ = (Index("ix_attributions_extraction_id", "extraction_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    extraction_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("extractions.id"), nullable=False
+    )
+    method: Mapped[str] = mapped_column(String, nullable=False)
+    scores: Mapped[list[float]] = mapped_column(JSONB, nullable=False)
+    token_indices: Mapped[list[int]] = mapped_column(JSONB, nullable=False)
+    tokens: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+    snippet: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    extraction: Mapped[Extraction] = relationship("Extraction", back_populates="attributions")
 
 
 class CrawlState(Base):

@@ -12,11 +12,17 @@ production.
 from __future__ import annotations
 
 from collections import defaultdict
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
+import structlog
 from pydantic import BaseModel
 from scholarlm import DocumentLM, MeasurementLM
+from scholarlm.attribution import AttributionMethod, ContrastiveGradientAttribution, ProbeAttribution
+from scholarlm.judgementlm import JudgementLM
+
+log = structlog.get_logger(__name__)
 
 if TYPE_CHECKING:
     from coastal_crawler.config import Settings
@@ -300,4 +306,103 @@ def build_measurement_adapter(settings: "Settings") -> DirectMeasurementAdapter:
         ),
         lat_field=settings.extraction_lat_field,
         lon_field=settings.extraction_lon_field,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Judge stage — extraction (context, value) in, p_true/probe_score/
+# attribution scores out
+# ---------------------------------------------------------------------------
+
+@dataclass
+class JudgeComponents:
+    """Everything judge_worker.py needs, loaded once per process.
+
+    No adapter Protocol/Stub pair here (unlike OCR/extraction above) —
+    JudgementLM/AttributionMethod are scholarlm classes called directly,
+    not fronted by an OpenAI-compatible endpoint, so there is no
+    stub-vs-direct distinction to make. Tests inject plain fakes with
+    matching ``.generate()``/``.attribute()`` methods instead.
+    """
+
+    judge: JudgementLM
+    attribution_methods: dict[str, AttributionMethod]
+    instructions_prompt: str
+
+
+def build_judge(settings: "Settings") -> JudgeComponents:
+    """Construct JudgementLM + both attribution methods from Settings.
+
+    Raises RuntimeError if required judge_* settings are missing (mirrors
+    build_measurement_adapter's guard for MEAS_LM_MODEL/
+    MEAS_LM_ENTITY_IDENTIFICATION_PROMPT) or if the loaded probe's
+    judge_model doesn't match settings.judge_probe_model_key (fail loud if
+    JUDGE_PROBE_PATH is pointing at an unexpected pickle file, per
+    CLAUDE.md). This does NOT verify the probe is actually trained for
+    whatever model JUDGE_MODEL currently names — see
+    JUDGE_PROBE_MODEL_KEY's description for why that pairing can't be
+    checked automatically and remains the operator's responsibility.
+    """
+    missing = [
+        name
+        for name, val in (
+            ("JUDGE_MODEL", settings.judge_model),
+            ("JUDGE_PROBE_PATH", settings.judge_probe_path),
+            ("JUDGE_PROBE_MODEL_KEY", settings.judge_probe_model_key),
+            ("JUDGE_INSTRUCTIONS_PROMPT", settings.judge_instructions_prompt),
+        )
+        if not val
+    ]
+    if missing:
+        raise RuntimeError(f"{', '.join(missing)} must be configured to run judgement.")
+    assert settings.judge_model is not None
+    assert settings.judge_probe_path is not None
+    assert settings.judge_probe_model_key is not None
+    assert settings.judge_instructions_prompt is not None
+
+    import joblib
+    import torch
+
+    judge = JudgementLM(
+        model_name=settings.judge_model,
+        sampling_params={
+            "do_sample": False,
+            "max_new_tokens": settings.judge_max_new_tokens,
+        },
+        nnsight_kwargs={"torch_dtype": getattr(torch, settings.judge_dtype)},
+        use_chat_template=settings.judge_use_chat_template,
+    )
+
+    probe_data: dict[str, Any] = joblib.load(settings.judge_probe_path)
+    # probe_data["judge_model"] is the probe's self-identified scholarlm
+    # registry key (e.g. "qwen-2.5-7b"), not a HuggingFace model id — it is
+    # NOT directly comparable to settings.judge_model. This check only
+    # confirms JUDGE_PROBE_PATH points at the pickle JUDGE_PROBE_MODEL_KEY
+    # says it should — it cannot verify that probe is actually trained for
+    # whatever model JUDGE_MODEL currently names (see JUDGE_PROBE_MODEL_KEY's
+    # description). Logging both below so the actual pairing used for a run
+    # is always visible in log.txt, not just asserted.
+    if probe_data["judge_model"] != settings.judge_probe_model_key:
+        raise RuntimeError(
+            f"JUDGE_PROBE_PATH's probe self-identifies as judge_model="
+            f"{probe_data['judge_model']!r}, but JUDGE_PROBE_MODEL_KEY="
+            f"{settings.judge_probe_model_key!r}. JUDGE_PROBE_PATH is "
+            f"probably pointing at the wrong probe file."
+        )
+    log.info(
+        "judge_probe_loaded",
+        judge_model=settings.judge_model,
+        probe_path=settings.judge_probe_path,
+        probe_judge_model_key=probe_data["judge_model"],
+        probe_dataset=probe_data.get("dataset"),
+    )
+
+    attribution_methods: dict[str, AttributionMethod] = {
+        "contrastive_gradient": ContrastiveGradientAttribution(judge),
+        "probe": ProbeAttribution(judge, probe_data),
+    }
+    return JudgeComponents(
+        judge=judge,
+        attribution_methods=attribution_methods,
+        instructions_prompt=settings.judge_instructions_prompt,
     )
