@@ -55,22 +55,15 @@ class TestFindSnippet:
         assert result.matched is True
         assert result.page_number == 1
 
-    def test_literal_match_highlights_value(self) -> None:
+    def test_literal_match_returns_unmarked_page_text(self) -> None:
+        """`.text` is the raw OCR page text — no `<mark>` or other injected
+        markup. judge_worker.py feeds this straight to the judge model as
+        `context`; any injected marker would leak the answer location into
+        what's supposed to be a blind judgement (see the 2026-08-20 fix that
+        removed find_snippet()'s highlighting for exactly this reason)."""
         result = find_snippet(_DOC, "28.4", "salinity", "PSU")
-        assert "<mark>28.4</mark>" in result.text
-
-    def test_numeric_normalized_match_highlights_original_formatting(self) -> None:
-        result = find_snippet(_DOC, "1234.50", "nitrate", "mg/L")
-        assert "<mark>1,234.50</mark>" in result.text
-
-    def test_unmatched_value_is_not_highlighted(self) -> None:
-        result = find_snippet(_DOC, "99.9", "salinity", None)
         assert "<mark>" not in result.text
-
-    def test_highlights_all_occurrences_of_a_repeated_literal_value(self) -> None:
-        doc = '<page number="0">\n\n28.4 PSU, then again 28.4 PSU later.\n\n</page>\n\n'
-        result = find_snippet(doc, "28.4", "salinity", "PSU")
-        assert result.text.count("<mark>28.4</mark>") == 2
+        assert "28.4" in result.text
 
     def test_does_not_match_digit_sequence_inside_a_larger_number(self) -> None:
         doc = '<page number="0">\n\nAn unrelated reading of 125.3 units was recorded.\n\n</page>\n\n'
@@ -87,9 +80,3 @@ class TestFindSnippet:
         result = find_snippet(doc, "5.0", "attribute", None)
         assert result.matched is False
 
-    def test_highlight_does_not_mark_substring_of_a_larger_number(self) -> None:
-        doc = '<page number="0">\n\nA reading of 5.0 units, unrelated 125.0 elsewhere.\n\n</page>\n\n'
-        result = find_snippet(doc, "5.0", "attribute", None)
-        assert result.text.count("<mark>5.0</mark>") == 1
-        assert "<mark>125.0</mark>" not in result.text
-        assert "1<mark>25.0</mark>" not in result.text

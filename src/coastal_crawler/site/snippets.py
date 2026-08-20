@@ -59,16 +59,12 @@ def find_snippet(
     literal_re = _literal_re(value)
     literal_hits = [(n, t) for n, t in pages if literal_re.search(t)]
     if literal_hits:
-        result = _best_of(literal_hits, attribute, units)
-        result.text = _highlight_literal(result.text, value)
-        return result
+        return _best_of(literal_hits, attribute, units)
 
     if value_norm is not None:
         numeric_hits = [(n, t) for n, t in pages if _page_has_number(t, value_norm)]
         if numeric_hits:
-            result = _best_of(numeric_hits, attribute, units)
-            result.text = _highlight_numeric(result.text, value_norm)
-            return result
+            return _best_of(numeric_hits, attribute, units)
 
     for page_num, text in pages:
         lower = text.lower()
@@ -95,24 +91,6 @@ def _literal_re(value: str) -> re.Pattern[str]:
     ',' immediately following (or, on the left, a digit/'.'/','/'-') means
     the hit is actually part of a bigger number."""
     return re.compile(rf"(?<![\d.,-]){re.escape(value)}(?![\d.,])")
-
-
-def _highlight_literal(text: str, value: str) -> str:
-    """Wrap every standalone occurrence of `value` in `<mark>` — `<mark>` is
-    in the OCR-rendering markdown sanitizer's default allowed-tag set, so it
-    survives `_render_ocr_markdown` untouched."""
-    return _literal_re(value).sub(lambda m: f"<mark>{m.group(0)}</mark>", text)
-
-
-def _highlight_numeric(text: str, value_norm: str) -> str:
-    """Wrap every number in `text` that normalizes to `value_norm` in `<mark>`."""
-
-    def repl(match: re.Match[str]) -> str:
-        if _normalize_number(match.group()) == value_norm:
-            return f"<mark>{match.group()}</mark>"
-        return match.group()
-
-    return _NUMBER_RE.sub(repl, text)
 
 
 def _best_of(
