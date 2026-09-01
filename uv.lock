@@ -323,6 +323,8 @@ dependencies = [
     { name = "scholarlm" },
     { name = "sqlalchemy" },
     { name = "structlog" },
+    { name = "transformers", version = "5.8.1", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'darwin'" },
+    { name = "transformers", version = "5.15.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform != 'darwin'" },
     { name = "typer" },
     { name = "uvicorn" },
 ]
@@ -355,9 +357,10 @@ requires-dist = [
     { name = "pytest-mock", marker = "extra == 'dev'", specifier = ">=3.14" },
     { name = "python-multipart", specifier = ">=0.0.9" },
     { name = "pyyaml", specifier = ">=6.0" },
-    { name = "scholarlm", git = "https://github.com/kevinqnb/scholarlm.git?rev=d9579cc0b11bda05925cc58a99c325fc7f8a1b79" },
+    { name = "scholarlm", git = "https://github.com/kevinqnb/scholarlm.git?rev=f928caef5accc40d96f2fa172cdec98d88cb1dec" },
     { name = "sqlalchemy", specifier = ">=2.0" },
     { name = "structlog", specifier = ">=24.0" },
+    { name = "transformers", specifier = ">=4.0" },
     { name = "typer", specifier = ">=0.12" },
     { name = "uvicorn", specifier = ">=0.30" },
 ]
@@ -3214,7 +3217,7 @@ torch = [
 [[package]]
 name = "scholarlm"
 version = "0.1.0"
-source = { git = "https://github.com/kevinqnb/scholarlm.git?rev=d9579cc0b11bda05925cc58a99c325fc7f8a1b79#d9579cc0b11bda05925cc58a99c325fc7f8a1b79" }
+source = { git = "https://github.com/kevinqnb/scholarlm.git?rev=f928caef5accc40d96f2fa172cdec98d88cb1dec#f928caef5accc40d96f2fa172cdec98d88cb1dec" }
 dependencies = [
     { name = "anthropic" },
     { name = "backoff" },

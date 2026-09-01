@@ -14,12 +14,13 @@ from __future__ import annotations
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, cast, runtime_checkable
 
 import structlog
 from pydantic import BaseModel
 from scholarlm import DocumentLM, MeasurementLM
 from scholarlm.attribution import AttributionMethod, ContrastiveGradientAttribution, ProbeAttribution
+from scholarlm.instruction_prompts import DIRECT_TRIPLE_EXTRACTION_INSTRUCTIONS
 from scholarlm.judgementlm import JudgementLM
 
 log = structlog.get_logger(__name__)
@@ -111,6 +112,7 @@ def build_ocr_adapter(settings: "Settings") -> DirectOCRAdapter:
     doc_lm = DocumentLM(
         model_name=settings.doc_lm_model,
         fast=True,
+        drop_references=True,
         api_base=settings.doc_lm_base_url,
         api_key=settings.doc_lm_api_key,
         max_concurrent=settings.doc_lm_max_concurrent,
@@ -125,6 +127,13 @@ def build_ocr_adapter(settings: "Settings") -> DirectOCRAdapter:
 @runtime_checkable
 class MeasurementAdapter(Protocol):
     """Interface the extraction worker calls. Lives in one place so it is easy to mock."""
+
+    #: Batch-local indices (positions into the most recent extract_batch()
+    #: call's ocr_texts) of documents whose context was truncated by the
+    #: tokenizer-based backstop — see DirectMeasurementAdapter.extract_batch.
+    #: Read by worker.py after each call to log a paper_id-scoped warning
+    #: (adapter.py has no paper identity, only batch position).
+    truncated_docs: set[int]
 
     def extract_batch(self, ocr_texts: list[str]) -> list[DocumentOutcome]:
         """Extract structured measurements from a batch of OCR'd documents.
@@ -142,8 +151,126 @@ class MeasurementAdapter(Protocol):
 class StubMeasurementAdapter:
     """Returns empty results — usable in tests without a GPU or vLLM endpoint."""
 
+    def __init__(self) -> None:
+        self.truncated_docs: set[int] = set()
+
     def extract_batch(self, ocr_texts: list[str]) -> list[DocumentOutcome]:
         return [[] for _ in ocr_texts]
+
+
+@runtime_checkable
+class _Tokenizer(Protocol):
+    """The subset of a HuggingFace tokenizer's interface the truncation
+    backstop needs. A structural Protocol (rather than importing
+    transformers' own type, which ships incomplete stubs) so mypy strict
+    checks the exact surface used here, and so tests can supply a fast fake
+    instead of loading a real (slow) HF tokenizer where truncation
+    correctness itself isn't what's under test."""
+
+    def encode(self, text: str, add_special_tokens: bool = ...) -> list[int]: ...
+
+    def decode(self, token_ids: list[int], skip_special_tokens: bool = ...) -> str: ...
+
+    def apply_chat_template(
+        self,
+        conversation: list[dict[str, str]],
+        tokenize: bool = ...,
+        add_generation_prompt: bool = ...,
+        return_dict: bool = ...,
+    ) -> list[int]: ...
+
+
+_DIRECT_EXTRACTION_QUERY = "Extract all measurement records from this document as described in the instructions."
+
+
+def _direct_extraction_prompt(direct_extraction_prompt: str, context: str) -> str:
+    """Reconstruct the exact prompt string scholarlm's MeasurementLM._extract_triples
+    sends per document, so token-counting here matches what the server actually
+    receives. Duplicated from scholarlm's own f-string assembly rather than
+    imported — scholarlm doesn't expose this as a function — so this is an
+    accepted, silently-driftable coupling: if scholarlm changes its template,
+    this budget calculation goes stale with no test spanning both repos to
+    catch it. See notes/coastal-crawler/builds/2026-08-20-extraction-hardening-01.md.
+    """
+    return (
+        f"## INSTRUCTIONS:\n{DIRECT_TRIPLE_EXTRACTION_INSTRUCTIONS}\n\n"
+        f"## DATASET SPECIFIC INSTRUCTIONS:\n{direct_extraction_prompt}\n\n"
+        f"## CONTEXT:\n{context}\n\n## QUERY:\n{_DIRECT_EXTRACTION_QUERY}"
+    )
+
+
+def _count_prompt_tokens(tokenizer: _Tokenizer, direct_extraction_prompt: str, context: str) -> int:
+    """Token count of the full chat-templated prompt scholarlm sends to the
+    server for this (direct_extraction_prompt, context) pair. Uses
+    apply_chat_template (not a plain encode()) so the count includes
+    whatever role-wrapping tokens the server's own chat template adds —
+    scholarlm sends this same content as a single user-role message via
+    ``chat.completions.create`` — avoiding the need for a guessed safety
+    margin to cover that overhead.
+
+    ``return_dict=False`` is required: transformers >=5 defaults
+    ``apply_chat_template`` to ``return_dict=True``, which (with
+    ``tokenize=True``) returns a dict-like ``BatchEncoding`` whose ``len()``
+    is the number of keys (2), not the token count — silently collapsing
+    every prompt to "2 tokens" and disabling the truncation backstop
+    entirely. ``return_dict=False`` returns the plain ``list[int]`` this
+    count needs."""
+    prompt = _direct_extraction_prompt(direct_extraction_prompt, context)
+    return len(
+        tokenizer.apply_chat_template(
+            [{"role": "user", "content": prompt}],
+            tokenize=True,
+            add_generation_prompt=True,
+            return_dict=False,
+        )
+    )
+
+
+def _truncate_context_to_budget(
+    tokenizer: _Tokenizer,
+    direct_extraction_prompt: str,
+    context: str,
+    max_model_len: int,
+) -> tuple[str, bool]:
+    """Truncate `context` so the full prompt (template + context) fits within
+    max_model_len tokens, if it doesn't already.
+
+    Returns (possibly-truncated context, was_truncated).
+
+    decode(encode(context)[:n]) is not guaranteed to re-encode to exactly n
+    tokens (BPE merges can shift at the truncation boundary), so the initial
+    slice is verified by re-counting the actual assembled prompt and shrunk
+    further if it still overshoots, rather than trusting the arithmetic
+    blindly (CLAUDE.md: fail loud, don't quietly ship a still-too-long
+    prompt).
+    """
+    if _count_prompt_tokens(tokenizer, direct_extraction_prompt, context) <= max_model_len:
+        return context, False
+
+    overhead_tokens = _count_prompt_tokens(tokenizer, direct_extraction_prompt, "")
+    budget = max_model_len - overhead_tokens
+    if budget <= 0:
+        raise ValueError(
+            f"meas_lm_max_model_len={max_model_len} is smaller than the fixed "
+            f"prompt-template overhead ({overhead_tokens} tokens) with an empty "
+            f"document context — no truncation budget is possible."
+        )
+
+    context_ids = tokenizer.encode(context, add_special_tokens=False)
+    truncated_ids = context_ids[:budget]
+
+    for _ in range(5):
+        truncated_context = tokenizer.decode(truncated_ids, skip_special_tokens=True)
+        total = _count_prompt_tokens(tokenizer, direct_extraction_prompt, truncated_context)
+        if total <= max_model_len:
+            return truncated_context, True
+        overshoot = total - max_model_len
+        truncated_ids = truncated_ids[: max(0, len(truncated_ids) - overshoot - 16)]
+
+    raise RuntimeError(
+        f"Could not truncate document context to fit meas_lm_max_model_len="
+        f"{max_model_len} after 5 attempts (last total={total} tokens)."
+    )
 
 
 class DirectMeasurementAdapter:
@@ -160,14 +287,21 @@ class DirectMeasurementAdapter:
         meas_lm: MeasurementLM,
         schema_name: str,
         model_version: str,
+        tokenizer: _Tokenizer,
+        max_model_len: int,
         lat_field: str | None = None,
         lon_field: str | None = None,
     ) -> None:
         self.meas_lm = meas_lm
         self.schema_name = schema_name
         self.model_version = model_version
+        self.tokenizer = tokenizer
+        self.max_model_len = max_model_len
         self.lat_field = lat_field
         self.lon_field = lon_field
+        # Batch-local indices truncated by the backstop in the most recent
+        # extract_batch() call — see MeasurementAdapter's docstring.
+        self.truncated_docs: set[int] = set()
 
     def extract_batch(self, ocr_texts: list[str]) -> list[DocumentOutcome]:
         # MeasurementLM.fit() in extraction_mode="direct" runs two LLM calls
@@ -178,16 +312,30 @@ class DirectMeasurementAdapter:
         # before converting, so this adapter's own return shape (one
         # DocumentOutcome per input text, same order/length as ocr_texts)
         # stays what worker.py expects.
-        #
-        # There is no per-document error signal from MeasurementLM in direct
-        # mode: a document whose extraction call fails validation ends up
-        # with zero records, indistinguishable from a genuine
-        # zero-measurement result. Accepted as a known lossy boundary of
-        # depending on scholarlm as-is (see the build note's "Out of
-        # scope") — the `str`-error branch of DocumentOutcome is therefore
-        # never actually produced by this adapter today, even though the
-        # type still allows it.
-        raw: list[dict[str, Any]] = self.meas_lm.fit(ocr_texts)
+        self.truncated_docs = set()
+        direct_extraction_prompt = self.meas_lm.direct_extraction_prompt
+        assert direct_extraction_prompt is not None, (
+            "meas_lm.direct_extraction_prompt is None — MeasurementLM was constructed "
+            "without extraction_mode='direct' wiring; the truncation budget calculation "
+            "needs the same prompt text the server will actually receive."
+        )
+
+        processed_texts: list[str] = []
+        for i, text in enumerate(ocr_texts):
+            truncated_text, was_truncated = _truncate_context_to_budget(
+                self.tokenizer, direct_extraction_prompt, text, self.max_model_len
+            )
+            if was_truncated:
+                self.truncated_docs.add(i)
+                log.warning(
+                    "document_truncated_for_extraction",
+                    batch_index=i,
+                    original_tokens=len(self.tokenizer.encode(text, add_special_tokens=False)),
+                    max_model_len=self.max_model_len,
+                )
+            processed_texts.append(truncated_text)
+
+        raw: list[dict[str, Any]] = self.meas_lm.fit(processed_texts)
 
         by_document: dict[int, list[dict[str, Any]]] = defaultdict(list)
         for record in raw:
@@ -201,9 +349,36 @@ class DirectMeasurementAdapter:
                 f"ocr_texts, and every downstream regrouping is silently wrong."
             )
 
-        return [
-            [self._to_result(record) for record in by_document[i]] for i in range(len(ocr_texts))
-        ]
+        # context_length_exceeded_docs is populated from two different
+        # places in scholarlm's fit(): a document that produced zero
+        # records (a true total failure, from _extract_triples) and a
+        # document whose records survive with un-standardized original
+        # value/units (from _standardize, which starts from a copy of the
+        # raw data and just skips the update on failure). Only the first
+        # case is converted to a str failure here — the second keeps its
+        # partial results (discarding them would throw away real data) but
+        # gets a loud warning, since an un-standardized value/units pair
+        # reaching the warehouse is its own quietly-wrong-number risk. See
+        # notes/coastal-crawler/builds/2026-08-20-extraction-hardening-01.md.
+        context_length_exceeded = self.meas_lm.context_length_exceeded_docs
+        results: list[DocumentOutcome] = []
+        for i in range(len(ocr_texts)):
+            records = by_document[i]
+            if i in context_length_exceeded:
+                if not records:
+                    results.append(
+                        f"MeasurementLM context-length-exceeded for document {i} "
+                        f"(truncated_by_backstop={i in self.truncated_docs}); zero "
+                        f"records extracted."
+                    )
+                    continue
+                log.warning(
+                    "document_partially_standardized",
+                    batch_index=i,
+                    records=len(records),
+                )
+            results.append([self._to_result(record) for record in records])
+        return results
 
     def _to_result(self, record: dict[str, Any]) -> ExtractionResult:
         # _deduplicate() wraps these fields in single-element lists
@@ -246,13 +421,19 @@ def build_measurement_adapter(settings: "Settings") -> DirectMeasurementAdapter:
 
     Raises RuntimeError if required meas_lm_* settings are missing (mirrors
     relevance_filter.run_filter()'s guard for FILTER_MODEL/
-    FILTER_RELEVANCE_PROMPT).
+    FILTER_RELEVANCE_PROMPT). MEAS_LM_MAX_MODEL_LEN is required here too
+    (unlike its other use as an optional vLLM --max-model-len override) —
+    the tokenizer-based truncation backstop needs a concrete token budget to
+    enforce; a silently-disabled backstop would be exactly the kind of quiet
+    wrong-result CLAUDE.md warns against. See
+    notes/coastal-crawler/builds/2026-08-20-extraction-hardening-01.md.
     """
     missing = [
         name
         for name, val in (
             ("MEAS_LM_MODEL", settings.meas_lm_model),
             ("MEAS_LM_ENTITY_IDENTIFICATION_PROMPT", settings.meas_lm_entity_identification_prompt),
+            ("MEAS_LM_MAX_MODEL_LEN", settings.meas_lm_max_model_len),
         )
         if not val
     ]
@@ -262,6 +443,9 @@ def build_measurement_adapter(settings: "Settings") -> DirectMeasurementAdapter:
     # verified these are non-empty at runtime.
     assert settings.meas_lm_model is not None
     assert settings.meas_lm_entity_identification_prompt is not None
+    assert settings.meas_lm_max_model_len is not None
+
+    from transformers import AutoTokenizer
 
     from coastal_crawler.measurement_schema import (
         ATTRIBUTE_INFO_DICT,
@@ -297,6 +481,13 @@ def build_measurement_adapter(settings: "Settings") -> DirectMeasurementAdapter:
         api_key=settings.meas_lm_api_key,
         max_concurrent=settings.meas_lm_max_concurrent,
     )
+    # Loaded once per process (~90s for a 120B-parameter model's tokenizer
+    # from a warm HF cache) — the truncation backstop needs the real
+    # tokenizer for MEAS_LM_MODEL, not a generic/approximate one, since
+    # token counts must match what the served model will actually see.
+    # cast: transformers' own return type is a backend union with
+    # incomplete stubs — _Tokenizer names the exact structural surface used.
+    tokenizer = cast("_Tokenizer", AutoTokenizer.from_pretrained(settings.meas_lm_model))
     return DirectMeasurementAdapter(
         meas_lm=meas_lm,
         schema_name=settings.extraction_schema_name,
@@ -304,6 +495,8 @@ def build_measurement_adapter(settings: "Settings") -> DirectMeasurementAdapter:
             settings.extraction_model_version
             or f"doc_lm={settings.doc_lm_model}+meas_lm={settings.meas_lm_model}"
         ),
+        tokenizer=tokenizer,
+        max_model_len=settings.meas_lm_max_model_len,
         lat_field=settings.extraction_lat_field,
         lon_field=settings.extraction_lon_field,
     )

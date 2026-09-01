@@ -30,6 +30,10 @@ dependencies = [
     "scholarlm",
     "sqlalchemy>=2.0",
     "structlog>=24.0",
+    # Was transitive-only (via scholarlm) until the extraction-hardening
+    # truncation backstop needed AutoTokenizer directly — see
+    # notes/coastal-crawler/builds/2026-08-20-extraction-hardening-01.md.
+    "transformers>=4.0",
     "typer>=0.12",
     "uvicorn>=0.30",
 ]
@@ -37,8 +41,10 @@ dependencies = [
 [tool.uv.sources]
 # Pinned to a full commit SHA (not a floating branch ref) for reproducibility;
 # `advances` is recorded here only as provenance for where that commit lives.
-# See notes/coastal-crawler/builds/2026-08-18-scholarlm-migration-01.md.
-scholarlm = { git = "https://github.com/kevinqnb/scholarlm.git", rev = "d9579cc0b11bda05925cc58a99c325fc7f8a1b79" }  # branch: advances
+# See notes/coastal-crawler/builds/2026-08-18-scholarlm-migration-01.md and
+# notes/coastal-crawler/builds/2026-08-20-extraction-hardening-01.md (pin
+# bump to pick up drop_references/context_length_exceeded_docs).
+scholarlm = { git = "https://github.com/kevinqnb/scholarlm.git", rev = "f928caef5accc40d96f2fa172cdec98d88cb1dec" }  # branch: advances
 
 [project.optional-dependencies]
 dev = [

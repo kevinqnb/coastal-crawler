@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 import structlog
 
@@ -31,6 +31,47 @@ from coastal_crawler.site.snippets import find_snippet
 log = structlog.get_logger(__name__)
 
 _UPSTREAM_STATUSES = ("relevant", "ocr_processing", "ocr_done")
+
+
+def _sanitize_nul_bytes(text: str) -> tuple[str, int]:
+    """Replace each U+0000 with U+FFFD, 1:1 (offset-preserving so downstream
+    character offsets — find_snippet's page matching, page-tag boundaries —
+    stay valid). Postgres cannot store a literal NUL byte in a text or jsonb
+    column at all (the psycopg2 driver rejects it before the value even
+    reaches the server), so a NUL anywhere in an otherwise-successful
+    extraction would fail the whole paper. See
+    notes/coastal-crawler/builds/2026-08-20-extraction-hardening-01.md.
+    """
+    count = text.count("\x00")
+    if count == 0:
+        return text, 0
+    return text.replace("\x00", "\ufffd"), count
+
+
+def _sanitize_nul_in_json(value: Any) -> tuple[Any, int]:
+    """Recursively apply _sanitize_nul_bytes to every string leaf of a
+    JSON-shaped value (dict/list/str/other) — used for ExtractionResult's
+    `data`/`provenance`, both JSONB columns with the same NUL-byte write
+    failure as OCR text."""
+    if isinstance(value, str):
+        return _sanitize_nul_bytes(value)
+    if isinstance(value, dict):
+        total = 0
+        sanitized_dict: dict[Any, Any] = {}
+        for k, v in value.items():
+            sv, count = _sanitize_nul_in_json(v)
+            sanitized_dict[k] = sv
+            total += count
+        return sanitized_dict, total
+    if isinstance(value, list):
+        total = 0
+        sanitized_list: list[Any] = []
+        for v in value:
+            sv, count = _sanitize_nul_in_json(v)
+            sanitized_list.append(sv)
+            total += count
+        return sanitized_list, total
+    return value, 0
 
 
 def run_worker(
@@ -118,7 +159,14 @@ def run_worker(
             batch_error = exc
         log.info("gpu_chunk_done", chunk_size=len(ids), seconds=round(time.monotonic() - t0, 2))
 
-        for paper_id, ocr_text, outcome in zip(ids, ocr_texts, batch_results):
+        # truncated_docs is batch-local (positions into this chunk's
+        # ocr_texts) — adapter.py has no paper identity, only batch
+        # position, so the paper_id-scoped log line has to happen here.
+        truncated_docs = _adapter.truncated_docs
+
+        for i, (paper_id, ocr_text, outcome) in enumerate(zip(ids, ocr_texts, batch_results)):
+            if i in truncated_docs:
+                log.warning("paper_extraction_truncated", paper_id=paper_id)
             with get_session() as session:
                 try:
                     if batch_error is not None:
@@ -130,16 +178,36 @@ def run_worker(
                     # measurements, so requeue-failed can retry it.
                     if isinstance(outcome, str):
                         raise RuntimeError(outcome)
+                    # NUL bytes anywhere in ocr_text (or a measurement's
+                    # data/provenance) fail the Postgres write outright —
+                    # sanitize once here, offset-preserving, so an otherwise-
+                    # successful extraction isn't discarded over it. See
+                    # _sanitize_nul_bytes's docstring.
+                    sanitized_ocr_text, ocr_nul_count = _sanitize_nul_bytes(ocr_text)
+                    if ocr_nul_count:
+                        log.warning(
+                            "paper_ocr_context_nul_sanitized", paper_id=paper_id, replaced=ocr_nul_count
+                        )
                     # One copy of this paper's OCR text, not one per
                     # measurement record — see PaperOcrContext's docstring.
-                    store.upsert_paper_ocr_context(paper_id, ocr_text, session)
+                    store.upsert_paper_ocr_context(paper_id, sanitized_ocr_text, session)
                     for result in outcome:
+                        data_sanitized, data_nul_count = _sanitize_nul_in_json(result.data)
+                        provenance_sanitized, provenance_nul_count = _sanitize_nul_in_json(result.provenance)
+                        result.data = data_sanitized
+                        result.provenance = provenance_sanitized
+                        if data_nul_count or provenance_nul_count:
+                            log.warning(
+                                "paper_extraction_nul_sanitized",
+                                paper_id=paper_id,
+                                replaced=data_nul_count + provenance_nul_count,
+                            )
                         # find_snippet() is the same heuristic site/app.py's
                         # detail_view calls live, run once here at write
                         # time instead of per page-render (see
                         # 2026-08-11-page-number-persistence-01).
                         snippet = find_snippet(
-                            ocr_text,
+                            sanitized_ocr_text,
                             result.data.get("value"),
                             result.data.get("attribute"),
                             result.data.get("units"),

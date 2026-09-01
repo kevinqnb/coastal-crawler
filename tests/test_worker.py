@@ -26,7 +26,14 @@ from coastal_crawler.adapter import ExtractionResult, StubMeasurementAdapter
 from coastal_crawler.db import store
 from coastal_crawler.db.models import Extraction, Paper
 from coastal_crawler.ocr_worker import run_ocr_worker
-from coastal_crawler.worker import requeue_failed, requeue_processing, run_worker, run_worker_until_idle
+from coastal_crawler.worker import (
+    _sanitize_nul_bytes,
+    _sanitize_nul_in_json,
+    requeue_failed,
+    requeue_processing,
+    run_worker,
+    run_worker_until_idle,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -132,6 +139,59 @@ def _extractions(engine: Engine) -> list[Extraction]:
 def _write_ocr(ocr_dir: Path, paper_id: int, text: str = "some ocr text") -> None:
     ocr_dir.mkdir(parents=True, exist_ok=True)
     (ocr_dir / f"{paper_id}.txt").write_text(text, encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# NUL-byte sanitization (2026-08-20-extraction-hardening-01) — pure helpers,
+# no DB. Postgres/psycopg2 reject a literal \x00 in text and jsonb columns,
+# so a NUL anywhere in OCR text or a measurement dict would otherwise fail
+# the whole paper.
+# ---------------------------------------------------------------------------
+
+class TestSanitizeNulBytes:
+    def test_no_nul_returns_input_unchanged_and_zero_count(self) -> None:
+        text = "salinity 35 psu\npage 2"
+        out, count = _sanitize_nul_bytes(text)
+        assert out == text
+        assert count == 0
+
+    def test_each_nul_replaced_with_replacement_char(self) -> None:
+        out, count = _sanitize_nul_bytes("a\x00b\x00c")
+        assert out == "a�b�c"
+        assert count == 2
+
+    def test_replacement_is_offset_preserving(self) -> None:
+        """1 char in -> 1 char out, so downstream character offsets
+        (find_snippet page matching, page-tag boundaries) stay valid."""
+        text = "0123\x00567\x009"
+        out, _ = _sanitize_nul_bytes(text)
+        assert len(out) == len(text)
+        for i, ch in enumerate(text):
+            if ch != "\x00":
+                assert out[i] == ch
+        assert out.index("�") == 4
+
+    def test_json_helper_recurses_into_nested_dicts_and_lists(self) -> None:
+        value = {
+            "value": "1.0",
+            "units": "m\x00g/L",
+            "notes": ["clean", "dir\x00ty", {"deep": "x\x00y"}],
+            "page_number": 3,
+            "flag": None,
+        }
+        out, count = _sanitize_nul_in_json(value)
+        assert count == 3
+        assert out["units"] == "m�g/L"
+        assert out["notes"][1] == "dir�ty"
+        assert out["notes"][2]["deep"] == "x�y"
+        assert out["page_number"] == 3
+        assert out["flag"] is None
+
+    def test_json_helper_clean_value_unchanged_zero_count(self) -> None:
+        value = {"a": ["b", "c"], "d": 1}
+        out, count = _sanitize_nul_in_json(value)
+        assert out == value
+        assert count == 0
 
 
 # ---------------------------------------------------------------------------
