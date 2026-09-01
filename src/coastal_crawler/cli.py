@@ -134,16 +134,36 @@ def judge(
     batch_size: int = typer.Option(
         None, "--batch-size", help="Extraction rows to process per run. Defaults to JUDGE_BATCH_SIZE in .env."
     ),
+    poll_interval: float = typer.Option(
+        60.0, "--poll-interval", help="Seconds to wait between polls when --idle-timeout > 0."
+    ),
+    idle_timeout: float = typer.Option(
+        0.0,
+        "--idle-timeout",
+        help=(
+            "If > 0, keep polling for newly-pending extraction rows and wait up to this many "
+            "seconds of no new work before exiting (for running alongside a concurrent "
+            "'extract' job). Default 0 = process one batch and exit."
+        ),
+    ),
 ) -> None:
     """Claim and judge a batch of extractions: JudgementLM p_true + probe validity score + attribution."""
     from coastal_crawler.adapter import build_judge
     from coastal_crawler.config import get_settings
-    from coastal_crawler.judge_worker import run_judge_worker
+    from coastal_crawler.judge_worker import run_judge_worker, run_judge_worker_until_idle
 
     settings = get_settings()
     components = build_judge(settings)
     size = batch_size if batch_size is not None else settings.judge_batch_size
-    judged, failed, requeued = run_judge_worker(batch_size=size, components=components)
+    if idle_timeout > 0:
+        judged, failed, requeued = run_judge_worker_until_idle(
+            batch_size=size,
+            components=components,
+            poll_interval=poll_interval,
+            idle_timeout=idle_timeout,
+        )
+    else:
+        judged, failed, requeued = run_judge_worker(batch_size=size, components=components)
     message = f"Judged {judged}, failed {failed}."
     if requeued:
         message += f" Requeued {requeued} (paper OCR context missing)."

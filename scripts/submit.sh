@@ -9,7 +9,13 @@
 # qsubs scripts/run_experiment_job.sh (the generalized job body) with -N <id>.
 #
 # Usage:
-#   bash scripts/submit.sh <id>
+#   bash scripts/submit.sh <id> [hold_jid]
+#
+# hold_jid: optional SGE job ID (or comma-separated list) to pass as
+# -hold_jid, so this job is queued now but SGE won't start it until the
+# held job(s) exit — used to chain pipeline legs (e.g. queue judge right
+# after submitting extract) without needing to stay around to submit the
+# next leg manually once the prior one finishes.
 #
 # SGE project/account: like the rest of this repo's site-specific config
 # (scripts/cluster.local.sh, scripts/filter.sh/extract.sh — all gitignored),
@@ -19,7 +25,8 @@
 
 set -euo pipefail
 
-ID="${1:?Usage: bash scripts/submit.sh <id>}"
+ID="${1:?Usage: bash scripts/submit.sh <id> [hold_jid]}"
+HOLD_JID="${2:-}"
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CONFIG_PATH="$REPO_DIR/configs/${ID}.yaml"
 
@@ -56,7 +63,7 @@ esac
 mkdir -p "$REPO_DIR/out"
 
 QSUB_ARGS=(
-    -N "$ID"
+    -N "job_$ID"
     -l "h_rt=$H_RT"
     -pe omp 8
     -l gpus=1
@@ -70,6 +77,9 @@ QSUB_ARGS=(
 if [ -n "${SGE_PROJECT:-}" ]; then
     QSUB_ARGS=(-P "$SGE_PROJECT" "${QSUB_ARGS[@]}")
 fi
+if [ -n "$HOLD_JID" ]; then
+    QSUB_ARGS=(-hold_jid "$HOLD_JID" "${QSUB_ARGS[@]}")
+fi
 
-echo "Submitting $ID (stage=$STAGE, role=$ROLE, gpu_memory=$GPU_MEMORY, gpu_c=$GPU_C)..."
+echo "Submitting $ID (stage=$STAGE, role=$ROLE, gpu_memory=$GPU_MEMORY, gpu_c=$GPU_C${HOLD_JID:+, hold_jid=$HOLD_JID})..."
 qsub "${QSUB_ARGS[@]}" "$REPO_DIR/scripts/run_experiment_job.sh"

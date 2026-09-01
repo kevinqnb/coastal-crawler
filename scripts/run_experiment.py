@@ -21,9 +21,9 @@ Config `params` (free-form per the contract, but this adapter reads):
                    OCR_CHUNK_SIZE / EXTRACTION_CHUNK_SIZE setting. Not used
                    by judge (one extraction row at a time — see
                    judge_worker.py).
-    poll_interval: float, extract only. Default 60.0 (CLI default).
-    idle_timeout:  float, extract only. Default 0.0 = single batch, no
-                   polling loop (CLI default).
+    poll_interval: float, extract and judge only. Default 60.0 (CLI default).
+    idle_timeout:  float, extract and judge only. Default 0.0 = single batch,
+                   no polling loop (CLI default).
     env:           mapping of environment variables to set for this run
                    before Settings is constructed — e.g. FILTER_MODEL,
                    FILTER_RELEVANCE_PROMPT, DOC_LM_MODEL, MEAS_LM_MODEL,
@@ -153,10 +153,18 @@ def _run_stage(stage: str, params: dict[str, Any]) -> tuple[int, int, int]:
 
     if stage == "judge":
         from coastal_crawler.adapter import build_judge
-        from coastal_crawler.judge_worker import run_judge_worker
+        from coastal_crawler.judge_worker import run_judge_worker, run_judge_worker_until_idle
 
         components = build_judge(settings)
         batch_size = params.get("batch_size", settings.judge_batch_size)
+        idle_timeout = params.get("idle_timeout", 0.0)
+        if idle_timeout > 0:
+            return run_judge_worker_until_idle(
+                batch_size=batch_size,
+                components=components,
+                poll_interval=params.get("poll_interval", 60.0),
+                idle_timeout=idle_timeout,
+            )
         return run_judge_worker(batch_size=batch_size, components=components)
 
     raise ValueError(f"params.stage must be one of {sorted(STAGE_METRICS)}, got {stage!r}")

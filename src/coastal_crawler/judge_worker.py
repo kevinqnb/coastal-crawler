@@ -12,7 +12,8 @@ in-process-loaded model (see adapter.build_judge/JudgeComponents).
 
 from __future__ import annotations
 
-from typing import Any
+import time
+from typing import Any, Callable
 
 import structlog
 from scholarlm.judgementlm import tokenize
@@ -23,6 +24,12 @@ from coastal_crawler.db.engine import get_session
 from coastal_crawler.site.snippets import find_snippet
 
 log = structlog.get_logger(__name__)
+
+# Paper statuses that mean more 'pending' extraction rows could still show up
+# (extraction hasn't reached a terminal state for that paper yet) — mirrors
+# worker.py's _UPSTREAM_STATUSES, one stage further downstream: judge's
+# upstream is extraction, not OCR.
+_UPSTREAM_STATUSES = ("relevant", "ocr_processing", "ocr_done", "processing")
 
 
 def _build_query(data: dict[str, Any]) -> str:
@@ -163,6 +170,63 @@ def run_judge_worker(
 
     log.info("judge_batch_done", judged=judged, failed=failed, requeued=requeued)
     return judged, failed, requeued
+
+
+def run_judge_worker_until_idle(
+    batch_size: int = 10,
+    components: JudgeComponents | None = None,
+    poll_interval: float = 60.0,
+    idle_timeout: float = 1800.0,
+    sleep_fn: Callable[[float], None] = time.sleep,
+    now_fn: Callable[[], float] = time.monotonic,
+) -> tuple[int, int, int]:
+    """Repeatedly claim and judge batches, waiting for new pending extractions.
+
+    Mirrors worker.py's ``run_worker_until_idle`` one stage downstream: calls
+    ``run_judge_worker()`` in a loop so judging can start as soon as the first
+    extraction rows land and keep picking up newly ``pending`` rows as a
+    concurrently-running extract job produces them. The idle clock resets on
+    any batch that judges or fails at least one row — ``requeued`` (missing
+    PaperOcrContext, a data-consistency issue) does NOT count as progress,
+    same rationale as worker.py's version: it would otherwise busy-loop
+    claim/requeue against the DB forever with no sleep in between. Returns
+    once ``idle_timeout`` seconds have elapsed with no new judged/failed rows,
+    or immediately once there is no upstream extraction work left at all
+    (``relevant``/``ocr_processing``/``ocr_done``/``processing`` all empty)
+    rather than waiting out the full idle window for a queue that's provably
+    drained.
+
+    ``sleep_fn``/``now_fn`` are injectable so tests don't sleep for real.
+
+    Returns:
+        (judged, failed, requeued) counts summed across every batch.
+    """
+    total_judged = total_failed = total_requeued = 0
+    idle_start: float | None = None
+
+    while True:
+        judged, failed, requeued = run_judge_worker(batch_size, components)
+        total_judged += judged
+        total_failed += failed
+        total_requeued += requeued
+
+        if judged + failed > 0:
+            idle_start = None
+            continue
+
+        if idle_start is None:
+            idle_start = now_fn()
+        if now_fn() - idle_start >= idle_timeout:
+            break
+
+        with get_session() as session:
+            counts = store.count_by_status(session)
+        if sum(counts.get(s, 0) for s in _UPSTREAM_STATUSES) == 0:
+            break
+
+        sleep_fn(poll_interval)
+
+    return total_judged, total_failed, total_requeued
 
 
 def requeue_judge_processing() -> int:

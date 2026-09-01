@@ -25,14 +25,18 @@ from unittest.mock import MagicMock
 
 import pytest
 from scholarlm.judgementlm import tokenize
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
 from coastal_crawler.adapter import ExtractionResult, JudgeComponents
 from coastal_crawler.db import store
 from coastal_crawler.db.models import Attribution, Extraction, Paper
-from coastal_crawler.judge_worker import requeue_judge_processing, run_judge_worker
+from coastal_crawler.judge_worker import (
+    requeue_judge_processing,
+    run_judge_worker,
+    run_judge_worker_until_idle,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -323,6 +327,95 @@ class TestRunJudgeWorkerFailures:
         judged, failed, requeued = run_judge_worker(batch_size=10, components=make_components())
         assert judged == 1
         assert failed == 1
+
+
+# ---------------------------------------------------------------------------
+# run_judge_worker_until_idle — poll-and-wait loop mirroring
+# worker.run_worker_until_idle one stage downstream (upstream = extraction).
+# ---------------------------------------------------------------------------
+
+class _FakeClock:
+    """Deterministic monotonic clock + sleep — no real waiting."""
+
+    def __init__(self) -> None:
+        self.t = 0.0
+        self.sleeps: list[float] = []
+
+    def now(self) -> float:
+        return self.t
+
+    def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        self.t += seconds
+
+
+class TestRunJudgeWorkerUntilIdle:
+    def test_processes_available_then_exits_when_queue_drained(self, judge_worker_db: Engine) -> None:
+        _insert_paper_with_pending_extraction(judge_worker_db)
+        clock = _FakeClock()
+
+        judged, failed, requeued = run_judge_worker_until_idle(
+            batch_size=10,
+            components=make_components(),
+            poll_interval=5,
+            idle_timeout=1000,
+            sleep_fn=clock.sleep,
+            now_fn=clock.now,
+        )
+
+        assert (judged, failed, requeued) == (1, 0, 0)
+        assert clock.sleeps == []  # no upstream extraction work left -> no waiting
+
+    def test_exits_once_idle_timeout_elapses_with_upstream_pending(self, judge_worker_db: Engine) -> None:
+        """A paper stuck mid-pipeline (status='ocr_done') keeps upstream work
+        non-empty, but no judge rows ever appear — the loop must still bound
+        its wait by idle_timeout."""
+        with Session(judge_worker_db) as s:
+            store.upsert_papers([make_paper(status="ocr_done")], s)
+            s.commit()
+        clock = _FakeClock()
+
+        judged, failed, requeued = run_judge_worker_until_idle(
+            batch_size=10,
+            components=make_components(),
+            poll_interval=10,
+            idle_timeout=25,
+            sleep_fn=clock.sleep,
+            now_fn=clock.now,
+        )
+
+        assert (judged, failed, requeued) == (0, 0, 0)
+        assert clock.t >= 25
+
+    def test_picks_up_extraction_that_becomes_pending_mid_loop(self, judge_worker_db: Engine) -> None:
+        """A concurrent extract job produces a pending extraction row between
+        polls — the loop must claim it rather than having exited early."""
+        with Session(judge_worker_db) as s:
+            store.upsert_papers([make_paper(status="processing")], s)
+            paper = s.scalars(select(Paper).order_by(Paper.id.desc())).first()
+            store.upsert_paper_ocr_context(paper.id, "some ocr text", s)
+            s.commit()
+            paper_id = paper.id
+        clock = _FakeClock()
+
+        def _sleep(seconds: float) -> None:
+            clock.sleep(seconds)
+            if len(clock.sleeps) == 1:
+                with Session(judge_worker_db) as s:
+                    store.insert_extraction(paper_id, make_result(), s)
+                    s.execute(update(Paper).where(Paper.id == paper_id).values(status="extracted"))
+                    s.commit()
+
+        judged, failed, requeued = run_judge_worker_until_idle(
+            batch_size=10,
+            components=make_components(),
+            poll_interval=5,
+            idle_timeout=1000,
+            sleep_fn=_sleep,
+            now_fn=clock.now,
+        )
+
+        assert judged == 1
 
 
 # ---------------------------------------------------------------------------
