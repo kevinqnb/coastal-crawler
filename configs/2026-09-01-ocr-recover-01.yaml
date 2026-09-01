@@ -1,0 +1,21 @@
+id: 2026-09-01-ocr-recover-01
+project: coastal-crawler
+description: >
+  Re-OCR the 40 papers that failed the 2026-08-19-ocr-100-01 leg on
+  scholarlm's chandra-ocr-2 unknown-data-label gap (20 Bibliography,
+  20 Chemical-Block). scholarlm pin bumped to 86f0f85 (naacl) which adds the
+  structure-based fallback for unrecognized data-labels;
+  DOC_LM_UNKNOWN_LABEL_POLICY=coerce turns it on for this run. The
+  2,976-paper 'relevant' backlog is parked as 'ocr_backlog_parked' for the
+  duration so claim_batch_for_ocr (no ORDER BY) claims exactly these 40 —
+  un-park with UPDATE papers SET status='relevant' WHERE
+  status='ocr_backlog_parked' once this run is validated. All 40 have a
+  cached PDF in data/wiley_pdfs/, so no live Wiley downloads. Run
+  2026-09-01-ocr-recover-smoke-01 first (staged gate).
+seed: 342
+params:
+  stage: ocr
+  batch_size: 40
+  chunk_size: 20
+  env:
+    DOC_LM_UNKNOWN_LABEL_POLICY: coerce

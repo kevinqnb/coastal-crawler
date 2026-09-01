@@ -1,0 +1,18 @@
+id: 2026-09-01-ocr-recover-smoke-01
+project: coastal-crawler
+description: >
+  Staged-gate smoke for re-OCR of the 40 papers that failed the
+  2026-08-19-ocr-100-01 leg on scholarlm's chandra-ocr-2 unknown-data-label
+  gap (20 Bibliography, 20 Chemical-Block). scholarlm pin bumped to 86f0f85
+  (naacl) for the structure-based fallback; DOC_LM_UNKNOWN_LABEL_POLICY=coerce
+  exercises it. Claims 2 of the 40 (the 2,976-paper backlog is parked as
+  'ocr_backlog_parked' so claim_batch_for_ocr — no ORDER BY — sees only these
+  40). Predicted: both reach ocr_done, non-empty OCR text, and the run log
+  carries 'ocr_unknown_labels_coerced' lines. Run this before the full 40.
+seed: 342
+params:
+  stage: ocr
+  batch_size: 2
+  chunk_size: 2
+  env:
+    DOC_LM_UNKNOWN_LABEL_POLICY: coerce
