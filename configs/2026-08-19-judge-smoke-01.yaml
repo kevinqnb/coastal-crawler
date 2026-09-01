@@ -1,0 +1,16 @@
+id: 2026-08-19-judge-smoke-01
+project: coastal-crawler
+description: >
+  Tiny post-migration smoke test for the judge stage (JudgementLM +
+  attribution via scholarlm, loaded in-process via nnsight). Targets the 2
+  pending extraction rows (id 22450, 22451, both paper_id 2743) produced by
+  the extract-smoke-01 re-run. An interactive attempt on this node's L40S
+  (44GB usable) OOM'd loading Qwen2.5-7B-Instruct + the attribution
+  backward graph, confirming the 80GB-class GPU requirement documented in
+  CLAUDE.local.md/the judgement-attribution build note. No 80GB GPU is
+  available interactively right now, so this runs as a real qsub job
+  instead of an in-shell smoke run.
+seed: 342
+params:
+  stage: judge
+  batch_size: 2

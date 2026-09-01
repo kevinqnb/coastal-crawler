@@ -1,0 +1,15 @@
+id: 2026-08-19-judge-100-01
+project: coastal-crawler
+description: >
+  Post-migration 100-paper pipeline test, judge leg (JudgementLM +
+  attribution). Submitted with -hold_jid on the extract leg
+  (2026-08-19-extract-100-01, SGE job 7232986) so it queues immediately but
+  only starts once extraction finishes. batch_size is generous (3000) since
+  the exact extraction-row count from the 60 OCR'd papers isn't known in
+  advance -- one already-judged paper (2743, from the smoke test) alone
+  produced 98 rows. Third of three sequential legs (ocr -> extract ->
+  judge).
+seed: 342
+params:
+  stage: judge
+  batch_size: 3000

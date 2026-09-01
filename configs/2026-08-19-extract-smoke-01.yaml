@@ -1,0 +1,15 @@
+id: 2026-08-19-extract-smoke-01
+project: coastal-crawler
+description: >
+  Tiny post-migration smoke test for the extract stage (ExtractionLM via
+  scholarlm's MeasurementLM). Targets exactly the 2 papers OCR'd in the
+  interactive DOC_LM smoke test that preceded this (paper_id 2779, 2743;
+  ocr_done). No interactive 80GB-class GPU was available to smoke-test
+  extract directly in-shell (CLAUDE.local.md notes MEAS_LM/gpt-oss-120b
+  needs one), so this runs as a real qsub job instead, sized to the
+  smallest predictable batch (batch_size=2 == the current ocr_done count)
+  rather than the full 100-paper test.
+seed: 342
+params:
+  stage: extract
+  batch_size: 2

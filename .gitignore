@@ -224,6 +224,12 @@ memory/*
 scripts/out/*
 scripts/time_ocr.sh
 
+# SGE job stdout/stderr (scripts/submit.sh's -o/-e, serve_postgres.sh, etc.).
+# The directory must exist at qsub time, so keep it tracked via .gitkeep but
+# ignore every log file written into it.
+out/*
+!out/.gitkeep
+
 # Pre-downloaded PDF cache (scripts/wiley_download.py)
 /data/
 

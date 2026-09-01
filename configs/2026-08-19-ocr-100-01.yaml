@@ -1,0 +1,11 @@
+id: 2026-08-19-ocr-100-01
+project: coastal-crawler
+description: >
+  Post-migration 100-paper pipeline test, OCR leg. Claims 100 fresh
+  'relevant' papers (excludes paper_id 2779/2743, already OCR'd during the
+  interactive smoke test) and OCR's them with DOC_LM (chandra-ocr-2). First
+  of three sequential legs (ocr -> extract -> judge) for this test.
+seed: 342
+params:
+  stage: ocr
+  batch_size: 100

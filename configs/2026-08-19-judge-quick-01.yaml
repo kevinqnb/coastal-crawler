@@ -1,0 +1,13 @@
+id: 2026-08-19-judge-quick-01
+project: coastal-crawler
+description: >
+  Quick, unheld judge run against a small slice of the 418 extraction rows
+  already 'pending' from the still-in-progress extract-100-01 leg -- to
+  produce a few judged+attributed examples fast for a website demo, without
+  waiting for the full 60-paper extract job (or the held judge-100-01 job
+  chained after it) to finish. judge-100-01 will still run afterward and
+  pick up whatever this run didn't claim, plus any new rows.
+seed: 342
+params:
+  stage: judge
+  batch_size: 10

@@ -1,0 +1,12 @@
+id: 2026-08-19-extract-100-01
+project: coastal-crawler
+description: >
+  Post-migration 100-paper pipeline test, extract leg. Processes the 60
+  papers that survived the OCR leg (2026-08-19-ocr-100-01; 40/100 failed on
+  an unrelated upstream scholarlm chandra-ocr-2 label-coverage gap,
+  Bibliography/Chemical-Block -- tracked separately, not blocking this
+  leg). Second of three sequential legs (ocr -> extract -> judge).
+seed: 342
+params:
+  stage: extract
+  batch_size: 60
