@@ -170,68 +170,49 @@ Or with a scheduler (example cron — discover daily, filter and extract hourly)
 
 ## Data model
 
-Two databases, two jobs:
+Two stores, used in sequence:
 
-- **Postgres** is the pipeline's operational store. Every worker's `SELECT ... FOR UPDATE SKIP LOCKED` claim and status transition (`discovered → ... → extracted`) happens against `papers`/`extractions` here — a landing zone, not something shaped for reporting.
-- **DuckDB** holds a derived, read-optimized **star schema**, rebuilt from Postgres by `scripts/build_warehouse.py` (transform logic in `coastal_crawler/warehouse.py`). This is what the results site actually queries.
-
-```mermaid
-graph LR
-    PG[("Postgres<br/>papers · extractions")] -->|build_warehouse.py| DW[("DuckDB<br/>star-schema warehouse")]
-    DW --> SITE["Results site"]
 ```
+Postgres  (papers, extractions)
+   |   scripts/build_warehouse.py   (full rebuild, not incremental)
+   v
+DuckDB  (star-schema warehouse)
+   |
+   v
+results site
+```
+
+| Store | Role |
+|---|---|
+| **Postgres** | Operational. Every worker's `SELECT ... FOR UPDATE SKIP LOCKED` claim and status transition (`discovered → ... → extracted`) happens here — a queue, not a reporting schema. |
+| **DuckDB** | Derived, read-optimized star schema, rebuilt from Postgres by `scripts/build_warehouse.py` (logic in `coastal_crawler/warehouse.py`). This is what the results site queries. |
 
 ### The warehouse star schema
 
-One `extractions_fact` row per extracted measurement, radiating out to five dimension tables — everything that would otherwise repeat across rows (a paper's title, a model's prompt version, a location's coordinates) is pulled out into its own dimension and referenced by id instead:
+`extractions_fact` holds one row per extracted measurement. Anything that would repeat across those rows — a paper's title, a model's prompt version, a site's coordinates — is lifted into its own dimension and referenced by id:
 
-```mermaid
-erDiagram
-    extractions_fact }o--|| paper_dim     : "for paper"
-    extractions_fact }o--|| model_dim     : "produced by"
-    extractions_fact }o--|| entity_dim    : "measured at"
-    extractions_fact }o--|| event_dim     : "during event"
-    extractions_fact }o--o| qualifier_dim : "qualified by"
-
-    extractions_fact {
-        int    fact_id PK
-        int    paper_id FK
-        int    extraction_model_id FK
-        int    entity_id FK
-        int    event_id FK
-        int    qualifier_id FK
-        string attribute
-        double quantity_canonical
-        string units_canonical
-    }
-    paper_dim {
-        int    paper_id PK
-        string doi
-        string title
-    }
-    model_dim {
-        int    model_id PK
-        string model_name
-        string prompt_version
-    }
-    entity_dim {
-        int    entity_id PK
-        string name
-        double latitude
-        double longitude
-    }
-    event_dim {
-        int    event_id PK
-        string date_measured
-        string sub_location
-    }
-    qualifier_dim {
-        int    qualifier_id PK
-        string confidence_region
-    }
+```
+                      +--  paper_dim      the source paper
+                      |
+                      +--  model_dim      extraction model + prompt version
+                      |
+   extractions_fact --+--  entity_dim     the measured site / entity
+                      |
+                      +--  event_dim      the measurement occasion
+                      |
+                      +--  qualifier_dim  value shape (range, <=, CI); optional
 ```
 
-Each dimension above shows only its key plus a couple of identifying fields — the full column lists live in `src/coastal_crawler/warehouse.py` (`SCHEMA_DDL`). Every fact row also carries `source_extraction_id`, tracing it back to Postgres's `extractions.id`. Rebuilds are full replacements (`CREATE OR REPLACE TABLE`), not incremental — see `notes/coastal-crawler/builds/2026-08-12-warehouse-init-01.md` for the design rationale (fact grain, dimension resolution, what got cut).
+| Table | Grain | Representative columns |
+|---|---|---|
+| `extractions_fact` | one measurement | `fact_id` PK, `source_extraction_id`, the five dimension FKs, `attribute`, `quantity_raw`/`units_raw`, `quantity_canonical`/`units_canonical`, `page_number`, `confidence` |
+| `paper_dim` | one source paper | `doi`, `title`, `authors`, `publication_date`, `publisher`, `discovered_from` |
+| `model_dim` | one (model, role, prompt) | `model_name`, `role`, `prompt_version`, `seed`, `temperature` |
+| `entity_dim` | one measured site / entity | `name`, `latitude`, `longitude`, `ecosystem_type`, `resolution_method` |
+| `event_dim` | one measurement occasion | `date_measured`, `sub_location`, `additional_details` |
+| `qualifier_dim` | one value shape | `confidence_region`, `confidence_min`/`max`, `range_min`/`max`, `less_than_or_equal`, `greater_than` |
+
+`source_extraction_id` traces each fact row back to Postgres's `extractions.id`. Rebuilds are full replacements (`CREATE OR REPLACE TABLE`), not incremental — see `notes/coastal-crawler/builds/2026-08-12-warehouse-init-01.md` for the design rationale (fact grain, dimension resolution, what got cut). Full column lists live in `src/coastal_crawler/warehouse.py` (`SCHEMA_DDL`).
 
 ---
 
