@@ -1,0 +1,25 @@
+id: 2026-09-01-ocr-to-500-01
+project: coastal-crawler
+description: >
+  Full OCR leg to bring the corpus to ~500 OCR'd papers. 100 papers are
+  already ocr_done (62 from 2026-08-19-ocr-100-01 + 40 recovered by
+  2026-09-01-ocr-recover-01, of which 2 were re-failed on review for
+  implausibly short output). The 2,976-paper 'relevant' backlog has been
+  un-parked. This run claims 400 of them (batch_size 400) to reach ~500
+  total. All 2,976 are Wiley with PDFs already cached in data/wiley_pdfs/
+  (2,973/2,976), so no live Wiley downloads and no wiley_download.py needed.
+  scholarlm pinned at 86f0f85 (naacl); DOC_LM_UNKNOWN_LABEL_POLICY=coerce
+  keeps an unrecognized chandra-ocr-2 data-label from hard-failing a
+  document (structure-based fallback + 'ocr_unknown_labels_coerced' log
+  line). Predicted: ~400 -> ocr_done, small number of ocr_failed
+  (PDF/model errors), 0 requeued (all PDFs cached). Screen every ocr_done
+  paper's chars-per-PDF-page before the next extract run — the empty-output
+  guard in ocr_worker.py does not catch truncated-but-non-empty OCR (see
+  papers 1250/9198).
+seed: 500
+params:
+  stage: ocr
+  batch_size: 400
+  chunk_size: 20
+  env:
+    DOC_LM_UNKNOWN_LABEL_POLICY: coerce
