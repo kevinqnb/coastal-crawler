@@ -441,26 +441,36 @@ def requeue_processing(session: Session) -> int:
     return result.rowcount
 
 
-def reset_extractions(session: Session) -> tuple[int, int]:
-    """Wipe all extraction results and rewind extraction-stage papers to 'ocr_done'.
+def reset_extractions(session: Session) -> tuple[int, int, int, int]:
+    """Wipe all extraction results (and everything keyed to them) and rewind
+    extraction-stage papers to 'ocr_done'.
 
-    Deletes every row in ``extractions`` and resets any paper with
-    status in ('extracted', 'processing', 'failed') back to 'ocr_done',
-    clearing ``extracted_at``/``error``. OCR text files on disk are left in
-    place (their status='ocr_done' rows already point at valid files), and
+    Deletes, in FK-safe order, every row in ``attributions`` and ``votes``
+    (both carry a foreign key to ``extractions.id``), then every row in
+    ``extractions``; and resets any paper with status in
+    ('extracted', 'processing', 'failed') back to 'ocr_done', clearing
+    ``extracted_at``/``error``. OCR text files on disk are left in place
+    (their status='ocr_done' rows already point at valid files), and
     filtering results ('relevant'/'irrelevant' papers not yet OCR'd) are
     left untouched — restoring the DB to its post-OCR, pre-extraction state.
 
+    ``votes`` are site-visitor judgements on specific extraction rows; a full
+    extraction reset mints new extraction ids, so those votes can't carry
+    forward and are deleted here. Callers that expose this to a human should
+    warn about that loss (see ``cli.reset_extractions``).
+
     Returns:
-        (extractions_deleted, papers_reset) counts.
+        (attributions_deleted, votes_deleted, extractions_deleted, papers_reset).
     """
-    deleted = session.execute(delete(Extraction)).rowcount
-    result = session.execute(
+    attributions_deleted = session.execute(delete(Attribution)).rowcount
+    votes_deleted = session.execute(delete(Vote)).rowcount
+    extractions_deleted = session.execute(delete(Extraction)).rowcount
+    papers_reset = session.execute(
         update(Paper)
         .where(Paper.status.in_(["extracted", "processing", "failed"]))
         .values(status="ocr_done", extracted_at=None, error=None)
-    )
-    return deleted, result.rowcount
+    ).rowcount
+    return attributions_deleted, votes_deleted, extractions_deleted, papers_reset
 
 
 def reset_processing_to_relevant(paper_id: int, session: Session) -> bool:

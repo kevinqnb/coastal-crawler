@@ -639,8 +639,27 @@ class TestResetExtractions:
         paper_id = db_session.scalars(select(Paper.id)).one()
         store.insert_extraction(paper_id, make_extraction_result(), db_session)
         store.insert_extraction(paper_id, make_extraction_result(), db_session)
-        deleted, _ = store.reset_extractions(db_session)
+        _, _, deleted, _ = store.reset_extractions(db_session)
         assert deleted == 2
+        assert db_session.scalar(select(func.count(Extraction.id))) == 0
+
+    def test_deletes_attributions_and_votes_keyed_to_extractions(
+        self, db_session: Session
+    ) -> None:
+        store.upsert_papers([make_paper(status="extracted")], db_session)
+        paper_id = db_session.scalars(select(Paper.id)).one()
+        extraction = store.insert_extraction(
+            paper_id, make_extraction_result(), db_session
+        )
+        store.insert_attribution(
+            extraction.id, "probe", [0.1], [0], ["x"], "snippet", db_session
+        )
+        store.record_vote(db_session, extraction.id, True, "voter-1")
+
+        attributions, votes, deleted, _ = store.reset_extractions(db_session)
+        assert (attributions, votes, deleted) == (1, 1, 1)
+        assert db_session.scalar(select(func.count(Attribution.id))) == 0
+        assert db_session.scalar(select(func.count(Vote.id))) == 0
         assert db_session.scalar(select(func.count(Extraction.id))) == 0
 
     def test_resets_extracted_processing_failed_to_ocr_done(self, db_session: Session) -> None:
@@ -654,7 +673,7 @@ class TestResetExtractions:
             ],
             db_session,
         )
-        _, reset = store.reset_extractions(db_session)
+        *_, reset = store.reset_extractions(db_session)
         assert reset == 3
         statuses = sorted(p.status for p in db_session.scalars(select(Paper)).all())
         assert statuses == ["ocr_done", "ocr_done", "ocr_done", "ocr_done", "relevant"]

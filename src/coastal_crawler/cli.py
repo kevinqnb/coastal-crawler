@@ -443,28 +443,38 @@ def requeue_irrelevant() -> None:
 def reset_extractions(
     yes: bool = typer.Option(False, "--yes", help="Skip the confirmation prompt."),
 ) -> None:
-    """Delete all extraction results and rewind extraction-stage papers to 'ocr_done'.
+    """Delete all extraction results (plus attributions and votes) and rewind
+    extraction-stage papers to 'ocr_done'.
 
     Restores the DB to its post-OCR, pre-extraction state: every row in
-    'extractions' is deleted, and any paper with status 'extracted',
-    'processing', or 'failed' is reset to 'ocr_done' so extraction can be
-    re-run from scratch without re-OCRing. OCR text files on disk are left
-    in place. Filtering/OCR results ('relevant'/'irrelevant'/'ocr_done'
-    papers not yet re-touched by extraction) are left as-is.
+    'extractions' — and every 'attributions'/'votes' row that references it —
+    is deleted, and any paper with status 'extracted', 'processing', or
+    'failed' is reset to 'ocr_done' so extraction can be re-run from scratch
+    without re-OCRing. OCR text files on disk are left in place.
+    Filtering/OCR results ('relevant'/'irrelevant'/'ocr_done' papers not yet
+    re-touched by extraction) are left as-is.
+
+    Site-visitor 'votes' are keyed to specific extraction rows and cannot
+    survive a full re-extraction (new rows get new ids), so they are deleted
+    too.
     """
     from coastal_crawler.db import store
     from coastal_crawler.db.engine import get_session
 
     if not yes:
         typer.confirm(
-            "This will permanently delete ALL extraction results and reset "
+            "This will permanently delete ALL extraction results, all "
+            "attribution rows, and all site-visitor votes, and reset "
             "extracted/processing/failed papers to 'ocr_done'. Continue?",
             abort=True,
         )
 
     with get_session() as session:
-        deleted, reset = store.reset_extractions(session)
-    typer.echo(f"Deleted {deleted} extraction row(s); reset {reset} paper(s) back to 'ocr_done'.")
+        attributions, votes, deleted, reset = store.reset_extractions(session)
+    typer.echo(
+        f"Deleted {deleted} extraction row(s), {attributions} attribution row(s), "
+        f"{votes} vote(s); reset {reset} paper(s) back to 'ocr_done'."
+    )
 
 
 if __name__ == "__main__":
