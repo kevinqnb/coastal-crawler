@@ -169,6 +169,16 @@ class Settings(BaseSettings):
         default=32,
         description="Maximum concurrent OCR page-image API calls the client sends at once (client-side concurrency, not a vLLM server flag).",
     )
+    doc_lm_unknown_label_policy: str = Field(
+        default="raise",
+        description=(
+            "scholarlm DocumentLM's handling of a chandra-ocr-2 data-label "
+            "outside its audited set: 'raise' fails the document (default); "
+            "'coerce' classifies the region by HTML shape (table/figure/text) "
+            "instead and records it in DocumentLM.coerced_labels, logged by "
+            "DirectOCRAdapter.ocr_batch as 'ocr_unknown_labels_coerced'."
+        ),
+    )
 
     # Serving parameters — used only by scripts/serve_model.sh DOC_LM.
     doc_lm_port: int = Field(

@@ -34,6 +34,7 @@ _FAKE_SETTINGS = SimpleNamespace(
     doc_lm_base_url="http://localhost:8083/v1",
     doc_lm_api_key="EMPTY",
     doc_lm_max_concurrent=32,
+    doc_lm_unknown_label_policy="raise",
     meas_lm_model="test-extraction-model",
     meas_lm_base_url="http://localhost:8084/v1",
     meas_lm_api_key="EMPTY",
@@ -119,7 +120,15 @@ class TestBuildOCRAdapterConstruction:
             api_base="http://localhost:8083/v1",
             api_key="EMPTY",
             max_concurrent=32,
+            unknown_label_policy="raise",
         )
+
+    def test_passes_unknown_label_policy_from_settings(self, mocker: Any) -> None:
+        doc_lm_cls = mocker.patch("coastal_crawler.adapter.DocumentLM")
+
+        build_ocr_adapter(_fake_settings(doc_lm_unknown_label_policy="coerce"))
+
+        assert doc_lm_cls.call_args.kwargs["unknown_label_policy"] == "coerce"
 
     def test_returns_direct_ocr_adapter(self, mocker: Any) -> None:
         doc_lm_sentinel = mocker.sentinel.doc_lm
@@ -135,11 +144,26 @@ class TestDirectOCRAdapterOcrBatch:
     def test_calls_doc_lm_fit_with_str_paths(self) -> None:
         adapter = DirectOCRAdapter(doc_lm=MagicMock())
         adapter.doc_lm.fit.return_value = ["ocr text 0", "ocr text 1"]
+        adapter.doc_lm.coerced_labels = {}
 
         result = adapter.ocr_batch([Path("a.pdf"), Path("b.pdf")])
 
         adapter.doc_lm.fit.assert_called_once_with(["a.pdf", "b.pdf"])
         assert result == ["ocr text 0", "ocr text 1"]
+
+    def test_logs_coerced_labels_per_document(self, mocker: Any) -> None:
+        warn = mocker.patch("coastal_crawler.adapter.log.warning")
+        adapter = DirectOCRAdapter(doc_lm=MagicMock())
+        adapter.doc_lm.fit.return_value = ["ocr text 0", "ocr text 1"]
+        adapter.doc_lm.coerced_labels = {1: {"Chemical-Block": 2}}
+
+        adapter.ocr_batch([Path("a.pdf"), Path("b.pdf")])
+
+        warn.assert_called_once_with(
+            "ocr_unknown_labels_coerced",
+            pdf_path="b.pdf",
+            labels={"Chemical-Block": 2},
+        )
 
 
 # ---------------------------------------------------------------------------

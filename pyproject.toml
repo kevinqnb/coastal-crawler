@@ -40,11 +40,14 @@ dependencies = [
 
 [tool.uv.sources]
 # Pinned to a full commit SHA (not a floating branch ref) for reproducibility;
-# `advances` is recorded here only as provenance for where that commit lives.
+# the branch name in the trailing comment is recorded only as provenance for
+# where that commit lives — it is not itself resolved at install time.
 # See notes/coastal-crawler/builds/2026-08-18-scholarlm-migration-01.md and
 # notes/coastal-crawler/builds/2026-08-20-extraction-hardening-01.md (pin
-# bump to pick up drop_references/context_length_exceeded_docs).
-scholarlm = { git = "https://github.com/kevinqnb/scholarlm.git", rev = "f928caef5accc40d96f2fa172cdec98d88cb1dec" }  # branch: advances
+# bump to pick up drop_references/context_length_exceeded_docs), and
+# SCHOLARLM_UNKNOWN_LABEL_TASK.md (pin bump to pick up the chandra-ocr-2
+# unknown-data-label fallback, landed on `naacl` rather than `advances`).
+scholarlm = { git = "https://github.com/kevinqnb/scholarlm.git", rev = "86f0f857d94912adc6ab9875e413522b3091153d" }  # branch: naacl
 
 [project.optional-dependencies]
 dev = [

@@ -93,6 +93,16 @@ class DirectOCRAdapter:
         # mypy — cast to the return type its docstring/implementation
         # actually guarantee (one str per input path, same order/length).
         result: list[str] = self.doc_lm.fit([str(p) for p in pdf_paths])
+        # unknown_label_policy="coerce" recovers a document instead of failing
+        # it, but a recovered document is not a clean one — log every
+        # coercion so it stays visible in this run's logs (see
+        # Settings.doc_lm_unknown_label_policy).
+        for doc_idx, labels in self.doc_lm.coerced_labels.items():
+            log.warning(
+                "ocr_unknown_labels_coerced",
+                pdf_path=str(pdf_paths[doc_idx]),
+                labels=labels,
+            )
         return result
 
 
@@ -116,6 +126,7 @@ def build_ocr_adapter(settings: "Settings") -> DirectOCRAdapter:
         api_base=settings.doc_lm_base_url,
         api_key=settings.doc_lm_api_key,
         max_concurrent=settings.doc_lm_max_concurrent,
+        unknown_label_policy=settings.doc_lm_unknown_label_policy,
     )
     return DirectOCRAdapter(doc_lm=doc_lm)
 
