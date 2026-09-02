@@ -13,6 +13,11 @@ log = structlog.get_logger(__name__)
 _MAX_RETRIES = 5
 _MIN_RETRY_WAIT = 60.0  # seconds — rate limit windows are typically 1 minute
 
+# Module-level indirection so the test suite can replace just this backoff
+# sleep (see tests/conftest.py::_no_retry_backoff) without touching every
+# other ``time.sleep`` call in the codebase.
+_sleep = time.sleep
+
 
 def get_with_retry(
     client: httpx.Client,
@@ -37,7 +42,7 @@ def get_with_retry(
         retry_after = resp.headers.get("Retry-After")
         wait = float(retry_after) if retry_after else max(_MIN_RETRY_WAIT, base_delay * (2 ** attempt))
         log.warning("rate_limited", url=url, attempt=attempt + 1, wait_seconds=wait)
-        time.sleep(wait)
+        _sleep(wait)
 
     resp.raise_for_status()
     return resp  # unreachable; raise_for_status above will fire

@@ -230,6 +230,40 @@ Tests require a real PostgreSQL test database (no mocking of the DB layer):
 TEST_DATABASE_URL=postgresql://user:pass@localhost/crawler_test uv run --with pytest --with pytest-mock pytest
 ```
 
+The full suite is ~45s wall (~30s of tests + a fixed ~33s import floor from
+`scholarlm`/`torch` at collection time — every `pytest` invocation pays that
+floor, so running many small subsets back-to-back is slower than one full run).
+There is no fast/slow split and no marker tier — 45s is short enough that the
+main set *is* the full suite.
+
+For a change scoped to one area, run just its test file(s) — no need to run
+everything to confirm working order:
+
+| Changed source | Run |
+|---|---|
+| `sources/`, `discovery.py` | `pytest tests/test_discovery.py` |
+| `relevance_filter.py` | `pytest tests/test_relevance_filter.py` |
+| `ocr_worker.py`, `pdf.py` | `pytest tests/test_ocr_worker.py` |
+| `worker.py` | `pytest tests/test_worker.py` |
+| `judge_worker.py` | `pytest tests/test_judge_worker.py` |
+| `adapter.py`, `measurement_schema.py` | `pytest tests/test_adapter.py` |
+| `db/store.py`, `db/models.py` | `pytest tests/test_store.py` |
+| `warehouse.py`, `scripts/build_warehouse.py` | `pytest tests/test_warehouse.py tests/test_build_warehouse.py` |
+| `site/` | `pytest tests/test_app.py tests/test_snippets.py` |
+| `tests/conftest.py` (test-env isolation) | `pytest tests/test_config.py`, then the full suite |
+| `config.py` | full suite (no single file covers `Settings` behaviour) |
+
+Run the full suite before committing regardless — it's 45s.
+
+**Test isolation:** `tests/conftest.py`'s `_isolate_settings` autouse fixture
+builds every `Settings()` with `env_file=None` and the discovery/model
+credential env vars stripped, so tests never read the real `.env` and never
+reach a real API. `_no_retry_backoff` turns any `sources.http` rate-limit
+backoff during a test into an immediate failure. `tests/test_config.py` guards
+both — if it fails after a dependency bump, fix the isolation before trusting
+any other result (a stale test hitting a live API with a real key once made
+the suite take 15 minutes).
+
 Type-checking:
 
 ```bash

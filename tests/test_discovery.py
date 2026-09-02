@@ -3,13 +3,16 @@
 All source tests use ``clean_db`` (not ``db_session``) because sources commit
 per-page internally — rolling back after a commit would leave stale data.
 
-HTTP calls are mocked via pytest-mock's ``mocker`` fixture so tests run
-without network access.
+HTTP calls are mocked via ``_mock_http`` (patches ``httpx.Client`` in the
+source module). The ``_isolate_settings`` autouse fixture (conftest.py) keeps
+every ``Settings`` here free of the real ``.env``, so a source only reaches an
+API when a test explicitly configures a key AND mocks the client.
 """
 
 from __future__ import annotations
 
 import uuid
+from contextlib import contextmanager
 from datetime import date
 from typing import Any
 from unittest.mock import MagicMock
@@ -24,7 +27,7 @@ from coastal_crawler.db import store
 from coastal_crawler.db.models import Paper
 from coastal_crawler.sources.openalex import OpenAlexSource, _normalize_doi, _normalize_openalex_id
 from coastal_crawler.sources.semantic_scholar import SemanticScholarSource
-from coastal_crawler.sources.wiley import WileySource
+from coastal_crawler.sources.wiley import WileySource, _PAGE_SIZE
 
 
 # ---------------------------------------------------------------------------
@@ -33,13 +36,18 @@ from coastal_crawler.sources.wiley import WileySource
 
 @pytest.fixture
 def test_settings(db_url: str) -> Settings:
+    """A fully-configured Settings for the source tests.
+
+    Every credential is set explicitly — the autouse isolation fixture blocks
+    the real .env, so tests that expect a source to make a (mocked) call must
+    supply its key here.
+    """
     return Settings(
         database_url=db_url,
-        openalex_email="test@example.com",
         openalex_topic_ids=["T12345", "T67890"],
-        semantic_scholar_queries=["coastal ecosystem"],
+        semantic_scholar_api_key="test-s2-key",
+        semantic_scholar_query="coastal ecosystem",
         wiley_api_key="test-wiley-key",
-        wiley_subjects=["Earth Sciences"],
         wiley_issns=["0028-0836"],
         enabled_sources=["openalex", "semantic_scholar", "wiley"],
     )
@@ -49,11 +57,12 @@ def _uid() -> str:
     return str(uuid.uuid4())[:8]
 
 
-def _mock_http(mocker, module_path: str, pages: list[dict[str, Any]]) -> MagicMock:
+def _mock_http(mocker: Any, module_path: str, pages: list[dict[str, Any]]) -> MagicMock:
     """Patch ``httpx.Client`` in *module_path* to return *pages* in sequence."""
     responses = []
     for page_body in pages:
         r = MagicMock()
+        r.status_code = 200
         r.json.return_value = page_body
         r.raise_for_status = MagicMock()
         responses.append(r)
@@ -170,19 +179,20 @@ class TestOpenAlexSource:
             paper = session.scalars(select(Paper)).one()
         assert paper.openalex_id == "W9999"
 
-    def test_null_oa_url(
+    def test_paper_without_oa_url_is_skipped(
         self, clean_db: Engine, test_settings: Settings, mocker: Any
     ) -> None:
+        """OpenAlex results with no open-access PDF URL are dropped entirely
+        (the source filters on ``r["oa_pdf_url"]`` before insert)."""
         _mock_http(
             mocker,
             "coastal_crawler.sources.openalex",
             [{"meta": {"next_cursor": None}, "results": [_oa_result(open_access={})]}],
         )
         with Session(clean_db) as session:
-            OpenAlexSource(test_settings).fetch_since(None, session)
-        with Session(clean_db) as session:
-            paper = session.scalars(select(Paper)).one()
-        assert paper.oa_pdf_url is None
+            n = OpenAlexSource(test_settings).fetch_since(None, session)
+        assert n == 0
+        assert _count(clean_db) == 0
 
     def test_multi_page_follows_cursor(
         self, clean_db: Engine, test_settings: Settings, mocker: Any
@@ -357,38 +367,30 @@ class TestSemanticScholarSource:
         _, kwargs = mock_get.call_args_list[1]
         assert kwargs["params"]["token"] == "tok123"
 
-    def test_no_queries_returns_zero(
+    def test_no_api_key_returns_zero_without_calling(
         self, clean_db: Engine, db_url: str, mocker: Any
     ) -> None:
-        settings = Settings(
-            database_url=db_url,
-            openalex_email="x@example.com",
-            semantic_scholar_queries=[],
-        )
+        """The bulk search endpoint requires a key; with none configured the
+        source returns 0 and makes no request at all."""
+        settings = Settings(database_url=db_url, semantic_scholar_query="coastal")
+        mock_get = _mock_http(mocker, "coastal_crawler.sources.semantic_scholar", [])
         with Session(clean_db) as session:
             n = SemanticScholarSource(settings).fetch_since(None, session)
         assert n == 0
+        mock_get.assert_not_called()
 
-    def test_multiple_queries_each_fetched(
-        self, clean_db: Engine, db_url: str, mocker: Any
+    def test_configured_query_sent_in_params(
+        self, clean_db: Engine, test_settings: Settings, mocker: Any
     ) -> None:
-        settings = Settings(
-            database_url=db_url,
-            openalex_email="x@example.com",
-            semantic_scholar_queries=["query one", "query two"],
-        )
         mock_get = _mock_http(
             mocker,
             "coastal_crawler.sources.semantic_scholar",
-            [
-                {"data": [_s2_paper()], "token": None},
-                {"data": [_s2_paper()], "token": None},
-            ],
+            [{"data": [], "token": None}],
         )
         with Session(clean_db) as session:
-            n = SemanticScholarSource(settings).fetch_since(None, session)
-        assert n == 2
-        assert mock_get.call_count == 2
+            SemanticScholarSource(test_settings).fetch_since(None, session)
+        _, kwargs = mock_get.call_args
+        assert kwargs["params"]["query"] == "coastal ecosystem"
 
     def test_watermark_updated(
         self, clean_db: Engine, test_settings: Settings, mocker: Any
@@ -407,9 +409,8 @@ class TestSemanticScholarSource:
     ) -> None:
         settings = Settings(
             database_url=db_url,
-            openalex_email="x@example.com",
             semantic_scholar_api_key="my-secret-key",
-            semantic_scholar_queries=["test"],
+            semantic_scholar_query="test",
         )
         mock_get = _mock_http(
             mocker,
@@ -421,44 +422,44 @@ class TestSemanticScholarSource:
         _, kwargs = mock_get.call_args
         assert kwargs["headers"].get("x-api-key") == "my-secret-key"
 
-    def test_no_api_key_omits_header(
-        self, clean_db: Engine, db_url: str, mocker: Any
-    ) -> None:
-        settings = Settings(
-            database_url=db_url,
-            openalex_email="x@example.com",
-            semantic_scholar_queries=["test"],
-        )
-        mock_get = _mock_http(
-            mocker,
-            "coastal_crawler.sources.semantic_scholar",
-            [{"data": [], "token": None}],
-        )
-        with Session(clean_db) as session:
-            SemanticScholarSource(settings).fetch_since(None, session)
-        _, kwargs = mock_get.call_args
-        assert "x-api-key" not in kwargs["headers"]
-
 
 # ---------------------------------------------------------------------------
-# Wiley source
+# Wiley source (discovery via the CrossRef REST API)
 # ---------------------------------------------------------------------------
 
-def _wiley_article(**kwargs: Any) -> dict[str, Any]:
+def _crossref_work(**kwargs: Any) -> dict[str, Any]:
+    """A CrossRef ``message.items[]`` entry as the Wiley source consumes it."""
     uid = _uid()
-    return {
-        "doi": f"10.3/{uid}",
-        "title": f"Wiley Paper {uid}",
-        "publishedDate": "2024-07-22",
-        **kwargs,
+    work = {
+        "DOI": f"10.1002/{uid}",
+        "title": [f"Wiley Paper {uid}"],
+        "abstract": f"<jats:p>Abstract for {uid}</jats:p>",
+        "published": {"date-parts": [[2024, 7, 22]]},
+        "link": [],
+        "author": [{"given": "A.", "family": "Researcher"}],
     }
+    work.update(kwargs)
+    return work
+
+
+def _crossref_page(items: list[dict[str, Any]], next_cursor: str | None = None) -> dict[str, Any]:
+    message: dict[str, Any] = {"items": items}
+    if next_cursor is not None:
+        message["next-cursor"] = next_cursor
+    return {"message": message}
 
 
 class TestWileySource:
-    def test_no_api_key_raises(self, db_url: str) -> None:
-        settings = Settings(database_url=db_url, openalex_email="x@example.com")
-        with pytest.raises(ValueError, match="WILEY_API_KEY"):
+    def test_no_issns_raises(self, db_url: str) -> None:
+        settings = Settings(database_url=db_url)
+        with pytest.raises(ValueError, match="WILEY_ISSNS"):
             WileySource(settings)
+
+    def test_missing_tdm_key_only_warns(self, db_url: str) -> None:
+        """A missing WILEY_API_KEY is a download-time problem, not a discovery
+        one — the source still constructs."""
+        settings = Settings(database_url=db_url, wiley_issns=["0028-0836"])
+        WileySource(settings)  # must not raise
 
     def test_single_page_inserts_papers(
         self, clean_db: Engine, test_settings: Settings, mocker: Any
@@ -466,7 +467,7 @@ class TestWileySource:
         _mock_http(
             mocker,
             "coastal_crawler.sources.wiley",
-            [{"items": [_wiley_article(), _wiley_article()]}],
+            [_crossref_page([_crossref_work(), _crossref_work()])],
         )
         with Session(clean_db) as session:
             n = WileySource(test_settings).fetch_since(None, session)
@@ -478,72 +479,94 @@ class TestWileySource:
         _mock_http(
             mocker,
             "coastal_crawler.sources.wiley",
-            [{"items": [_wiley_article(doi="10.3/wiley123")]}],
+            [_crossref_page([_crossref_work(DOI="10.1002/wiley123")])],
         )
         with Session(clean_db) as session:
             WileySource(test_settings).fetch_since(None, session)
         with Session(clean_db) as session:
             paper = session.scalars(select(Paper)).one()
-        assert paper.doi == "10.3/wiley123"
+        assert paper.doi == "10.1002/wiley123"
 
-    def test_pdf_url_derived_from_doi(
+    def test_tdm_url_derived_from_doi_when_no_text_mining_link(
         self, clean_db: Engine, test_settings: Settings, mocker: Any
     ) -> None:
         _mock_http(
             mocker,
             "coastal_crawler.sources.wiley",
-            [{"items": [_wiley_article(doi="10.3/mypaper")]}],
+            [_crossref_page([_crossref_work(DOI="10.1002/mypaper", link=[])])],
         )
         with Session(clean_db) as session:
             WileySource(test_settings).fetch_since(None, session)
         with Session(clean_db) as session:
             paper = session.scalars(select(Paper)).one()
         assert paper.oa_pdf_url is not None
-        assert "10.3/mypaper" in paper.oa_pdf_url
+        assert "api.wiley.com/onlinelibrary/tdm/" in paper.oa_pdf_url
+        assert "10.1002/mypaper" in paper.oa_pdf_url
 
-    def test_multi_page_increments_offset(
+    def test_tdm_link_used_when_already_on_tdm_host(
         self, clean_db: Engine, test_settings: Settings, mocker: Any
     ) -> None:
-        # First page full (50 items), second page partial → stops
-        page1 = [_wiley_article() for _ in range(50)]
-        page2 = [_wiley_article() for _ in range(3)]
+        tdm_url = "https://api.wiley.com/onlinelibrary/tdm/v1/articles/10.1002/onhost"
+        _mock_http(
+            mocker,
+            "coastal_crawler.sources.wiley",
+            [_crossref_page([
+                _crossref_work(
+                    DOI="10.1002/onhost",
+                    link=[{"intended-application": "text-mining", "URL": tdm_url}],
+                )
+            ])],
+        )
+        with Session(clean_db) as session:
+            WileySource(test_settings).fetch_since(None, session)
+        with Session(clean_db) as session:
+            paper = session.scalars(select(Paper)).one()
+        assert paper.oa_pdf_url == tdm_url
+
+    def test_multi_page_follows_cursor(
+        self, clean_db: Engine, test_settings: Settings, mocker: Any
+    ) -> None:
+        # First page full (_PAGE_SIZE items) + a next-cursor → keep going;
+        # second page partial → stop.
+        page1 = [_crossref_work() for _ in range(_PAGE_SIZE)]
+        page2 = [_crossref_work() for _ in range(3)]
         mock_get = _mock_http(
             mocker,
             "coastal_crawler.sources.wiley",
-            [{"items": page1}, {"items": page2}],
+            [_crossref_page(page1, next_cursor="CUR2"), _crossref_page(page2)],
         )
         with Session(clean_db) as session:
             n = WileySource(test_settings).fetch_since(None, session)
-        assert n == 53
+        assert n == _PAGE_SIZE + 3
         assert mock_get.call_count == 2
         _, kwargs = mock_get.call_args_list[1]
-        assert kwargs["params"]["offset"] == 50
+        assert kwargs["params"]["cursor"] == "CUR2"
 
-    def test_watermark_applied_as_start_date(
+    def test_watermark_applied_as_pub_date_filter(
         self, clean_db: Engine, test_settings: Settings, mocker: Any
     ) -> None:
         mock_get = _mock_http(
             mocker,
             "coastal_crawler.sources.wiley",
-            [{"items": []}],
+            [_crossref_page([])],
         )
         with Session(clean_db) as session:
             WileySource(test_settings).fetch_since(date(2024, 1, 1), session)
         _, kwargs = mock_get.call_args
-        assert kwargs["params"]["startDate"] == "2024-01-01"
+        assert "from-pub-date:2024-01-01" in kwargs["params"]["filter"]
 
-    def test_no_watermark_omits_start_date(
+    def test_no_watermark_omits_pub_date_filter(
         self, clean_db: Engine, test_settings: Settings, mocker: Any
     ) -> None:
         mock_get = _mock_http(
             mocker,
             "coastal_crawler.sources.wiley",
-            [{"items": []}],
+            [_crossref_page([])],
         )
         with Session(clean_db) as session:
             WileySource(test_settings).fetch_since(None, session)
         _, kwargs = mock_get.call_args
-        assert "startDate" not in kwargs["params"]
+        assert "from-pub-date" not in kwargs["params"]["filter"]
 
     def test_watermark_updated(
         self, clean_db: Engine, test_settings: Settings, mocker: Any
@@ -551,142 +574,106 @@ class TestWileySource:
         _mock_http(
             mocker,
             "coastal_crawler.sources.wiley",
-            [{"items": [_wiley_article(publishedDate="2024-08-30")]}],
+            [_crossref_page([_crossref_work(published={"date-parts": [[2024, 8, 30]]})])],
         )
         with Session(clean_db) as session:
             WileySource(test_settings).fetch_since(None, session)
         assert _watermark(clean_db, "wiley") == date(2024, 8, 30)
 
-    def test_subject_filter_sent(
+    def test_issn_filter_sent(
         self, clean_db: Engine, test_settings: Settings, mocker: Any
     ) -> None:
         mock_get = _mock_http(
             mocker,
             "coastal_crawler.sources.wiley",
-            [{"items": []}],
+            [_crossref_page([])],
         )
         with Session(clean_db) as session:
             WileySource(test_settings).fetch_since(None, session)
         _, kwargs = mock_get.call_args
-        assert "Earth Sciences" in kwargs["params"]["subjectArea"]
+        assert "issn:0028-0836" in kwargs["params"]["filter"]
 
 
 # ---------------------------------------------------------------------------
 # discover() orchestrator
 # ---------------------------------------------------------------------------
 
+@contextmanager
+def _fake_session() -> Any:
+    yield MagicMock()
+
+
 class TestDiscover:
     def test_calls_enabled_sources(self, mocker: Any, db_url: str) -> None:
         from coastal_crawler import discovery
 
-        settings = Settings(
-            database_url=db_url,
-            openalex_email="x@example.com",
-            enabled_sources=["openalex"],
-        )
-        mocker.patch("coastal_crawler.discovery.get_settings", return_value=settings)
+        settings = Settings(database_url=db_url, enabled_sources=["openalex"])
+        mocker.patch("coastal_crawler.config.get_settings", return_value=settings)
 
         mock_source = MagicMock()
         mock_source.fetch_since.return_value = 5
-        mock_cls = MagicMock(return_value=mock_source)
-        mocker.patch.dict(
-            "coastal_crawler.discovery.discover.__globals__",  # monkeypatch registry
+        mocker.patch(
+            "coastal_crawler.sources.openalex.OpenAlexSource",
+            return_value=mock_source,
         )
+        mocker.patch("coastal_crawler.discovery.get_session", _fake_session)
+        mocker.patch("coastal_crawler.discovery.store.get_watermark", return_value=None)
 
-        # Patch the class inside the function's local namespace via the module
-        mocker.patch("coastal_crawler.sources.openalex.OpenAlexSource", mock_cls)
-        # Rebuild the discover call with patched imports
-        mocker.patch("coastal_crawler.discovery.get_session")
+        total = discovery.discover()
 
-        # Simpler: just test that unknown source is skipped
-        settings_unknown = Settings(
-            database_url=db_url,
-            openalex_email="x@example.com",
-            enabled_sources=["nonexistent_source"],
-        )
-        mocker.patch("coastal_crawler.discovery.get_settings", return_value=settings_unknown)
-
-        # Should not raise
-        # discover() will open a get_session context, so we need a real DB
-        # Skipping the full orchestrator integration test here; covered by source tests above.
+        assert total == 5
+        mock_source.fetch_since.assert_called_once()
 
     def test_unknown_source_logs_warning_and_continues(
         self, mocker: Any, db_url: str
     ) -> None:
         from coastal_crawler import discovery
 
-        settings = Settings(
-            database_url=db_url,
-            openalex_email="x@example.com",
-            enabled_sources=["bogus_source"],
-        )
-        mocker.patch("coastal_crawler.discovery.get_settings", return_value=settings)
+        settings = Settings(database_url=db_url, enabled_sources=["bogus_source"])
+        mocker.patch("coastal_crawler.config.get_settings", return_value=settings)
         mock_log = mocker.patch("coastal_crawler.discovery.log")
-
-        # get_session opens a real DB connection; mock it out
-        from contextlib import contextmanager
-
-        @contextmanager
-        def _fake_session():  # type: ignore[misc]
-            yield MagicMock()
-
         mocker.patch("coastal_crawler.discovery.get_session", _fake_session)
 
         result = discovery.discover()
+
         assert result == 0
         mock_log.warning.assert_called_once_with("unknown_source", source="bogus_source")
 
-    def test_wiley_without_key_logs_warning(
+    def test_source_init_failure_logs_warning_and_continues(
         self, mocker: Any, db_url: str
     ) -> None:
+        """Wiley with no ISSNs raises ValueError on construction; discover()
+        logs it and moves on rather than crashing the whole run."""
         from coastal_crawler import discovery
 
-        settings = Settings(
-            database_url=db_url,
-            openalex_email="x@example.com",
-            enabled_sources=["wiley"],
-            # wiley_api_key intentionally omitted
-        )
-        mocker.patch("coastal_crawler.discovery.get_settings", return_value=settings)
+        settings = Settings(database_url=db_url, enabled_sources=["wiley"])
+        mocker.patch("coastal_crawler.config.get_settings", return_value=settings)
         mock_log = mocker.patch("coastal_crawler.discovery.log")
-
-        from contextlib import contextmanager
-
-        @contextmanager
-        def _fake_session():  # type: ignore[misc]
-            yield MagicMock()
-
         mocker.patch("coastal_crawler.discovery.get_session", _fake_session)
 
         result = discovery.discover()
+
         assert result == 0
         mock_log.warning.assert_called_once()
-        call_kwargs = mock_log.warning.call_args[1]
-        assert call_kwargs["source"] == "wiley"
+        assert mock_log.warning.call_args[1]["source"] == "wiley"
 
     def test_since_overrides_watermark(
         self, mocker: Any, db_url: str, clean_db: Engine
     ) -> None:
-        """When ``since`` is passed, all sources use it instead of stored watermark."""
+        """When ``since`` is passed, all sources use it instead of the stored
+        watermark."""
         from coastal_crawler import discovery
 
-        settings = Settings(
-            database_url=db_url,
-            openalex_email="x@example.com",
-            openalex_concept_ids=["C1"],
-            enabled_sources=["openalex"],
-        )
-        mocker.patch("coastal_crawler.discovery.get_settings", return_value=settings)
+        settings = Settings(database_url=db_url, enabled_sources=["openalex"])
+        mocker.patch("coastal_crawler.config.get_settings", return_value=settings)
         mock_get = _mock_http(
             mocker,
             "coastal_crawler.sources.openalex",
             [{"meta": {"next_cursor": None}, "results": []}],
         )
 
-        from contextlib import contextmanager
-
         @contextmanager
-        def _real_session():  # type: ignore[misc]
+        def _real_session() -> Any:
             with Session(clean_db) as s:
                 yield s
 
