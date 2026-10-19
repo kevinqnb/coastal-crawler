@@ -16,10 +16,12 @@ import pytest
 from coastal_crawler.adapter import (
     DirectMeasurementAdapter,
     DirectOCRAdapter,
+    DirectTableCleanAdapter,
     _count_prompt_tokens,
     _truncate_context_to_budget,
     build_measurement_adapter,
     build_ocr_adapter,
+    build_table_clean_adapter,
 )
 from coastal_crawler.measurement_schema import (
     ATTRIBUTE_INFO_DICT,
@@ -35,6 +37,14 @@ _FAKE_SETTINGS = SimpleNamespace(
     doc_lm_api_key="EMPTY",
     doc_lm_max_concurrent=32,
     doc_lm_unknown_label_policy="raise",
+    table_clean_model="test-table-clean-model",
+    table_clean_base_url="http://localhost:8085/v1",
+    table_clean_api_key="EMPTY",
+    table_clean_temperature=0.0,
+    table_clean_top_p=0.95,
+    table_clean_top_k=64,
+    table_clean_repetition_penalty=1.0,
+    table_clean_enable_thinking=False,
     meas_lm_model="test-extraction-model",
     meas_lm_base_url="http://localhost:8084/v1",
     meas_lm_api_key="EMPTY",
@@ -164,6 +174,82 @@ class TestDirectOCRAdapterOcrBatch:
             pdf_path="b.pdf",
             labels={"Chemical-Block": 2},
         )
+
+
+# ---------------------------------------------------------------------------
+# build_table_clean_adapter
+# ---------------------------------------------------------------------------
+
+class TestBuildTableCleanAdapterGuards:
+    def test_raises_on_missing_table_clean_model(self) -> None:
+        settings = _fake_settings(table_clean_model=None)
+        with pytest.raises(RuntimeError, match="TABLE_CLEAN_MODEL"):
+            build_table_clean_adapter(settings)
+
+
+class TestBuildTableCleanAdapterConstruction:
+    def test_constructs_meas_lm_with_settings(self, mocker: Any) -> None:
+        meas_lm_cls = mocker.patch("coastal_crawler.adapter.MeasurementLM")
+
+        build_table_clean_adapter(_fake_settings())
+
+        kwargs = meas_lm_cls.call_args.kwargs
+        assert kwargs["model_name"] == "test-table-clean-model"
+        assert kwargs["api_base"] == "http://localhost:8085/v1"
+        assert kwargs["api_key"] == "EMPTY"
+        assert kwargs["clean_tables"] is False
+        assert kwargs["cleaned_ocr_output_dir"] is None
+        assert kwargs["sampling_params"] == {
+            "temperature": 0.0,
+            "top_p": 0.95,
+            "top_k": 64,
+            "repetition_penalty": 1.0,
+            "enable_thinking": False,
+        }
+
+    def test_returns_direct_table_clean_adapter(self, mocker: Any) -> None:
+        meas_lm_sentinel = mocker.MagicMock()
+        mocker.patch("coastal_crawler.adapter.MeasurementLM", return_value=meas_lm_sentinel)
+
+        adapter = build_table_clean_adapter(_fake_settings())
+
+        assert isinstance(adapter, DirectTableCleanAdapter)
+        assert adapter.meas_lm is meas_lm_sentinel
+
+
+class TestDirectTableCleanAdapterCleanTablesBatch:
+    def test_calls_clean_tables_directly_not_fit(self) -> None:
+        """The whole point of this adapter is to call _clean_tables()
+        without running fit()'s full extraction pipeline."""
+        meas_lm = MagicMock()
+        meas_lm.context_length_exceeded_docs = set()
+        meas_lm._clean_tables.return_value = ["cleaned 0", "cleaned 1"]
+        adapter = DirectTableCleanAdapter(meas_lm=meas_lm)
+
+        result = adapter.clean_tables_batch(["doc 0", "doc 1"], ["/scratch/0", "/scratch/1"])
+
+        meas_lm._clean_tables.assert_called_once_with(["doc 0", "doc 1"], ["/scratch/0", "/scratch/1"])
+        meas_lm.fit.assert_not_called()
+        assert result == ["cleaned 0", "cleaned 1"]
+
+    def test_resets_context_length_exceeded_docs_before_call(self) -> None:
+        """fit() resets this at the start of each call; since _clean_tables
+        is called directly (never fit()), the adapter must reset it itself
+        or a failure from a previous batch would leak into this one."""
+        meas_lm = MagicMock()
+        meas_lm.context_length_exceeded_docs = {0, 1}
+        meas_lm._clean_tables.return_value = ["cleaned"]
+        adapter = DirectTableCleanAdapter(meas_lm=meas_lm)
+
+        adapter.clean_tables_batch(["doc"], ["/scratch/0"])
+
+        assert meas_lm.context_length_exceeded_docs == set()
+
+    def test_context_length_exceeded_docs_property_reads_through(self) -> None:
+        meas_lm = MagicMock()
+        meas_lm.context_length_exceeded_docs = {2}
+        adapter = DirectTableCleanAdapter(meas_lm=meas_lm)
+        assert adapter.context_length_exceeded_docs == {2}
 
 
 # ---------------------------------------------------------------------------

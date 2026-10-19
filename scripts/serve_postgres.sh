@@ -1,6 +1,6 @@
 #!/bin/bash -l
 #$ -P mcnet
-#$ -l h_rt=24:00:00
+#$ -l h_rt=120:00:00
 #$ -pe omp 4
 #$ -o out/serve_postgres_out.txt
 #$ -e out/serve_postgres_error.txt

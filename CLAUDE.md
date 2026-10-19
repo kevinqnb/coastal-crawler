@@ -2,11 +2,22 @@
 
 ## What this project is
 
-A multi-stage pipeline that discovers coastal-ecosystem papers from academic APIs, filters them for relevance using an LLM, OCRs their PDFs, and extracts structured measurements from the OCR'd text via a native OCR/extraction pipeline (`src/coastal_crawler/extraction/`). OCR and extraction are two independent stages/processes (`coastal-crawler ocr` and `coastal-crawler extract`) connected only through the DB and a shared directory of OCR text files — they're meant to run concurrently, e.g. as two separate 1-GPU cluster jobs.
+A multi-stage pipeline that discovers coastal-ecosystem papers from academic APIs, filters them for relevance using an LLM, OCRs their PDFs, normalizes table markup in the OCR text, and extracts structured measurements from the cleaned text — all via the external `scholarlm` package (`scholarlm.DocumentLM` for OCR, `scholarlm.MeasurementLM` for table-cleaning and extraction; see `src/coastal_crawler/adapter.py`). OCR, table-cleaning, and extraction are three independent stages/processes (`coastal-crawler ocr`, `coastal-crawler table-clean`, `coastal-crawler extract`) connected only through the DB and shared directories of OCR/cleaned text files — they're meant to run concurrently, e.g. as separate 1-GPU cluster jobs.
 
-This repo conforms to the experiment contract. When implementing an experiment, read `notes/hub/conventions.md` first.
+This repo is developed through the harness, and is the reference implementation of
+its config standard — a centralized `configs/`, a config-dispatched runner
+(`scripts/run_experiment.py`), a submit wrapper (`scripts/submit.sh`). Read
+`notes/hub/conventions.md` first: it is the source of truth for that standard, the
+experiment-ID scheme, what a run writes, and the working loop (`/develop` → `/devlog`
+for code, `/experiment` → `/explog` → `/debrief` for runs).
 
 **No magic numbers.** Any value that could plausibly change between runs — batch size, chunk size, seed, model name, prompt text — belongs in a `configs/<id>.yaml`'s `params` (see `scripts/run_experiment.py`), a `Settings` field (`config.py`), or a CLI flag (`cli.py`). It does not get hardcoded in a pipeline stage's implementation.
+
+**Public devlog.** `devlog/<id>.md` is the committed, curated record of AI-assisted
+work on a build or experiment — my prompts, a short summary, commit hashes. `/devlog`
+writes it (and commits the session's code) at the end of a `/develop` session, as a
+trimmed copy of the private note. Same review bar as a commit message; no session id.
+Plain refactors and bug fixes don't get one.
 
 This is research code. Its output goes into papers. The failure mode that matters is
 not a crash — it is code that runs cleanly and produces a number that is quietly
@@ -87,46 +98,52 @@ exists.
 
 ## Running one pipeline stage as a contract experiment
 
-Each pipeline stage (`filter` / `ocr` / `extract`) is one "experiment" under the contract: `scripts/run_experiment.py configs/<id>.yaml` calls that stage's existing entry point (`run_filter` / `run_ocr_worker` / `run_worker`) directly — no CLI subprocess, no reimplemented logic — and writes its return tuple to `metrics.json` as throughput/outcome counts (e.g. `ocr_done`/`failed`/`requeued`), since no retry/quality metric exists in this repo today. `configs/<id>.yaml`'s `params.stage` selects the stage; `params.env` overrides any `Settings` env var (e.g. `DOC_LM_MODEL`) for that run only, without touching the shared `.env`; the config's top-level `seed` fills that stage's `<ROLE>_SEED`. Submit with `bash scripts/submit.sh <id>`, which reads `params.stage` and qsubs `scripts/run_experiment_job.sh` with the matching GPU profile. Multiple experiments can be submitted at once — each is an independent qsub job; same-stage jobs that land on the same host get their own model-server port automatically (see `scripts/find_free_port.py`), so they don't collide on `.env`'s static `<ROLE>_PORT`.
+Each pipeline stage (`filter` / `ocr` / `table_clean` / `extract`) is one "experiment" under the contract: `scripts/run_experiment.py configs/<id>.yaml` calls that stage's existing entry point (`run_filter` / `run_ocr_worker` / `run_table_clean_worker` / `run_worker`) directly — no CLI subprocess, no reimplemented logic — and writes its return tuple to `metrics.json` as throughput/outcome counts (e.g. `ocr_done`/`failed`/`requeued`), since no retry/quality metric exists in this repo today. `configs/<id>.yaml`'s `params.stage` selects the stage; `params.env` overrides any `Settings` env var (e.g. `DOC_LM_MODEL`) for that run only, without touching the shared `.env`; the config's top-level `seed` fills that stage's `<ROLE>_SEED`. Submit with `bash scripts/submit.sh <id>`, which reads `params.stage` and qsubs `scripts/run_experiment_job.sh` with the matching GPU profile. Multiple experiments can be submitted at once — each is an independent qsub job; same-stage jobs that land on the same host get their own model-server port automatically (see `scripts/find_free_port.py`), so they don't collide on `.env`'s static `<ROLE>_PORT`.
 
 ## Pipeline stages and paper statuses
 
 Papers move through the following statuses in order:
 
 ```
-discovered → filtering → relevant → ocr_processing → ocr_done → processing → extracted
-                       ↘ irrelevant                 ↘ ocr_failed             ↘ failed
+discovered → filtering → relevant → ocr_processing → ocr_done → table_clean_processing → table_clean_done → processing → extracted
+                       ↘ irrelevant                 ↘ ocr_failed             ↘ table_clean_failed                       ↘ failed
 ```
 
 | Status | Set by | Meaning |
 |---|---|---|
 | `discovered` | discovery sources | Newly inserted; not yet filtered |
 | `filtering` | `claim_batch_for_filter` | Claimed by a filter worker; in progress |
-| `inaccessible` | `mark_inaccessible` (legacy — no longer set by `run_filter`) | Historical: PDF URL unreachable when checked during filter. Kept for old rows only; new PDF-accessibility failures now surface as `ocr_failed`/`failed` during OCR/extraction. |
+| `inaccessible` | `mark_inaccessible` (legacy — no longer set by `run_filter`) | Historical: PDF URL unreachable when checked during filter. Kept for old rows only; new PDF-accessibility failures now surface as `ocr_failed`/`table_clean_failed`/`failed` during OCR/table-cleaning/extraction. |
 | `relevant` | `mark_relevant` | Passed LLM filter; queued for OCR |
 | `irrelevant` | `mark_irrelevant` | No abstract, or rejected by LLM |
 | `ocr_processing` | `claim_batch_for_ocr` | Claimed by an OCR worker (`coastal-crawler ocr`); in progress |
-| `ocr_done` | `mark_ocr_done` | OCR text written to `OCR_DIR/{paper_id}.txt`; queued for extraction |
+| `ocr_done` | `mark_ocr_done` | OCR text written to `OCR_DIR/{paper_id}.txt`; queued for table-cleaning |
 | `ocr_failed` | `mark_ocr_failed` | OCR failed — PDF download error (including inaccessible/rate-limited URLs), OCR-model error, empty OCR output, or missing PDF URL; descriptive error text stored |
+| `table_clean_processing` | `claim_batch_for_table_clean` | Claimed by a table-clean worker (`coastal-crawler table-clean`); in progress |
+| `table_clean_done` | `mark_table_clean_done` | Cleaned text written to `TABLE_CLEAN_DIR/{paper_id}.txt`; queued for extraction |
+| `table_clean_failed` | `mark_table_clean_failed` | Table-cleaning failed — PDF re-download error, page-render error, page-count mismatch against the OCR text, model error, or empty/unchanged-when-expected output; descriptive error text stored |
 | `processing` | `claim_batch` | Claimed by an extraction worker (`coastal-crawler extract`); in progress |
 | `extracted` | `mark_extracted` | Measurements extracted; results in `extractions` table |
-| `failed` | `mark_failed` | Extraction failed — adapter/model error or missing OCR text file; descriptive error text stored |
+| `failed` | `mark_failed` | Extraction failed — adapter/model error or missing cleaned-text file; descriptive error text stored |
 
 The filter stage intentionally does not check PDF accessibility — title/abstract are already in the DB from discovery, so relevance is judged with zero network calls. Whether the PDF is downloadable is discovered at OCR time (the only stage that touches the raw PDF), avoiding a double-download and keeping the filter stage from being bottlenecked by a PDF host's rate limit (e.g. Wiley's TDM API — see `pdf.py`'s `_throttle_wiley`).
 
-**OCR (`coastal-crawler ocr`) depends on `scripts/wiley_download.py` for Wiley papers.** `pdf.py`'s Wiley throttle only paces requests within one process, so running multiple `coastal-crawler ocr` jobs in parallel — each downloading its own claimed batch — would blow through Wiley's rate limit. `scripts/wiley_download.py` is the one process that talks to Wiley: it pre-downloads PDFs for `relevant` papers into `WILEY_PDF_DIR` (default `data/wiley_pdfs/{paper_id}.pdf`), and `coastal-crawler ocr` reads Wiley papers' PDFs from there instead of downloading them live (`ocr_worker.py`'s `_download_all`, gated on `Settings.wiley_pdf_dir`). It must be running (or already caught up) for Wiley papers to be OCR'd at all — a claimed Wiley paper whose file isn't cached yet is reset to `relevant` (not `ocr_failed`) and picked up again once the downloader catches up. `coastal-crawler extract` has zero Wiley (or PDF) awareness — it only reads OCR text already written to disk. See EFFICIENCY.md item 1 for the full rationale.
+**OCR (`coastal-crawler ocr`) and table-cleaning (`coastal-crawler table-clean`) both depend on `scripts/wiley_download.py` for Wiley papers.** `pdf.py`'s Wiley throttle only paces requests within one process, so running multiple jobs that each download their own claimed batch would blow through Wiley's rate limit. `scripts/wiley_download.py` is the one process that talks to Wiley: it pre-downloads PDFs for `relevant` papers into `WILEY_PDF_DIR` (default `data/wiley_pdfs/{paper_id}.pdf`), and both `coastal-crawler ocr` and `coastal-crawler table-clean` read Wiley papers' PDFs from there instead of downloading them live (`ocr_worker.py`'s `_download_all` / `table_clean_worker.py`'s `_download_all`, gated on `Settings.wiley_pdf_dir`). It must be running (or already caught up) for Wiley papers to be OCR'd or table-cleaned at all — a claimed Wiley paper whose file isn't cached yet is reset to `relevant` (from OCR) or `ocr_done` (from table-clean), not `ocr_failed`/`table_clean_failed`, and picked up again once the downloader catches up. Table-clean re-downloads every paper's PDF a second time (even non-Wiley ones, whose OCR-stage temp copy was already deleted) since it needs the rendered page images, not just OCR text — an accepted, explicit cost of giving it its own PDF access rather than threading images through from the OCR stage. `coastal-crawler extract` has zero Wiley (or PDF) awareness — it only reads cleaned text already written to disk. See EFFICIENCY.md item 1 for the full rationale.
 
-**Extraction waits for OCR.** `coastal-crawler extract`'s `--idle-timeout`/`--poll-interval` options (used by `scripts/submit_extract_job.sh`) let it keep polling `claim_batch` for newly `ocr_done` papers instead of exiting the moment it drains the queue — this is what lets the `ocr` and `extract` jobs run concurrently against a partially-populated `OCR_DIR`, with extraction stopping itself only after no new work has appeared for `idle_timeout` seconds (or immediately once there's provably no upstream work left).
+**Extraction waits for table-cleaning; table-cleaning waits for OCR.** `coastal-crawler extract`'s `--idle-timeout`/`--poll-interval` options let it keep polling `claim_batch` for newly `table_clean_done` papers instead of exiting the moment it drains the queue — this is what lets `ocr`, `table-clean`, and `extract` jobs run concurrently against partially-populated `OCR_DIR`/`TABLE_CLEAN_DIR` directories, with each downstream stage stopping itself only after no new work has appeared for `idle_timeout` seconds (or immediately once there's provably no upstream work left).
 
 Requeue commands (each skips as many upstream stages as it safely can, given what's already on disk/in the DB):
-`requeue-failed` resets `failed` → `ocr_done` (skip re-filter and re-OCR; only measurement extraction failed, and the OCR text file is still valid).
-`requeue-processing` resets `processing` → `ocr_done` (rescues papers stranded mid-batch by a killed extraction job — matters more with multiple concurrent extraction jobs).
+`requeue-failed` resets `failed` → `table_clean_done` (skip re-filter, re-OCR, and re-table-clean; only measurement extraction failed, and the cleaned-text file is still valid).
+`requeue-processing` resets `processing` → `table_clean_done` (rescues papers stranded mid-batch by a killed extraction job — matters more with multiple concurrent extraction jobs).
+`requeue-table-clean-processing` resets `table_clean_processing` → `ocr_done` (rescues papers stranded mid-batch by a killed table-clean job).
+`requeue-table-clean-failed` resets `table_clean_failed` → `ocr_done` (retry table-cleaning).
 `requeue-ocr-processing` resets `ocr_processing` → `relevant` (rescues papers stranded mid-batch by a killed OCR job).
 `requeue-ocr-failed` resets `ocr_failed` → `relevant` (retry OCR).
-`requeue-ocr` resets `ocr_done`/`ocr_failed`/`processing`/`extracted`/`failed` → `relevant` (forces a full re-OCR, e.g. after changing `DOC_LM_MODEL`).
+`requeue-ocr` resets `ocr_done`/`ocr_failed`/`table_clean_processing`/`table_clean_done`/`table_clean_failed`/`processing`/`extracted`/`failed` → `relevant` (forces a full re-OCR, e.g. after changing `DOC_LM_MODEL` — also forces re-table-cleaning, since cleaned text derived from the old OCR text would otherwise survive untouched).
 `requeue-filtering` resets `filtering` → `discovered` (rescues papers stranded mid-batch by a killed job).
 `requeue-irrelevant` resets `irrelevant` → `discovered` (clears `filter_confidence`; useful after updating the prompt).
 `requeue-inaccessible` resets `inaccessible` → `discovered` (legacy — for clearing out rows that predate the filter no longer performing a PDF check; see `scripts/recover_oa_inaccessible.py` / `scripts/diagnose_inaccessible.py` for managing that backlog).
+`reset-pipeline` resets every `ocr_*`/`table_clean_*`/`processing`/`extracted`/`failed` paper → `relevant` and deletes all extraction/attribution/vote/cached-OCR-context rows, without touching discovery/filter results or anything on disk (see `cli.reset_pipeline`'s docstring) — use this to redo OCR/table-cleaning/extraction for the whole corpus from scratch while keeping filter results.
 
 ## Key source files
 
@@ -137,18 +154,18 @@ Requeue commands (each skips as many upstream stages as it safely can, given wha
 | `src/coastal_crawler/sources/` | One file per API source (`openalex.py`, `semantic_scholar.py`, `wiley.py`). Each implements `DiscoverySource` from `sources/base.py`. |
 | `src/coastal_crawler/relevance_filter.py` | `AbstractFilter` class (logprob scoring) and `run_filter()` batch function. |
 | `src/coastal_crawler/ocr_worker.py` | `run_ocr_worker()` — claims `relevant` papers, downloads PDFs (or reads them from `Settings.wiley_pdf_dir` for Wiley papers), calls the OCR adapter, writes OCR text to `Settings.ocr_dir/{paper_id}.txt`. |
-| `src/coastal_crawler/worker.py` | `run_worker()` — claims `ocr_done` papers, reads OCR text from `Settings.ocr_dir`, calls the measurement adapter. `run_worker_until_idle()` layers a poll-and-wait loop on top so extraction can run concurrently with a still-running OCR job. |
-| `src/coastal_crawler/pdf.py` | Shared PDF download/throttle logic: `download_pdf`, `is_wiley_request`, `_throttle_wiley` (Wiley's ~10s/request pacing). Used only by `ocr_worker.py` and `scripts/wiley_download.py` — `worker.py` has no PDF/network dependency at all. |
+| `src/coastal_crawler/table_clean_worker.py` | `run_table_clean_worker()` — claims `ocr_done` papers, re-downloads PDFs (same Wiley-cache-aware pattern as `ocr_worker.py`), renders page images via `scholarlm.utils.pdf.process_pdf()`, calls the table-clean adapter, writes cleaned text to `Settings.table_clean_dir/{paper_id}.txt`. |
+| `src/coastal_crawler/worker.py` | `run_worker()` — claims `table_clean_done` papers, reads cleaned text from `Settings.table_clean_dir`, calls the measurement adapter. `run_worker_until_idle()` layers a poll-and-wait loop on top so extraction can run concurrently with still-running OCR/table-clean jobs. |
+| `src/coastal_crawler/pdf.py` | Shared PDF download/throttle logic: `download_pdf`, `is_wiley_request`, `_throttle_wiley` (Wiley's ~10s/request pacing). Used by `ocr_worker.py`, `table_clean_worker.py`, and `scripts/wiley_download.py` — `worker.py` has no PDF/network dependency at all. |
 | `scripts/wiley_download.py` | Standalone long-running pre-downloader — the one process that talks to Wiley's TDM API; see the Wiley-OCR-dependency note above. |
-| `src/coastal_crawler/adapter.py` | Two independent adapters: `OCRAdapter`/`DirectOCRAdapter`/`StubOCRAdapter`/`build_ocr_adapter()` (wraps `OCRLM`; called by `cli.py ocr`) and `MeasurementAdapter`/`DirectMeasurementAdapter`/`StubMeasurementAdapter`/`build_measurement_adapter()` (wraps `ExtractionLM`; called by `cli.py extract`). |
-| `src/coastal_crawler/extraction/` | Native OCR/extraction pipeline (no external dependency): `ocr_lm.py` (`OCRLM`, fast-mode VLM OCR), `extraction_lm.py` (`ExtractionLM`, single-call direct measurement extraction), `pdf_render.py` (PDF page rendering via poppler-utils). |
-| `src/coastal_crawler/measurement_schema.py` | Domain-specific `EntitySchema`, `MeasurementEventSchema`, `ATTRIBUTE_INFO_DICT`, `DirectExtractionSchema`, and `build_direct_extraction_prompt()` for `ExtractionLM` — placeholder, fill in before running extraction for real. |
-| `src/coastal_crawler/db/models.py` | SQLAlchemy ORM: `Paper`, `Extraction`, `CrawlState`. |
+| `src/coastal_crawler/adapter.py` | Adapters — thin interfaces between the workers and `scholarlm`'s models: `OCRAdapter`/`DirectOCRAdapter`/`StubOCRAdapter`/`build_ocr_adapter()` (wraps `scholarlm.DocumentLM`; called by `cli.py ocr`), `TableCleanAdapter`/`DirectTableCleanAdapter`/`StubTableCleanAdapter`/`build_table_clean_adapter()` (calls `scholarlm.MeasurementLM._clean_tables()` directly, not `fit()`; called by `cli.py table-clean`), and `MeasurementAdapter`/`DirectMeasurementAdapter`/`StubMeasurementAdapter`/`build_measurement_adapter()` (wraps `scholarlm.MeasurementLM` in `extraction_mode="direct"`; called by `cli.py extract`). |
+| `src/coastal_crawler/measurement_schema.py` | Domain-specific `EntitySchema`, `MeasurementEventSchema`, `ATTRIBUTE_INFO_DICT`, `DirectExtractionSchema`, and `build_direct_extraction_prompt()` — feeds `scholarlm.MeasurementLM`'s direct-extraction call — placeholder, fill in before running extraction for real. |
+| `src/coastal_crawler/db/models.py` | SQLAlchemy ORM: `Paper`, `Extraction`, `PaperOcrContext`, `Vote`, `Attribution`, `CrawlState`. |
 | `src/coastal_crawler/db/store.py` | All SQL — every DB operation lives here; callers own commit/rollback. |
 | `src/coastal_crawler/db/engine.py` | `get_session()` context manager. |
-| `src/coastal_crawler/cli.py` | Typer CLI: `discover`, `filter`, `ocr`, `extract`, `status`, `requeue-failed`, `requeue-processing`, `requeue-ocr-processing`, `requeue-ocr-failed`, `requeue-ocr`, `requeue-irrelevant`. |
+| `src/coastal_crawler/cli.py` | Typer CLI: `discover`, `filter`, `ocr`, `table-clean`, `extract`, `status`, `requeue-failed`, `requeue-processing`, `requeue-ocr-processing`, `requeue-ocr-failed`, `requeue-ocr`, `requeue-table-clean-processing`, `requeue-table-clean-failed`, `requeue-irrelevant`, `reset-extractions`, `reset-pipeline`. |
 | `alembic/versions/` | One migration file per schema change. |
-| `scripts/run_experiment.py` | Experiment-contract adapter: dispatches `configs/<id>.yaml`'s `params.stage` to `run_filter`/`run_ocr_worker`/`run_worker`, writes the standardized `$RUNS_ROOT/<id>/` run directory. |
+| `scripts/run_experiment.py` | Experiment-contract adapter: dispatches `configs/<id>.yaml`'s `params.stage` to `run_filter`/`run_ocr_worker`/`run_table_clean_worker`/`run_worker`, writes the standardized `$RUNS_ROOT/<id>/` run directory. |
 | `scripts/submit.sh` / `scripts/run_experiment_job.sh` | Contract submit wrapper (`bash scripts/submit.sh <id>`) and the generic SGE job body it qsubs — starts the stage's vLLM server on a private port, waits for health, runs `run_experiment.py`, tears the server down. |
 
 ## Relevance filter details
@@ -163,15 +180,15 @@ Requeue commands (each skips as many upstream stages as it safely can, given wha
 
 ## Reproducibility — model serving
 
-Three models are served the same way: the filter LLM (`FILTER_*`), the OCR/VLM (`DOC_LM_*`), and the extraction LLM (`MEAS_LM_*`). Each role's `.env` parameters follow the same three groups:
+Four models are served the same way: the filter LLM (`FILTER_*`), the OCR/VLM (`DOC_LM_*`), the table-clean VLM (`TABLE_CLEAN_*`), and the extraction LLM (`MEAS_LM_*`). Each role's `.env` parameters follow the same three groups:
 
-**Inference params** (`<ROLE>_SEED`, plus `FILTER_TEMPERATURE`/`FILTER_TOP_LOGPROBS` for the filter specifically) — passed to every API call by the corresponding client (`relevance_filter.py`, or `OCRLM`/`ExtractionLM` via `build_ocr_adapter()`/`build_measurement_adapter()` in `adapter.py`).
+**Inference params** (`<ROLE>_SEED`, plus `FILTER_TEMPERATURE`/`FILTER_TOP_LOGPROBS` for the filter specifically) — passed to every API call by the corresponding client (`relevance_filter.py`, or `scholarlm.DocumentLM`/`scholarlm.MeasurementLM` via `build_ocr_adapter()`/`build_table_clean_adapter()`/`build_measurement_adapter()` in `adapter.py`).
 
 **Serving params** (`<ROLE>_PORT`, `<ROLE>_TENSOR_PARALLEL_SIZE`, `<ROLE>_GPU_MEMORY_UTILIZATION`, `<ROLE>_DTYPE`, `<ROLE>_QUANTIZATION`, `<ROLE>_MAX_MODEL_LEN`) — used only by `scripts/serve_model.sh <ROLE>` to launch vLLM.
 
 **Singularity params** (`<ROLE>_SIF_PATH`) — optional; enables running vLLM inside a Singularity container (recommended on HPC clusters). The HuggingFace cache is taken from `HF_HOME` in the environment — set that in your shell profile or job script, not in `.env`.
 
-`scripts/serve_model.sh <FILTER|DOC_LM|MEAS_LM> [gpu_id]` is the single generalized serving script for all three roles, indirecting through `${ROLE}_*` env vars. The optional `gpu_id` argument pins the server to one GPU via `CUDA_VISIBLE_DEVICES` — needed when colocating multiple servers on one multi-GPU node. `DOC_LM` and `MEAS_LM` now run as separate single-GPU jobs (see `submit_ocr_job.sh`/`submit_extract_job.sh` below) rather than colocated on one node, but `gpu_id` is still useful for local/single-node setups that run both stages together. It has two modes selected automatically:
+`scripts/serve_model.sh <FILTER|DOC_LM|TABLE_CLEAN|MEAS_LM> [gpu_id]` is the single generalized serving script for all four roles, indirecting through `${ROLE}_*` env vars. The optional `gpu_id` argument pins the server to one GPU via `CUDA_VISIBLE_DEVICES` — needed when colocating multiple servers on one multi-GPU node. `DOC_LM`, `TABLE_CLEAN`, and `MEAS_LM` now run as separate single-GPU jobs (see `submit_ocr_job.sh`/`submit_extract_job.sh` and `scripts/submit.sh`'s `table_clean` case below) rather than colocated on one node, but `gpu_id` is still useful for local/single-node setups that run stages together. It has two modes selected automatically:
 - **Singularity mode** (if `<ROLE>_SIF_PATH` is set): runs `singularity run --nv` with the HuggingFace cache and (if applicable) local model directory bind-mounted. Singularity shares the host network namespace so `<ROLE>_PORT` is reachable on the host without port mapping.
 - **Direct mode** (if `<ROLE>_SIF_PATH` is unset): runs `vllm serve` directly, assuming vLLM is installed in the active environment.
 
@@ -188,10 +205,11 @@ On an HPC cluster, each stage submits as a single self-contained job — start t
 qsub scripts/submit_filter_job.sh    # 1 GPU: filter LLM
 qsub scripts/submit_ocr_job.sh       # 1 GPU: DOC_LM, runs `coastal-crawler ocr`
 qsub scripts/submit_extract_job.sh   # 1 GPU: MEAS_LM, runs `coastal-crawler extract --idle-timeout ...`
+bash scripts/submit.sh <table-clean-id>   # 1 GPU: TABLE_CLEAN, runs `coastal-crawler table-clean` (contract path — no legacy submit_table_clean_job.sh)
 ```
-Submit the OCR and extract jobs at roughly the same time — they're independent 1-GPU allocations (no longer one combined 2-GPU job), connected only through the DB (`ocr_done` status) and `OCR_DIR` on shared storage. `submit_extract_job.sh` passes `--idle-timeout`/`--poll-interval` so it keeps polling for newly-`ocr_done` papers instead of exiting the moment it catches up to a still-running OCR job. All three job scripts poll readiness via the shared `scripts/wait_for_health.sh <port> <server_pid>` helper and preflight the DB connection via `scripts/check_db.py`. Server and client run on the same node and communicate over `localhost`, so no cross-node service discovery is needed for either job.
+Submit the OCR, table-clean, and extract jobs at roughly the same time — they're independent 1-GPU allocations, connected only through the DB (`ocr_done`/`table_clean_done` statuses) and `OCR_DIR`/`TABLE_CLEAN_DIR` on shared storage. `submit_extract_job.sh` passes `--idle-timeout`/`--poll-interval` so it keeps polling for newly-`table_clean_done` papers instead of exiting the moment it catches up to still-running upstream jobs. All job scripts poll readiness via the shared `scripts/wait_for_health.sh <port> <server_pid>` helper and preflight the DB connection via `scripts/check_db.py`. Server and client run on the same node and communicate over `localhost`, so no cross-node service discovery is needed for any job.
 
-`build_ocr_adapter()`/`build_measurement_adapter()` (`adapter.py`) construct the production `DirectOCRAdapter`/`DirectMeasurementAdapter` from `Settings`. `build_ocr_adapter()` raises `RuntimeError` if `DOC_LM_MODEL` is unset; `build_measurement_adapter()` raises if `MEAS_LM_MODEL`/`MEAS_LM_ENTITY_IDENTIFICATION_PROMPT` are unset — both mirror `run_filter()`'s guard for `FILTER_MODEL`/`FILTER_RELEVANCE_PROMPT`. Extraction runs `ExtractionLM`: a single LLM call per document that extracts a flat list of (entity, event, attribute, value, units) records directly, with no intermediate provenance/attribute-detection steps and no page-rendering/table-cleaning pipeline. `build_direct_extraction_prompt()` (`measurement_schema.py`) combines `MEAS_LM_ENTITY_IDENTIFICATION_PROMPT` with `MEASUREMENT_EVENT_PROMPT` and the `ATTRIBUTE_INFO_DICT` attribute list into the single prompt this call needs. The entity schema (`EntitySchema`, `ATTRIBUTE_INFO_DICT`) lives in `measurement_schema.py` as a placeholder — extraction produces zero real measurements until it's filled in for the coastal domain. `OCRLM` is fast-mode only (1024px page renders, no orientation correction) — requires poppler-utils (`pdfinfo`/`pdftoppm`) on the system.
+`build_ocr_adapter()`/`build_table_clean_adapter()`/`build_measurement_adapter()` (`adapter.py`) construct the production `DirectOCRAdapter`/`DirectTableCleanAdapter`/`DirectMeasurementAdapter` from `Settings`. `build_ocr_adapter()` raises `RuntimeError` if `DOC_LM_MODEL` is unset; `build_table_clean_adapter()` raises if `TABLE_CLEAN_MODEL` is unset; `build_measurement_adapter()` raises if `MEAS_LM_MODEL`/`MEAS_LM_ENTITY_IDENTIFICATION_PROMPT` are unset — all three mirror `run_filter()`'s guard for `FILTER_MODEL`/`FILTER_RELEVANCE_PROMPT`. Extraction runs `scholarlm.MeasurementLM` in `extraction_mode="direct"`: a single LLM call per document that extracts a flat list of (entity, event, attribute, value, units) records directly, with no intermediate provenance/attribute-detection steps. Table-cleaning runs *before* extraction, as its own stage, calling `scholarlm.MeasurementLM._clean_tables()` directly (not `fit()`) against a separately-served, potentially different model — see the pipeline-stages section above. `build_direct_extraction_prompt()` (`measurement_schema.py`) combines `MEAS_LM_ENTITY_IDENTIFICATION_PROMPT` with `MEASUREMENT_EVENT_PROMPT` and the `ATTRIBUTE_INFO_DICT` attribute list into the single prompt the extraction call needs. The entity schema (`EntitySchema`, `ATTRIBUTE_INFO_DICT`) lives in `measurement_schema.py` as a placeholder — extraction produces zero real measurements until it's filled in for the coastal domain. `scholarlm.DocumentLM` (OCR) runs in fast mode only (1024px page renders, no orientation correction); table-cleaning renders pages at `TABLE_CLEAN_PAGE_RENDER_DIM` (default 2048px, scholarlm's own default) since table structure needs more resolution than OCR's fast mode. Both require poppler-utils (`pdfinfo`/`pdftoppm`) on the system.
 
 ## DB schema notes
 
@@ -203,7 +221,7 @@ Submit the OCR and extract jobs at roughly the same time — they're independent
 
 ## Concurrency
 
-`claim_batch_for_filter`, `claim_batch_for_ocr`, and `claim_batch` all use `SELECT ... FOR UPDATE SKIP LOCKED`. Multiple filter, OCR, and extraction workers can each run in parallel without claiming the same paper — and, since OCR and extraction claim out of different statuses (`relevant` vs `ocr_done`), an `ocr` job and an `extract` job can also run concurrently against each other with no coordination needed beyond the DB. Each batch-claim transaction commits immediately so sibling workers (and the other stage) see the updated status right away.
+`claim_batch_for_filter`, `claim_batch_for_ocr`, `claim_batch_for_table_clean`, and `claim_batch` all use `SELECT ... FOR UPDATE SKIP LOCKED`. Multiple filter, OCR, table-clean, and extraction workers can each run in parallel without claiming the same paper — and, since each stage claims out of a different status (`relevant` → OCR, `ocr_done` → table-clean, `table_clean_done` → extraction), an `ocr` job, a `table-clean` job, and an `extract` job can all run concurrently against each other with no coordination needed beyond the DB. Each batch-claim transaction commits immediately so sibling workers (and the other stages) see the updated status right away.
 
 ## Adding a new discovery source
 

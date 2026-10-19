@@ -53,11 +53,11 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-ROLE="${1:?Usage: serve_model.sh <FILTER|DOC_LM|MEAS_LM> [gpu_id]}"
+ROLE="${1:?Usage: serve_model.sh <FILTER|DOC_LM|TABLE_CLEAN|MEAS_LM> [gpu_id]}"
 case "$ROLE" in
-    FILTER|DOC_LM|MEAS_LM) ;;
+    FILTER|DOC_LM|TABLE_CLEAN|MEAS_LM) ;;
     *)
-        echo "Error: unknown role '$ROLE' (expected FILTER, DOC_LM, or MEAS_LM)." >&2
+        echo "Error: unknown role '$ROLE' (expected FILTER, DOC_LM, TABLE_CLEAN, or MEAS_LM)." >&2
         exit 1
         ;;
 esac
@@ -78,6 +78,23 @@ fi
 if [ -n "$GPU_ID" ]; then
     export CUDA_VISIBLE_DEVICES="$GPU_ID"
 fi
+
+# ---- DeepGEMM disabled globally (see header comment) --------------------
+# vLLM already auto-disables DeepGEMM as the *inference* kernel on Blackwell
+# GPUs for FP8 block-scaled models ("DeepGemm E8M0 scale format causes
+# accuracy degradation for this architecture. Falling back to CUTLASS.") —
+# but its separate startup *warmup* path (gpu_worker.compile_or_warm_up_model
+# -> deep_gemm_warmup) isn't gated by that same auto-disable and
+# unconditionally calls into DeepGEMM's fp8_gemm_nt regardless, which then
+# crashes because DeepGEMM has no valid kernel "recipe" for this
+# GPU+E8M0-scale combination at all: `RuntimeError: Assertion error
+# (.../utils/layout.hpp:76): Unknown recipe` (see the
+# 2026-09-05-table-clean-smoke-01 job log, TABLE_CLEAN's Qwen3.5-27b-FP8 on
+# a Blackwell node). vLLM's own warning names the fix: set this to disable
+# DeepGEMM everywhere rather than just for inference. Harmless for every
+# other role today (none use FP8), so applied unconditionally rather than
+# gated per-ROLE.
+export VLLM_USE_DEEP_GEMM=0
 
 # ---- tiktoken-rs / Harmony vocab cache (see header comment) -------------
 TIKTOKEN_RS_CACHE_DIR="${TIKTOKEN_RS_CACHE_DIR:-$REPO_ROOT/.cache/tiktoken-rs/$ROLE}"
@@ -158,8 +175,30 @@ if [ -n "$SIF_PATH" ]; then
     echo "  port=$PORT  tp=$TENSOR_PARALLEL_SIZE  dtype=$DTYPE  seed=$SEED${GPU_ID:+  gpu=$GPU_ID}"
     [ ${#EXTRA_ARGS[@]} -gt 0 ] && echo "  extra: ${EXTRA_ARGS[*]}"
 
+    # CUDA_HOME/CUDA_PATH are pinned to the container's own CUDA install,
+    # not left to pass through: Singularity (unlike Docker) passes the host
+    # environment into the container by default, and cluster.local.sh's
+    # `module load cuda/12.5` sets these to a host-only path
+    # (/share/pkg.8/cuda/...) that doesn't exist inside the container's
+    # filesystem. That's harmless for a plain vLLM forward pass, but an FP8
+    # model that goes through DeepGEMM's JIT kernel compiler (e.g.
+    # Qwen3.5-27b-FP8's TABLE_CLEAN role) has that compiler resolve nvcc via
+    # $CUDA_HOME/bin/nvcc — the leaked host path means it looks for a
+    # compiler that isn't there and crashes with `std::filesystem::exists
+    # (nvcc_path)` (see the 2026-09-05-table-clean-smoke-01 job log).
+    # Clearing it to empty (an earlier version of this fix) isn't enough
+    # either — DeepGEMM's compiler asserts `not cuda_home.empty()`, it has
+    # no built-in fallback. It must be set to a real, non-empty path that
+    # exists *inside the container* — confirmed present at /usr/local/cuda
+    # (this image's own CUDA 13 install) via `singularity exec --nv
+    # <sif> /usr/local/cuda/bin/nvcc --version`. Only these two are pinned —
+    # not `--cleanenv`, which would also drop HF_HOME/TIKTOKEN_RS_CACHE_DIR/
+    # CUDA_VISIBLE_DEVICES pass-through that this script deliberately relies
+    # on.
     exec singularity run \
         --nv \
+        --env CUDA_HOME=/usr/local/cuda \
+        --env CUDA_PATH=/usr/local/cuda \
         "${BIND_ARGS[@]}" \
         "$SIF_PATH" \
         --model "$MODEL" \

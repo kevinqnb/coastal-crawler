@@ -11,36 +11,44 @@ Usage:
     python scripts/run_experiment.py configs/<id>.yaml
 
 Config `params` (free-form per the contract, but this adapter reads):
-    stage:         "filter" | "ocr" | "extract" | "judge"   (required)
+    stage:         "filter" | "ocr" | "table_clean" | "extract" | "judge"   (required)
     batch_size:    int, passed straight through to the stage function.
                    Defaults to that stage's existing default (Settings'
-                   FILTER_BATCH_SIZE for filter; 10 for ocr/extract;
-                   JUDGE_BATCH_SIZE for judge — same as each CLI command's
-                   --batch-size default).
+                   FILTER_BATCH_SIZE for filter; 10 for ocr/table_clean/
+                   extract; JUDGE_BATCH_SIZE for judge — same as each CLI
+                   command's --batch-size default).
     chunk_size:    int, passed straight through. Defaults to the stage's
-                   OCR_CHUNK_SIZE / EXTRACTION_CHUNK_SIZE setting. Not used
-                   by judge (one extraction row at a time — see
-                   judge_worker.py).
+                   OCR_CHUNK_SIZE / TABLE_CLEAN_CHUNK_SIZE /
+                   EXTRACTION_CHUNK_SIZE setting. Not used by judge (one
+                   extraction row at a time — see judge_worker.py).
     poll_interval: float, extract and judge only. Default 60.0 (CLI default).
     idle_timeout:  float, extract and judge only. Default 0.0 = single batch,
                    no polling loop (CLI default).
+    gpu_type:      str, optional. Read by scripts/submit.sh (NOT this
+                   adapter) at submit time to add `-l gpu_type=<value>` to
+                   the qsub line, pinning the run to one GPU model — e.g.
+                   "H200" for extract, since gpt-oss-120b's MARLIN mxfp4 MoE
+                   kernel fails to start on newer cards that clear the
+                   stage's GPU_C floor (see submit.sh's header comment).
     env:           mapping of environment variables to set for this run
                    before Settings is constructed — e.g. FILTER_MODEL,
-                   FILTER_RELEVANCE_PROMPT, DOC_LM_MODEL, MEAS_LM_MODEL,
-                   MEAS_LM_ENTITY_IDENTIFICATION_PROMPT, JUDGE_MODEL. This
-                   is how a config reaches values that normally live in the
-                   shared .env, without touching it. The config's top-level
-                   `seed` is applied to the stage's own <ROLE>_SEED
-                   (FILTER_SEED / DOC_LM_SEED / MEAS_LM_SEED / JUDGE_SEED)
-                   unless `env` already sets it.
+                   FILTER_RELEVANCE_PROMPT, DOC_LM_MODEL, TABLE_CLEAN_MODEL,
+                   MEAS_LM_MODEL, MEAS_LM_ENTITY_IDENTIFICATION_PROMPT,
+                   JUDGE_MODEL. This is how a config reaches values that
+                   normally live in the shared .env, without touching it.
+                   The config's top-level `seed` is applied to the stage's
+                   own <ROLE>_SEED (FILTER_SEED / DOC_LM_SEED /
+                   TABLE_CLEAN_SEED / MEAS_LM_SEED / JUDGE_SEED) unless
+                   `env` already sets it.
 
-Metrics shim: run_filter/run_ocr_worker/run_worker/run_judge_worker each
-already return a 3-tuple of counts (e.g. relevant/irrelevant/errors). That
-tuple is written to metrics.json verbatim under the names in STAGE_METRICS
-below — no retry/quality metric exists anywhere in this repo today
-(confirmed by reading relevance_filter.py/ocr_worker.py/worker.py/
-judge_worker.py), so metrics.json reports batch throughput/outcome counts,
-not an accuracy/quality score.
+Metrics shim: run_filter/run_ocr_worker/run_table_clean_worker/run_worker/
+run_judge_worker each already return a 3-tuple of counts (e.g.
+relevant/irrelevant/errors). That tuple is written to metrics.json verbatim
+under the names in STAGE_METRICS below — no retry/quality metric exists
+anywhere in this repo today (confirmed by reading relevance_filter.py/
+ocr_worker.py/table_clean_worker.py/worker.py/judge_worker.py), so
+metrics.json reports batch throughput/outcome counts, not an
+accuracy/quality score.
 """
 
 from __future__ import annotations
@@ -67,12 +75,14 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 STAGE_METRICS: dict[str, tuple[str, str, str]] = {
     "filter": ("relevant", "irrelevant", "errors"),
     "ocr": ("ocr_done", "failed", "requeued"),
+    "table_clean": ("table_clean_done", "failed", "requeued"),
     "extract": ("extracted", "failed", "requeued"),
     "judge": ("judged", "failed", "requeued"),
 }
 STAGE_SEED_ENV: dict[str, str] = {
     "filter": "FILTER_SEED",
     "ocr": "DOC_LM_SEED",
+    "table_clean": "TABLE_CLEAN_SEED",
     "extract": "MEAS_LM_SEED",
     "judge": "JUDGE_SEED",
 }
@@ -131,6 +141,24 @@ def _run_stage(stage: str, params: dict[str, Any]) -> tuple[int, int, int]:
             ocr_dir=Path(settings.ocr_dir),
         )
 
+    if stage == "table_clean":
+        from coastal_crawler.adapter import build_table_clean_adapter
+        from coastal_crawler.table_clean_worker import run_table_clean_worker
+
+        adapter = build_table_clean_adapter(settings)
+        batch_size = params.get("batch_size", 10)
+        chunk_size = params.get("chunk_size", settings.table_clean_chunk_size)
+        return run_table_clean_worker(
+            batch_size=batch_size,
+            adapter=adapter,
+            chunk_size=chunk_size,
+            wiley_pdf_dir=Path(settings.wiley_pdf_dir),
+            ocr_dir=Path(settings.ocr_dir),
+            table_clean_dir=Path(settings.table_clean_dir),
+            scratch_dir=Path(settings.table_clean_scratch_dir),
+            page_render_dim=settings.table_clean_page_render_dim,
+        )
+
     if stage == "extract":
         from coastal_crawler.adapter import build_measurement_adapter
         from coastal_crawler.worker import run_worker, run_worker_until_idle
@@ -138,18 +166,18 @@ def _run_stage(stage: str, params: dict[str, Any]) -> tuple[int, int, int]:
         adapter = build_measurement_adapter(settings)
         batch_size = params.get("batch_size", 10)
         chunk_size = params.get("chunk_size", settings.extraction_chunk_size)
-        ocr_dir = Path(settings.ocr_dir)
+        table_clean_dir = Path(settings.table_clean_dir)
         idle_timeout = params.get("idle_timeout", 0.0)
         if idle_timeout > 0:
             return run_worker_until_idle(
                 batch_size=batch_size,
                 adapter=adapter,
                 chunk_size=chunk_size,
-                ocr_dir=ocr_dir,
+                table_clean_dir=table_clean_dir,
                 poll_interval=params.get("poll_interval", 60.0),
                 idle_timeout=idle_timeout,
             )
-        return run_worker(batch_size=batch_size, adapter=adapter, chunk_size=chunk_size, ocr_dir=ocr_dir)
+        return run_worker(batch_size=batch_size, adapter=adapter, chunk_size=chunk_size, table_clean_dir=table_clean_dir)
 
     if stage == "judge":
         from coastal_crawler.adapter import build_judge

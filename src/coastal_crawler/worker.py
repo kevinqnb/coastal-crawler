@@ -1,13 +1,13 @@
-"""Extraction worker — reads OCR text files, calls the measurement adapter,
-stores results.
+"""Extraction worker — reads table-cleaned text files, calls the measurement
+adapter, stores results.
 
-Claims papers whose OCR text is already on disk (``status='ocr_done'``,
-written by ``ocr_worker.py``) and reads ``ocr_dir/{paper_id}.txt`` directly
-— a synchronous local disk read, not a network call, so unlike the OCR
-worker this has no need for a background download thread. Papers are
-processed in chunks of ``chunk_size`` so multiple documents can run
-concurrently against vLLM's continuous batching, rather than one document at
-a time.
+Claims papers whose table-cleaned text is already on disk
+(``status='table_clean_done'``, written by ``table_clean_worker.py``) and
+reads ``table_clean_dir/{paper_id}.txt`` directly — a synchronous local disk
+read, not a network call, so unlike the OCR worker this has no need for a
+background download thread. Papers are processed in chunks of ``chunk_size``
+so multiple documents can run concurrently against vLLM's continuous
+batching, rather than one document at a time.
 
 ``run_worker_until_idle`` layers a poll-and-wait loop on top of
 ``run_worker`` so extraction can start at roughly the same time as OCR and
@@ -30,7 +30,13 @@ from coastal_crawler.site.snippets import find_snippet
 
 log = structlog.get_logger(__name__)
 
-_UPSTREAM_STATUSES = ("relevant", "ocr_processing", "ocr_done")
+_UPSTREAM_STATUSES = (
+    "relevant",
+    "ocr_processing",
+    "ocr_done",
+    "table_clean_processing",
+    "table_clean_done",
+)
 
 
 def _sanitize_nul_bytes(text: str) -> tuple[str, int]:
@@ -78,9 +84,9 @@ def run_worker(
     batch_size: int = 10,
     adapter: MeasurementAdapter | None = None,
     chunk_size: int = 20,
-    ocr_dir: Path = Path("data/ocr"),
+    table_clean_dir: Path = Path("data/table_clean"),
 ) -> tuple[int, int, int]:
-    """Claim a batch of OCR'd papers and run measurement extraction.
+    """Claim a batch of table-cleaned papers and run measurement extraction.
 
     Uses SELECT ... FOR UPDATE SKIP LOCKED so multiple worker processes can
     run concurrently without claiming the same paper.
@@ -100,13 +106,14 @@ def run_worker(
         chunk_size: Papers per extract_batch() call. Callers reading from
             Settings should pass settings.extraction_chunk_size explicitly
             (mirrors how batch_size is threaded through from the CLI).
-        ocr_dir: Directory to read OCR text files from (named
-            ``{paper_id}.txt``, written by ocr_worker.py). A claimed paper
-            whose file isn't there (shouldn't happen given ocr_worker.py's
-            write-then-commit ordering, but disk issues are possible) is
-            reset to 'relevant' (counted in ``requeued``, not ``failed``) so
-            it's picked back up once OCR catches up, instead of being
-            treated as an extraction failure.
+        table_clean_dir: Directory to read table-cleaned text files from
+            (named ``{paper_id}.txt``, written by table_clean_worker.py). A
+            claimed paper whose file isn't there (shouldn't happen given
+            table_clean_worker.py's write-then-commit ordering, but disk
+            issues are possible) is reset to 'relevant' (counted in
+            ``requeued``, not ``failed``) so it's picked back up once
+            OCR/table-clean catch up, instead of being treated as an
+            extraction failure.
 
     Returns:
         (extracted, failed, requeued) counts for the batch.
@@ -134,11 +141,11 @@ def run_worker(
         ids: list[int] = []
         ocr_texts: list[str] = []
         for paper_id in chunk_paper_ids:
-            path = ocr_dir / f"{paper_id}.txt"
+            path = table_clean_dir / f"{paper_id}.txt"
             try:
                 text = path.read_text(encoding="utf-8")
             except OSError as exc:
-                log.warning("paper_ocr_text_missing", paper_id=paper_id, error=str(exc))
+                log.warning("paper_table_clean_text_missing", paper_id=paper_id, error=str(exc))
                 with get_session() as session:
                     store.reset_processing_to_relevant(paper_id, session)
                 requeued += 1
@@ -252,24 +259,25 @@ def run_worker_until_idle(
     batch_size: int = 10,
     adapter: MeasurementAdapter | None = None,
     chunk_size: int = 20,
-    ocr_dir: Path = Path("data/ocr"),
+    table_clean_dir: Path = Path("data/table_clean"),
     poll_interval: float = 60.0,
     idle_timeout: float = 1800.0,
     sleep_fn: Callable[[float], None] = time.sleep,
     now_fn: Callable[[], float] = time.monotonic,
 ) -> tuple[int, int, int]:
-    """Repeatedly claim and extract batches, waiting for new OCR output.
+    """Repeatedly claim and extract batches, waiting for new table-cleaned output.
 
     Calls ``run_worker()`` in a loop so extraction can start at roughly the
-    same time as a concurrently-running OCR job and keep picking up newly
-    ``ocr_done`` papers as they appear, even against a partially-populated
-    OCR directory. The idle clock resets on any batch that claims at least
-    one paper; once a batch claims nothing, it starts (or continues) an idle
-    timer and sleeps ``poll_interval`` before trying again. Returns once
-    ``idle_timeout`` seconds have elapsed with no new claims, or immediately
-    once there is no upstream work left at all (``relevant``/
-    ``ocr_processing``/``ocr_done`` all empty) rather than waiting out the
-    full idle window for a queue that's provably drained.
+    same time as concurrently-running OCR/table-clean jobs and keep picking
+    up newly ``table_clean_done`` papers as they appear, even against a
+    partially-populated table-clean directory. The idle clock resets on any
+    batch that claims at least one paper; once a batch claims nothing, it
+    starts (or continues) an idle timer and sleeps ``poll_interval`` before
+    trying again. Returns once ``idle_timeout`` seconds have elapsed with no
+    new claims, or immediately once there is no upstream work left at all
+    (``relevant``/``ocr_processing``/``ocr_done``/``table_clean_processing``/
+    ``table_clean_done`` all empty) rather than waiting out the full idle
+    window for a queue that's provably drained.
 
     ``sleep_fn``/``now_fn`` are injectable so tests don't sleep for real.
 
@@ -280,17 +288,17 @@ def run_worker_until_idle(
     idle_start: float | None = None
 
     while True:
-        extracted, failed, requeued = run_worker(batch_size, adapter, chunk_size, ocr_dir)
+        extracted, failed, requeued = run_worker(batch_size, adapter, chunk_size, table_clean_dir)
         total_extracted += extracted
         total_failed += failed
         total_requeued += requeued
 
         # requeued does NOT count as progress: it means a claimed paper's
-        # OCR file was missing and got bounced back to 'relevant', not that
-        # real work happened. Treating it as progress would let a
-        # misconfigured ocr_dir (or a backlog of pre-split rows with no
-        # OCR file) reset the idle clock every iteration with no sleep in
-        # between, busy-looping claim/requeue against the DB forever.
+        # cleaned-text file was missing and got bounced back to 'relevant',
+        # not that real work happened. Treating it as progress would let a
+        # misconfigured table_clean_dir (or a backlog of pre-split rows with
+        # no cleaned-text file) reset the idle clock every iteration with no
+        # sleep in between, busy-looping claim/requeue against the DB forever.
         if extracted + failed > 0:
             idle_start = None
             continue

@@ -29,7 +29,14 @@ log = structlog.get_logger(__name__)
 # (extraction hasn't reached a terminal state for that paper yet) — mirrors
 # worker.py's _UPSTREAM_STATUSES, one stage further downstream: judge's
 # upstream is extraction, not OCR.
-_UPSTREAM_STATUSES = ("relevant", "ocr_processing", "ocr_done", "processing")
+_UPSTREAM_STATUSES = (
+    "relevant",
+    "ocr_processing",
+    "ocr_done",
+    "table_clean_processing",
+    "table_clean_done",
+    "processing",
+)
 
 
 def _build_query(data: dict[str, Any]) -> str:

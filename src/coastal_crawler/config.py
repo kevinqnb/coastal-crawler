@@ -291,6 +291,120 @@ class Settings(BaseSettings):
         description="Path to a vLLM Singularity .sif image. If set, scripts/serve_model.sh runs ExtractionLM inside the container.",
     )
 
+    # -------------------------------------------------------- Table-clean LM
+    # A fourth model role, served the same way as FILTER/DOC_LM/MEAS_LM.
+    # Runs between OCR and extraction: normalizes <table> markup in each
+    # paper's OCR text against its rendered page images, using a model that
+    # may differ from both DOC_LM (OCR) and MEAS_LM (extraction). Wired
+    # through adapter.build_table_clean_adapter() / table_clean_worker.py,
+    # which reuse scholarlm.MeasurementLM._clean_tables() directly rather
+    # than scholarlm's own (disabled, MEAS_LM-coupled) clean_tables=True path.
+    table_clean_base_url: str | None = Field(
+        default=None,
+        description="Base URL for the table-clean OpenAI-compatible endpoint (e.g. vLLM).",
+    )
+    table_clean_api_key: str = Field(
+        default="EMPTY",
+        description="API key for the table-clean endpoint. Use 'EMPTY' for local vLLM servers.",
+    )
+    table_clean_model: str | None = Field(
+        default=None,
+        description="Model name to use for table cleaning (must be multimodal — served via vLLM OpenAI-compatible endpoint).",
+    )
+    table_clean_seed: int = Field(
+        default=0,
+        description="RNG seed passed to vLLM --seed for the table-clean server.",
+    )
+    table_clean_temperature: float = Field(
+        default=0.0,
+        description=(
+            "Sampling temperature passed to scholarlm.MeasurementLM's sampling_params for "
+            "the table-clean call. Deliberately 0.0 (greedy), not scholarlm's own 0.90 "
+            "default — table normalization has no reason to be sampled stochastically, and "
+            "greedy decoding is what makes the seed-determinism sanity control checkable."
+        ),
+    )
+    table_clean_top_p: float = Field(
+        default=0.95,
+        description="Nucleus sampling top-p passed to scholarlm.MeasurementLM's sampling_params.",
+    )
+    table_clean_top_k: int = Field(
+        default=64,
+        description="Top-k sampling passed to scholarlm.MeasurementLM's sampling_params (forwarded via extra_body).",
+    )
+    table_clean_repetition_penalty: float = Field(
+        default=1.0,
+        description="Repetition penalty passed to scholarlm.MeasurementLM's sampling_params (forwarded via extra_body).",
+    )
+    table_clean_enable_thinking: bool = Field(
+        default=False,
+        description="Whether to enable chain-of-thought/reasoning mode, passed to scholarlm.MeasurementLM's sampling_params (forwarded via extra_body's chat_template_kwargs).",
+    )
+    table_clean_page_render_dim: int = Field(
+        default=2048,
+        description=(
+            "target_longest_dim passed to scholarlm.utils.pdf.process_pdf() for table-clean's "
+            "page renders. Independent of OCR's fast-mode 1024px renders — table structure "
+            "needs scholarlm's own default resolution, not OCR's lower-resolution fast mode."
+        ),
+    )
+    table_clean_dir: str = Field(
+        default="data/table_clean",
+        description=(
+            "Directory the table-clean stage writes each paper's cleaned text into "
+            "({paper_id}.txt), separate from OCR_DIR so raw OCR text is preserved for "
+            "debugging/provenance. The extraction stage reads from here instead of OCR_DIR."
+        ),
+    )
+    table_clean_scratch_dir: str = Field(
+        default="data/table_clean_scratch",
+        description=(
+            "Per-paper scratch directory for pre-rendered page .b64 files "
+            "(required by scholarlm.MeasurementLM._clean_tables's processed_pdf_dirs "
+            "argument). Deleted after each paper is processed, success or failure."
+        ),
+    )
+    table_clean_chunk_size: int = Field(
+        default=20,
+        description="Papers processed per table-clean GPU call within one claimed 'table_clean' batch.",
+    )
+
+    # Serving parameters — used only by scripts/serve_model.sh TABLE_CLEAN.
+    table_clean_port: int = Field(
+        default=8085,
+        description="Port vLLM listens on for the table-clean model. Must match the port in TABLE_CLEAN_BASE_URL.",
+    )
+    table_clean_tensor_parallel_size: int = Field(
+        default=1,
+        description="Number of GPUs for tensor parallelism (vLLM --tensor-parallel-size).",
+    )
+    table_clean_gpu_memory_utilization: float = Field(
+        default=0.90,
+        description="Fraction of GPU memory vLLM may use (vLLM --gpu-memory-utilization).",
+    )
+    table_clean_dtype: str = Field(
+        default="auto",
+        description="Compute dtype: auto, bfloat16, float16, float32 (vLLM --dtype).",
+    )
+    table_clean_quantization: str | None = Field(
+        default=None,
+        description=(
+            "Quantization scheme: awq, gptq, fp8, etc. None = no quantization (vLLM "
+            "--quantization). Qwen/Qwen3.5-27b-FP8 ships pre-quantized; leaving this unset "
+            "lets vLLM auto-detect from the checkpoint's own quantization_config — confirm "
+            "during a serve smoke test that it actually serves in FP8 before assuming this "
+            "is settled."
+        ),
+    )
+    table_clean_max_model_len: int | None = Field(
+        default=None,
+        description="Override the model's maximum context length (vLLM --max-model-len). None = model default.",
+    )
+    table_clean_sif_path: str | None = Field(
+        default=None,
+        description="Path to a vLLM Singularity .sif image. If set, scripts/serve_model.sh runs table-clean inside the container.",
+    )
+
     # -------------------------------------------------------- Judge/attribution
     # No port/base_url/serving params here — JudgementLM loads weights
     # directly in-process via nnsight (no vLLM server), unlike FILTER/
@@ -517,6 +631,9 @@ class Settings(BaseSettings):
         "meas_lm_max_model_len",
         "meas_lm_quantization",
         "meas_lm_sif_path",
+        "table_clean_max_model_len",
+        "table_clean_quantization",
+        "table_clean_sif_path",
         mode="before",
     )
     @classmethod

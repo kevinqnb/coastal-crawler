@@ -77,6 +77,39 @@ def ocr(
     typer.echo(message)
 
 
+@app.command(name="table-clean")
+def table_clean(
+    batch_size: int = typer.Option(10, "--batch-size", help="Papers to process per run."),
+    chunk_size: int = typer.Option(
+        None, "--chunk-size", help="Papers per table-clean GPU call. Defaults to TABLE_CLEAN_CHUNK_SIZE in .env."
+    ),
+) -> None:
+    """Claim and table-clean a batch of OCR'd papers, writing cleaned text to TABLE_CLEAN_DIR."""
+    from pathlib import Path
+
+    from coastal_crawler.adapter import build_table_clean_adapter
+    from coastal_crawler.config import get_settings
+    from coastal_crawler.table_clean_worker import run_table_clean_worker
+
+    settings = get_settings()
+    adapter = build_table_clean_adapter(settings)
+    size = chunk_size if chunk_size is not None else settings.table_clean_chunk_size
+    table_clean_done, failed, requeued = run_table_clean_worker(
+        batch_size=batch_size,
+        adapter=adapter,
+        chunk_size=size,
+        wiley_pdf_dir=Path(settings.wiley_pdf_dir),
+        ocr_dir=Path(settings.ocr_dir),
+        table_clean_dir=Path(settings.table_clean_dir),
+        scratch_dir=Path(settings.table_clean_scratch_dir),
+        page_render_dim=settings.table_clean_page_render_dim,
+    )
+    message = f"Table-cleaned {table_clean_done}, failed {failed}."
+    if requeued:
+        message += f" Requeued {requeued} (Wiley PDF not pre-downloaded yet — is scripts/wiley_download.py running?)."
+    typer.echo(message)
+
+
 @app.command()
 def extract(
     batch_size: int = typer.Option(10, "--batch-size", help="Papers to process per run."),
@@ -90,13 +123,13 @@ def extract(
         0.0,
         "--idle-timeout",
         help=(
-            "If > 0, keep polling for newly-OCR'd papers and wait up to this many seconds "
-            "of no new work before exiting (for running alongside a concurrent 'ocr' job). "
-            "Default 0 = process one batch and exit."
+            "If > 0, keep polling for newly-table-cleaned papers and wait up to this many "
+            "seconds of no new work before exiting (for running alongside a concurrent "
+            "'ocr'/'table-clean' job). Default 0 = process one batch and exit."
         ),
     ),
 ) -> None:
-    """Claim and extract a batch of OCR'd papers."""
+    """Claim and extract a batch of table-cleaned papers."""
     from pathlib import Path
 
     from coastal_crawler.adapter import build_measurement_adapter
@@ -106,13 +139,13 @@ def extract(
     settings = get_settings()
     adapter = build_measurement_adapter(settings)
     size = chunk_size if chunk_size is not None else settings.extraction_chunk_size
-    ocr_dir = Path(settings.ocr_dir)
+    table_clean_dir = Path(settings.table_clean_dir)
     if idle_timeout > 0:
         extracted, failed, requeued = run_worker_until_idle(
             batch_size=batch_size,
             adapter=adapter,
             chunk_size=size,
-            ocr_dir=ocr_dir,
+            table_clean_dir=table_clean_dir,
             poll_interval=poll_interval,
             idle_timeout=idle_timeout,
         )
@@ -121,11 +154,11 @@ def extract(
             batch_size=batch_size,
             adapter=adapter,
             chunk_size=size,
-            ocr_dir=ocr_dir,
+            table_clean_dir=table_clean_dir,
         )
     message = f"Extracted {extracted}, failed {failed}."
     if requeued:
-        message += f" Requeued {requeued} (OCR text not written yet — is 'coastal-crawler ocr' running?)."
+        message += f" Requeued {requeued} (cleaned text not written yet — is 'coastal-crawler table-clean' running?)."
     typer.echo(message)
 
 
@@ -309,6 +342,9 @@ def status(
             "ocr_processing",
             "ocr_done",
             "ocr_failed",
+            "table_clean_processing",
+            "table_clean_done",
+            "table_clean_failed",
             "processing",
             "extracted",
             "failed",
@@ -382,11 +418,29 @@ def requeue_ocr_failed() -> None:
 
 @app.command()
 def requeue_ocr() -> None:
-    """Reset every paper touched by OCR or extraction back to 'relevant' (forces a full re-OCR)."""
+    """Reset every paper touched by OCR, table-cleaning, or extraction back to 'relevant' (forces a full re-OCR)."""
     from coastal_crawler.ocr_worker import requeue_ocr as _requeue
 
     count = _requeue()
     typer.echo(f"Requeued {count} paper(s) back to 'relevant' for a full re-OCR.")
+
+
+@app.command()
+def requeue_table_clean_processing() -> None:
+    """Reset papers stuck in 'table_clean_processing' back to 'ocr_done' (use after a killed table-clean job)."""
+    from coastal_crawler.table_clean_worker import requeue_table_clean_processing as _requeue
+
+    count = _requeue()
+    typer.echo(f"Requeued {count} stranded paper(s) back to 'ocr_done'.")
+
+
+@app.command()
+def requeue_table_clean_failed() -> None:
+    """Reset table_clean_failed papers back to 'ocr_done' so table-cleaning is retried."""
+    from coastal_crawler.table_clean_worker import requeue_table_clean_failed as _requeue
+
+    count = _requeue()
+    typer.echo(f"Requeued {count} table_clean_failed paper(s) for table-clean retry.")
 
 
 @app.command()
@@ -474,6 +528,49 @@ def reset_extractions(
     typer.echo(
         f"Deleted {deleted} extraction row(s), {attributions} attribution row(s), "
         f"{votes} vote(s); reset {reset} paper(s) back to 'ocr_done'."
+    )
+
+
+@app.command(name="reset-pipeline")
+def reset_pipeline(
+    yes: bool = typer.Option(False, "--yes", help="Skip the confirmation prompt."),
+) -> None:
+    """DB-side reset of everything downstream of the filter stage, back to 'relevant'.
+
+    Deletes all extraction results (plus attributions, votes, and cached
+    paper_ocr_context rows) and resets every ocr_*/table_clean_*/processing/
+    extracted/failed paper back to 'relevant', so OCR, table-cleaning, and
+    extraction all re-run from scratch. Discovery and filter results
+    ('discovered'/'filtering'/'relevant'/'irrelevant'/'inaccessible' papers)
+    are left exactly as-is.
+
+    This command does NOT delete anything on disk. OCR_DIR/TABLE_CLEAN_DIR
+    text files for papers now back at 'relevant' are left in place
+    intentionally — deleting them is a separate, explicit, manual step you
+    should run interactively (see CLAUDE.local.md's storage-discipline
+    section), not one this command performs for you.
+    """
+    from coastal_crawler.db import store
+    from coastal_crawler.db.engine import get_session
+
+    if not yes:
+        typer.confirm(
+            "This will permanently delete ALL extraction results, attribution "
+            "rows, site-visitor votes, and cached OCR-context rows, and reset "
+            "every ocr_*/table_clean_*/processing/extracted/failed paper back "
+            "to 'relevant'. Filter/discovery results are untouched. This does "
+            "NOT delete OCR_DIR/TABLE_CLEAN_DIR files on disk — do that "
+            "separately and interactively. Continue?",
+            abort=True,
+        )
+
+    with get_session() as session:
+        attributions, votes, extractions, ocr_context, reset = store.reset_pipeline(session)
+    typer.echo(
+        f"Deleted {extractions} extraction row(s), {attributions} attribution row(s), "
+        f"{votes} vote(s), {ocr_context} cached OCR-context row(s); reset {reset} "
+        f"paper(s) back to 'relevant'.\n"
+        f"OCR_DIR/TABLE_CLEAN_DIR files were NOT deleted — do that separately."
     )
 
 
