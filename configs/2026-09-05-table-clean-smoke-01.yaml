@@ -1,0 +1,18 @@
+id: 2026-09-05-table-clean-smoke-01
+project: coastal-crawler
+description: >
+  Table-clean smoke test (staged-gate rung 2): one already-ocr_done paper
+  (chandra-ocr-2 text from before the olmOCR2 re-OCR), validates plumbing
+  end-to-end -- PDF re-download, page render, MeasurementLM._clean_tables()
+  call via DirectTableCleanAdapter, atomic write, status transition -- before
+  committing to a full corpus run. Deliberately run BEFORE reset-pipeline so
+  there is something ocr_done to claim; the promoted paper gets swept up by
+  reset-pipeline afterward with no lingering effect. Requires
+  scripts/serve_model.sh TABLE_CLEAN started by hand in a separate shell
+  first (never launched automatically).
+seed: 342
+params:
+  stage: table_clean
+  batch_size: 1
+  env:
+    TABLE_CLEAN_MODEL: Qwen/Qwen3.5-27b-FP8

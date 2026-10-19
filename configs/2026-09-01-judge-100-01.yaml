@@ -1,0 +1,17 @@
+id: 2026-09-01-judge-100-01
+project: coastal-crawler
+description: >
+  Judge leg (JudgementLM scoring + per-token attribution) for the
+  2026-09-01-extract-100-01 run. Submitted with -hold_jid on the extract
+  job so it queues immediately but only starts once extraction exits.
+  batch_size counts extraction *rows*, not papers -- the 2026-08-19 test
+  produced ~9.7 rows/paper (58 papers -> 563 rows), so 100 papers is
+  expected to yield ~900-1000 rows; 5000 is a generous cap so a single
+  batch clears every pending row. No idle_timeout: judge_worker treats
+  ocr_done as an upstream status, and the 400 papers left in ocr_done by
+  the extract leg would otherwise keep the poll loop idling an 80GB GPU.
+  Second of two chained legs (extract -> judge).
+seed: 342
+params:
+  stage: judge
+  batch_size: 5000

@@ -1,0 +1,38 @@
+id: 2026-09-07-ocr-olmocr2-split-01
+project: coastal-crawler
+description: >
+  olmOCR-2 OCR of the remaining `relevant` corpus, job 1 of 3 concurrent
+  single-GPU jobs. Replaces the single job that was running
+  configs/2026-07-30-ocr-olmocr2-01.yaml (torn down early because the
+  serve_postgres.sh job — h_rt bumped to 120h in the same change — would
+  have hit walltime first). That run left ~880 papers ocr_done; this split
+  finishes the rest.
+
+  PREREQUISITE: `coastal-crawler requeue-ocr-processing` must be run first,
+  after the old OCR job is killed, to return its ~2195 claimed-but-unfinished
+  papers from 'ocr_processing' to 'relevant'. Without it only ~3 relevant
+  papers exist and these jobs have almost nothing to claim.
+
+  batch_size=800 is a deliberate per-job cap, not an overshoot.
+  claim_batch_for_ocr's SELECT ... FOR UPDATE SKIP LOCKED naturally divides
+  work across concurrent jobs, but each job's claim is a single one-shot
+  call (no retry loop) — if this cap were the full remaining count (~2198),
+  whichever job's claim query runs first could grab everything before the
+  other two start. 3 x 800 = 2400 >= 2198 guarantees full coverage
+  regardless of start-order timing, while capping any single job to roughly
+  a third. At the 2026-09-01-ocr-to-500-01 steady-state rate (~120
+  papers/hour) 800 papers is ~7h; even at the slower rate the interrupted
+  run was seeing (~40/hour) it is ~20h — both comfortably under submit.sh's
+  ocr H_RT=72:00:00, so no GPU-resource change is needed for this split.
+
+  Wiley dependency: 2178 of the ~2198 pending papers are Wiley; all but 3
+  already have a cached PDF in WILEY_PDF_DIR (data/wiley_pdfs, 3075 files),
+  so scripts/wiley_download.py does NOT need to be running — at most 3
+  papers bounce back to 'relevant' (counted as requeued, not failed).
+seed: 342
+params:
+  stage: ocr
+  batch_size: 800
+  chunk_size: 20
+  env:
+    DOC_LM_MODEL: allenai/olmOCR-2-7B-1025

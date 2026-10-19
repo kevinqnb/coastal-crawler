@@ -1,0 +1,29 @@
+id: 2026-09-05-table-clean-full-01
+project: coastal-crawler
+description: >
+  Full-corpus table-clean, job 1 of 3 concurrent single-GPU jobs splitting
+  the post-reset-pipeline corpus. batch_size=1100 is a deliberate cap, not
+  an overshoot: claim_batch_for_table_clean's SKIP LOCKED naturally divides
+  work across concurrent jobs, but each job's claim is a single one-shot
+  call (no retry loop) -- if this cap were set to the full corpus size
+  (~3078), whichever of the 3 jobs' claim query happens to execute first
+  could grab everything before the other two even start. 3x1100=3300 >=
+  3078 guarantees full coverage across all 3 jobs regardless of start-order
+  timing, while still capping any single job's share to roughly a third.
+  At the 2026-09-05-table-clean-throughput-01 steady-state rate
+  (67 papers/hour), 1100 papers is ~16.4 hours per job -- comfortably under
+  submit.sh's existing table_clean H_RT=48:00:00, so no GPU-resource change
+  needed for this split (only relevant for a single-job full run).
+  MUST be submitted only after the full olmOCR2 re-OCR job has completed --
+  table-clean has no --idle-timeout/poll loop (unlike extract/judge), so it
+  claims once from whatever's already ocr_done and exits; it will not pick
+  up papers OCR finishes later. Also requires reset-pipeline to have already
+  run, so the full ~3078-paper corpus (not just the 399 pre-existing
+  ocr_done papers) is what's actually in ocr_done by the time this runs.
+seed: 342
+params:
+  stage: table_clean
+  batch_size: 1100
+  chunk_size: 20
+  env:
+    TABLE_CLEAN_MODEL: Qwen/Qwen3.5-27b-FP8

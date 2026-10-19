@@ -1,0 +1,65 @@
+id: 2026-09-08-extract-full-split-01
+project: coastal-crawler
+description: >
+  Full-corpus extraction run (ExtractionLM via scholarlm's MeasurementLM,
+  extraction_mode="direct"), job 1 of 3 concurrent single-GPU jobs. First
+  substantial extraction run against the redone corpus; the extractions and
+  votes tables are both empty (verified 2026-09-08).
+
+  Corpus state at time of writing (2026-09-08): OCR fully complete (3077
+  files on disk, none empty). Table-clean: 2935 table_clean_done, 140
+  table_clean_processing (the still-running job 7487985 =
+  2026-09-05-table-clean-full-02, reprocessing the last known-bad batch of
+  140 stale-empty cleaned-text files from the 2026-09-06 empty-corpus era),
+  3 papers permanently stuck in `relevant` (un-fetchable Wiley PDFs). ~4
+  table_clean_done papers have legitimately near-empty cleaned text (their
+  OCR source is also near-empty -- bad PDFs); they will extract to zero
+  records, which is correct.
+
+  Target: the whole ~3075-paper table_clean_done corpus.
+
+  Why a 3-way split instead of one job: extract's submit.sh H_RT is
+  24:00:00 and there is no extraction-throughput precedent in the repo (the
+  2026-08-19 leg was 58-60 papers, no rate recorded). A single full-corpus
+  one-shot claim would certainly hit walltime. claim_batch uses
+  SELECT ... FOR UPDATE SKIP LOCKED, so 3 concurrent jobs divide the work
+  with no coordination; requeue-processing recovers anything stranded by a
+  killed job.
+
+  batch_size=1050 per job: same logic as the table-clean full split
+  (3 x 1100). Each job's claim is a single one-shot call with no retry
+  loop, so if the cap were the full corpus size (~3075) whichever job's
+  claim query runs first could grab everything before the other two start.
+  3 x 1050 = 3150 >= 3075 guarantees full coverage regardless of
+  start-order timing while capping any single job to roughly a third.
+  Walltime: if extraction sustains >=44 papers/hour, 1050 papers fits the
+  24h H_RT; there is no precedent for this rate, so watch the first job's
+  progress and be ready to resubmit the remainder (requeue-processing then
+  a fresh config) if a job walls out. Do NOT bump H_RT without flagging --
+  CLAUDE.local.md notes the extract resource numbers exist in three
+  unsynced copies.
+
+  No idle_timeout: single one-shot claim per job (run_worker, not
+  run_worker_until_idle). With the whole corpus already in table_clean_done
+  by submit time there is no upstream work to poll for.
+
+  MEAS_LM_MAX_MODEL_LEN: NOT pinned here -- inherits .env, which currently
+  reads 81920 (with an inline "SET THIS BACK TO EMPTY!" note), not the
+  32768 recorded in CLAUDE.local.md. Resolve that value before submitting
+  (see the run checklist). At 81920 few papers should truncate; papers
+  that still exceed it have their tail truncated by the commit-3701c04
+  backstop -- logged per paper_id in log.txt, not failed. Review the
+  truncated-doc warning count after the run.
+
+  PREREQUISITES, in order:
+    1. Job 7487985 (2026-09-05-table-clean-full-02) finishes -- brings
+       table_clean_processing to 0 and the 140-paper batch to
+       table_clean_done with real content.
+    2. MEAS_LM_MAX_MODEL_LEN in .env confirmed / set to the intended value.
+    3. 2026-09-08-extract-smoke-01 passed.
+  Submit 01/02/03 together (independent qsub jobs; same-host jobs get their
+  own model-server port via scripts/find_free_port.py).
+seed: 342
+params:
+  stage: extract
+  batch_size: 1050

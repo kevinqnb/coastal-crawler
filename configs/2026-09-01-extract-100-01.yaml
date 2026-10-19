@@ -1,0 +1,16 @@
+id: 2026-09-01-extract-100-01
+project: coastal-crawler
+description: >
+  100-paper extraction run against the current corpus (500 papers ocr_done,
+  extractions table currently empty). Single batch of 100 claimed from
+  ocr_done -- no idle_timeout/poll loop, since the 400 papers this run
+  deliberately leaves in ocr_done would otherwise read as pending upstream
+  work. First of two chained legs (extract -> judge); the judge leg
+  (2026-09-01-judge-100-01) is submitted with -hold_jid on this job.
+  Reuses seed 342 for comparability with the 2026-08-19 pipeline test,
+  which ran this same chain end-to-end (58 papers extracted, 563 rows
+  judged) before the extraction table was reset.
+seed: 342
+params:
+  stage: extract
+  batch_size: 100

@@ -1,0 +1,17 @@
+id: 2026-09-07-ocr-olmocr2-split-03
+project: coastal-crawler
+description: >
+  olmOCR-2 OCR of the remaining `relevant` corpus, job 3 of 3. Identical in
+  every param to configs/2026-09-07-ocr-olmocr2-split-01.yaml — see that
+  file for the batch_size=800 sizing rationale, the requeue-ocr-processing
+  prerequisite, the H_RT margin note, and the Wiley-cache status. A separate
+  id (not a resubmission of -01) so each job gets its own $RUNS_ROOT/<id>/
+  run directory and its own free port from find_free_port.py when
+  co-scheduled on the same host.
+seed: 342
+params:
+  stage: ocr
+  batch_size: 800
+  chunk_size: 20
+  env:
+    DOC_LM_MODEL: allenai/olmOCR-2-7B-1025

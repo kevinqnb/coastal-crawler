@@ -1,0 +1,17 @@
+id: 2026-09-05-table-clean-full-02
+project: coastal-crawler
+description: >
+  Full-corpus table-clean, job 2 of 3. Identical to
+  2026-09-05-table-clean-full-01 in every param -- see that file for the
+  batch_size=1100 sizing rationale, the H_RT margin note, and the required
+  run order (after reset-pipeline, after the olmOCR2 re-OCR job completes).
+  A separate id (not a resubmission of -01) so each gets its own
+  $RUNS_ROOT/<id>/ run directory and its own free port from
+  find_free_port.py when co-scheduled on the same host.
+seed: 342
+params:
+  stage: table_clean
+  batch_size: 1100
+  chunk_size: 20
+  env:
+    TABLE_CLEAN_MODEL: Qwen/Qwen3.5-27b-FP8

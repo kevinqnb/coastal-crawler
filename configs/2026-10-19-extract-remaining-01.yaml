@@ -1,0 +1,33 @@
+id: 2026-10-19-extract-remaining-01
+project: coastal-crawler
+description: >
+  Finish the full-corpus extraction, job 1 of 2. The 2026-09-08 split run
+  (01/02/03) extracted 2025 papers; the remaining 1002 were left stranded in
+  status `processing` by a job that never finished (job 03, 2026-09-11,
+  claimed 0). Reset to table_clean_done on 2026-10-19 via the equivalent of
+  `requeue-processing` (UPDATE ... 1002 rows; the CLI command hangs); none of
+  the 1002 had extraction rows, so no duplicates. DB at that point:
+  2073 extracted, 1002 table_clean_done, 3 relevant (un-fetchable Wiley PDFs).
+
+  Target: the 1002 table_clean_done papers. batch_size=520 per job, 2 jobs:
+  2 x 520 = 1040 >= 1002 so coverage is guaranteed whichever job claims
+  first (claim_batch uses FOR UPDATE SKIP LOCKED), and neither job exceeds
+  about half. At the 2026-09-10 rate (~155-162 papers/h) each job needs
+  ~3.3 h, well inside the 24 h H_RT. No idle_timeout: single one-shot claim.
+
+  MEAS_LM_MAX_MODEL_LEN is NOT pinned here: params.env does not reach the
+  vLLM server (only the client), so the value comes from .env. The earlier
+  2025 papers ran at max_model_len=81920 (per log.txt); confirm .env still
+  reads 81920 before submitting so the corpus is extracted under one
+  setting. Review the truncation warning count in log.txt afterward
+  (paper_extraction_truncated: 1 per earlier job).
+
+  PREREQUISITES: Postgres job running; .env MEAS_LM_MAX_MODEL_LEN confirmed;
+  configs/2026-09-08-extract-smoke-01.yaml (batch_size=3, never run) passed.
+seed: 342
+params:
+  stage: extract
+  batch_size: 520
+  # gpt-oss-120b's MARLIN mxfp4 MoE kernel fails on cards newer than the
+  # cc-9.0 H200 -- see 2026-09-08-extract-full-split-03.yaml.
+  gpu_type: H200

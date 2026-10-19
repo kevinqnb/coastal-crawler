@@ -1,0 +1,20 @@
+id: 2026-09-05-table-clean-throughput-01
+project: coastal-crawler
+description: >
+  Table-clean throughput measurement (staged-gate step between rung 2/3 and
+  committing to a full-corpus GPU/H_RT sizing decision). 10 real ocr_done
+  papers (chandra-ocr-2 text, pre-dating the olmOCR2 re-OCR -- fine for a
+  pure model-throughput measurement, which doesn't depend on which OCR
+  backend produced the text) in chunks of 2, so the log's 5 separate
+  gpu_chunk_done timings can be checked for a first-chunk warmup outlier
+  before averaging the rest into a steady-state papers_per_hour. The
+  2026-09-05-table-clean-smoke-01 run's papers_per_hour=27.3 was an n=1
+  sample taken right after a cold server start and shouldn't be trusted for
+  sizing submit.sh's table_clean H_RT -- see out/2026-09-05-table-clean-smoke-01_out.txt.
+seed: 342
+params:
+  stage: table_clean
+  batch_size: 10
+  chunk_size: 2
+  env:
+    TABLE_CLEAN_MODEL: Qwen/Qwen3.5-27b-FP8

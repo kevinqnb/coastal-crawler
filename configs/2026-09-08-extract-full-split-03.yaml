@@ -1,0 +1,21 @@
+id: 2026-09-08-extract-full-split-03
+project: coastal-crawler
+description: >
+  Full-corpus extraction run, job 3 of 3. Identical in every param to
+  configs/2026-09-08-extract-full-split-01.yaml -- see that file for the
+  batch_size=1050 sizing rationale (3 x 1050 = 3150 >= ~3075 corpus), the
+  no-idle_timeout choice, the walltime caveat, the MEAS_LM_MAX_MODEL_LEN
+  note, and the prerequisite chain (table-clean job 7487985 finishes ->
+  confirm MAX_MODEL_LEN -> extract smoke). A separate id (not a
+  resubmission of -01) so each job gets its own $RUNS_ROOT/<id>/ run
+  directory and its own free port from find_free_port.py when co-scheduled
+  on the same host.
+seed: 342
+params:
+  stage: extract
+  batch_size: 1050
+  # First attempt (job 7518862) landed on the cc-12.0 RTX PRO 6000 (scc-708)
+  # and died at vLLM startup: gpt-oss-120b's MARLIN mxfp4 MoE kernel asserts
+  # "Hidden size mismatch w1" there, while the cc-9.0 H200s (where 01/02 ran
+  # fine) use the TRITON backend. gpu_c=9.0 is only a floor, so pin the model.
+  gpu_type: H200

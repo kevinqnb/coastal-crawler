@@ -1,0 +1,29 @@
+id: 2026-09-08-extract-smoke-01
+project: coastal-crawler
+description: >
+  Plumbing smoke for the extract stage ahead of the full-corpus run
+  (2026-09-08-extract-full-split-01/02/03). Confirms the ExtractionLM /
+  gpt-oss-120b server comes up, the MEAS_LM adapter builds (schema +
+  MEAS_LM_ENTITY_IDENTIFICATION_PROMPT guards pass), a claimed
+  table_clean_done paper's cleaned text is read from TABLE_CLEAN_DIR, and a
+  DocumentOutcome is written to the extractions table -- rung 2 of CLAUDE.md's
+  staged gates (plumbing, not results). batch_size=3 is small and one-shot
+  (no idle_timeout), so it claims at most 3 papers and exits.
+
+  PREREQUISITE: at least 3 papers in status table_clean_done (2935 already
+  are, as of 2026-09-08). Safe to run now, but ideally after job 7487985
+  (2026-09-05-table-clean-full-02) finishes so MEAS_LM_MAX_MODEL_LEN can be
+  confirmed in the same pass.
+
+  MEAS_LM_MAX_MODEL_LEN: inherits .env (currently 81920, flagged for review
+  -- see the split configs). Papers longer than that have their tail
+  truncated by the commit-3701c04 backstop (logged per paper_id, not
+  failed); review the truncated-doc warning count in log.txt afterward.
+seed: 342
+params:
+  stage: extract
+  batch_size: 3
+  # gpt-oss-120b's MARLIN mxfp4 MoE kernel fails to start on cards newer than
+  # the cc-9.0 H200 (e.g. the cc-12.0 RTX PRO 6000) — see
+  # 2026-09-08-extract-full-split-03.yaml. gpu_c=9.0 is only a floor, so pin.
+  gpu_type: H200
