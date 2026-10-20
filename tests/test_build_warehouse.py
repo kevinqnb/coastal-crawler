@@ -100,7 +100,19 @@ def _insert_extraction(
     page_number: int | None = None,
     confidence: float | None = None,
     probe_score: float | None = None,
+    parse: dict[str, Any] | None = None,
+    with_parse: bool = True,
 ) -> int:
+    """Insert one extraction row. By default the row carries a model parse
+    (scholarlm's `_parse_quantities` fields) of a plain point value equal to
+    ``data["value"]``; ``parse`` overrides individual fields, and
+    ``with_parse=False`` omits all seven (a failed parse call)."""
+    if with_parse:
+        data = {
+            "qualifiers": [], "point_value": data.get("value"), "lower": None, "upper": None,
+            "list_values": None, "tolerance": None, "standard_deviation": None,
+            **data, **(parse or {}),
+        }
     with Session(engine) as s:
         ext = Extraction(
             paper_id=paper_id,
@@ -144,7 +156,7 @@ def _tables(warehouse_path: Path) -> dict[str, list[tuple]]:
         return {
             t: con.execute(f"SELECT * FROM {t}").fetchall()
             for t in (
-                "paper_dim", "entity_dim", "event_dim", "qualifier_dim",
+                "paper_dim", "entity_dim", "event_dim",
                 "model_dim", "extractions_fact", "attribution_fact",
             )
         }
@@ -166,21 +178,26 @@ class TestBuildWarehouseEndToEnd:
         assert len(tables["extractions_fact"]) == 1
         fact = tables["extractions_fact"][0]
         assert fact[6] == "salinity"  # attribute
-        assert fact[9] == pytest.approx(28.4)  # quantity_canonical
+        assert fact[7] == "28.4"  # quantity_raw
+        assert fact[8] == "psu"  # units_raw
+        assert fact[9] == []  # qualifiers
+        assert fact[10] == "28.4"  # point_value
+        assert fact[11:16] == (None, None, None, None, None)  # lower, upper, list_values, tolerance, sd
 
-    def test_malformed_row_does_not_crash_and_appears_in_report(
+    def test_row_without_model_parse_does_not_crash_and_appears_in_report(
         self, warehouse_db: tuple[Engine, Path]
     ) -> None:
-        """A deliberately malformed fixture row (garbage value) doesn't
-        crash the run and appears in the skip report — done_when item 6's
-        skip-and-log behavior test."""
+        """A row whose parse call failed (none of the seven parsed fields
+        present) doesn't crash the run and appears in the skip report —
+        done_when item 6's skip-and-log behavior test."""
         engine, warehouse_path = warehouse_db
         paper_id = _make_paper(engine)
         good_id = _insert_extraction(
             engine, paper_id, {"attribute": "salinity", "value": "28.4", "units": "psu"}
         )
         bad_id = _insert_extraction(
-            engine, paper_id, {"attribute": "salinity", "value": "not-a-number-at-all", "units": "psu"}
+            engine, paper_id, {"attribute": "salinity", "value": "28.4", "units": "psu"},
+            with_parse=False,
         )
 
         build_warehouse.main()  # must not raise
@@ -193,7 +210,7 @@ class TestBuildWarehouseEndToEnd:
         records = [json.loads(line) for line in report_path.read_text().splitlines()]
         assert len(records) == 1
         assert records[0]["extraction_id"] == bad_id
-        assert records[0]["reason"] == "unparseable_value"
+        assert records[0]["reason"] == "missing_parse"
 
     def test_unknown_attribute_skips_and_logs(self, warehouse_db: tuple[Engine, Path]) -> None:
         engine, warehouse_path = warehouse_db
@@ -208,35 +225,40 @@ class TestBuildWarehouseEndToEnd:
         records = [json.loads(line) for line in report_path.read_text().splitlines()]
         assert records[0]["reason"] == "unknown_attribute"
 
-    def test_unknown_unit_skips_and_logs(self, warehouse_db: tuple[Engine, Path]) -> None:
+    def test_partial_parse_fields_fail_loud(self, warehouse_db: tuple[Engine, Path]) -> None:
+        engine, _ = warehouse_db
+        paper_id = _make_paper(engine)
+        _insert_extraction(
+            engine, paper_id,
+            {"attribute": "salinity", "value": "5", "units": "psu", "qualifiers": []},
+            with_parse=False,
+        )
+
+        with pytest.raises(ValueError, match="partial parsed-quantity fields"):
+            build_warehouse.main()
+
+    def test_every_parsed_field_and_raw_units_carry_through_unconverted(
+        self, warehouse_db: tuple[Engine, Path]
+    ) -> None:
         engine, warehouse_path = warehouse_db
         paper_id = _make_paper(engine)
         _insert_extraction(
-            engine, paper_id, {"attribute": "salinity", "value": "5", "units": "mS/cm"}
+            engine, paper_id,
+            {"attribute": "dissolved_inorganic_carbon", "value": "1.5 (1-2), SD 0.2", "units": "mmol/kg"},
+            parse={
+                "qualifiers": ["IsMean", "IsRange", "HasSD"],
+                "point_value": 1.5, "lower": "1", "upper": 2,
+                "list_values": ["a", 3], "tolerance": "95% CI: 1-2", "standard_deviation": "0.2",
+            },
         )
 
         build_warehouse.main()
 
-        tables = _tables(warehouse_path)
-        assert tables["extractions_fact"] == []
-        report_path = warehouse_path.with_name(warehouse_path.name + ".skip_report.jsonl")
-        records = [json.loads(line) for line in report_path.read_text().splitlines()]
-        assert records[0]["reason"] == "unknown_unit"
-
-    def test_known_unit_conversion_succeeds(self, warehouse_db: tuple[Engine, Path]) -> None:
-        engine, warehouse_path = warehouse_db
-        paper_id = _make_paper(engine)
-        _insert_extraction(
-            engine, paper_id, {"attribute": "dissolved_inorganic_carbon", "value": "1", "units": "mmol/kg"}
-        )
-
-        build_warehouse.main()
-
-        tables = _tables(warehouse_path)
-        assert len(tables["extractions_fact"]) == 1
-        fact = tables["extractions_fact"][0]
-        assert fact[9] == pytest.approx(1000.0)  # quantity_canonical: mmol/kg -> µmol/kg
-        assert fact[10] == "µmol/kg"  # units_canonical
+        fact = _tables(warehouse_path)["extractions_fact"][0]
+        assert fact[7] == "1.5 (1-2), SD 0.2"  # quantity_raw
+        assert fact[8] == "mmol/kg"  # units_raw: NOT converted to µmol/kg
+        assert fact[9] == ["IsMean", "IsRange", "HasSD"]
+        assert fact[10:16] == ("1.5", "1", "2", ["a", "3"], "95% CI: 1-2", "0.2")
 
     def test_two_nearby_rows_resolve_to_one_entity(self, warehouse_db: tuple[Engine, Path]) -> None:
         engine, warehouse_path = warehouse_db
@@ -306,14 +328,14 @@ class TestBuildWarehouseEndToEnd:
         tables = _tables(warehouse_path)
         assert len(tables["extractions_fact"]) == 1
         fact = tables["extractions_fact"][0]
-        assert fact[12] == 3  # page_number
-        assert fact[13] == pytest.approx(0.87)  # confidence
+        assert fact[16] == 3  # page_number
+        assert fact[17] == pytest.approx(0.87)  # confidence
 
     def test_duplicate_fact_rows_collapse_and_appear_in_skip_report(
         self, warehouse_db: tuple[Engine, Path]
     ) -> None:
         """Two source rows that would produce an identical fact row (same
-        paper/entity/event/attribute/quantity/units/qualifier/page/
+        paper/entity/event/attribute/raw value/units/parsed fields/page/
         confidence) collapse to one — the highest source extraction id
         survives, the other is skip-and-logged as duplicate_fact_row. Two
         rows with different `page_number` are NOT duplicates — they're kept
@@ -371,8 +393,8 @@ class TestBuildWarehouseEndToEnd:
         tables = _tables(warehouse_path)
         assert len(tables["extractions_fact"]) == 1
         fact = tables["extractions_fact"][0]
-        assert fact[13] == pytest.approx(1.07e-6)  # confidence
-        assert fact[14] == pytest.approx(3.25e-12)  # probe_score
+        assert fact[17] == pytest.approx(1.07e-6)  # confidence
+        assert fact[18] == pytest.approx(3.25e-12)  # probe_score
 
     def test_attributions_load_into_attribution_fact(
         self, warehouse_db: tuple[Engine, Path]
