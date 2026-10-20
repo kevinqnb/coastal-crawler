@@ -80,15 +80,18 @@ print(config.get('params', {}).get('gpu_type', '') or '')
 # repr (RepresentationLM, no vLLM server — in-process nnsight like judge) has no
 # legacy precedent. GPU_MEMORY=32G follows scholarlm's own Llama-3.1-8B
 # representation_lm config (an 8B bf16 model is ~16GB plus activations for
-# ~20K-token papers); GPU_C=8.0 is the floor for bf16. H_RT=12:00:00 is an
-# UNVALIDATED placeholder — set it from the smoke run's measured per-paper time.
+# ~20K-token papers); GPU_C=8.0 is the floor for bf16. H_RT=24:00:00 was chosen
+# by the user with wide margin: the smoke/tiny runs (7 papers) measured ~4-6 s per
+# paper after ~20-25 s of model load, i.e. roughly 4-5.5 h for the 3,075-paper
+# corpus. The stage is resumable (pending rows stay queued; see
+# requeue-repr-processing), so a too-short limit would not lose finished work.
 case "$STAGE" in
     filter)      ROLE=FILTER;      H_RT=2:00:00;  GPU_MEMORY=8G;  GPU_C=7.0 ;;
     ocr)         ROLE=DOC_LM;      H_RT=72:00:00; GPU_MEMORY=24G; GPU_C=7.0 ;;
     table_clean) ROLE=TABLE_CLEAN; H_RT=48:00:00; GPU_MEMORY=80G; GPU_C=8.0 ;;
     extract)     ROLE=MEAS_LM;     H_RT=24:00:00; GPU_MEMORY=80G; GPU_C=9.0 ;;
     judge)       ROLE=JUDGE;       H_RT=24:00:00; GPU_MEMORY=80G; GPU_C=9.0 ;;
-    repr)        ROLE=REPR_LM;     H_RT=12:00:00; GPU_MEMORY=32G; GPU_C=8.0 ;;
+    repr)        ROLE=REPR_LM;     H_RT=24:00:00; GPU_MEMORY=32G; GPU_C=8.0 ;;
     *)
         echo "Error: configs/${ID}.yaml params.stage must be filter, ocr, table_clean, extract, judge, or repr (got '$STAGE')." >&2
         exit 1
