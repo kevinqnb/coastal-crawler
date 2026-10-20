@@ -1,17 +1,19 @@
 id: 2026-10-19-repr-llama31-8b-smoke-01
 project: coastal-crawler
 description: >
-  RepresentationLM smoke test (staged-gate rung 2): the single lowest-id
-  paper, 49 terms (coastal-terms-01), layers 0 and 32, float32. Confirms
-  plumbing only (model load, one forward pass, shard write, DB transition).
+  RepresentationLM smoke test (staged-gate rung 2): the 2 lowest-id eligible
+  papers (72 and 75), 49 terms (coastal-terms-01), layers 0 and 32, float32.
+  Paper 72 has no term occurrences (empty-shard path); paper 75 has 15 (a real
+  forward pass). One paper alone would never reach the model. Confirms
+  plumbing only (model load, forward pass, shard write, DB transition).
   Needs scholarlm >= 604bb0d (layers= arg) and a GPU shell.
 seed: 342
 params:
   stage: repr
   terms_file: configs/repr-terms/coastal-terms-01.txt
   source_statuses: [table_clean_done, processing, extracted, failed]
-  max_papers: 1
-  batch_size: 1
+  max_papers: 2
+  batch_size: 2
   env:
     REPR_LM_MODEL: meta-llama/Llama-3.1-8B
     REPR_LM_LAYERS: "0,32"
