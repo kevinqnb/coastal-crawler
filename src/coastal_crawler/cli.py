@@ -443,6 +443,84 @@ def requeue_table_clean_failed() -> None:
     typer.echo(f"Requeued {count} table_clean_failed paper(s) for table-clean retry.")
 
 
+def _read_terms(terms_file: str) -> list[str]:
+    from coastal_crawler.repr_worker import read_terms
+
+    return read_terms(terms_file)
+
+
+@app.command(name="repr-seed")
+def repr_seed(
+    run_id: str = typer.Option(..., "--run-id", help="Representation run id (the experiment id)."),
+    terms_file: str = typer.Option(..., "--terms-file", help="Text file, one search term per line."),
+    source_status: list[str] = typer.Option(
+        ..., "--source-status", help="papers.status value(s) to include (repeatable), e.g. table_clean_done, processing, extracted, failed."
+    ),
+    max_papers: Optional[int] = typer.Option(None, "--max-papers", help="Seed only the N lowest-id qualifying papers (smoke/tiny runs). Omit for all."),
+) -> None:
+    """Create pending repr queue rows for papers in the given statuses (idempotent)."""
+    from coastal_crawler.config import get_settings
+    from coastal_crawler.repr_worker import seed_repr
+
+    settings = get_settings()
+    assert settings.repr_lm_model and settings.repr_lm_text_dir, "REPR_LM_MODEL and REPR_LM_TEXT_DIR must be set"
+    n = seed_repr(run_id, settings.repr_lm_model, _read_terms(terms_file), settings.repr_lm_text_dir, source_status, max_papers)
+    typer.echo(f"Seeded {n} new pending row(s) for run {run_id}.")
+
+
+@app.command(name="repr")
+def repr_cmd(
+    run_id: str = typer.Option(..., "--run-id", help="Representation run id (the experiment id)."),
+    terms_file: str = typer.Option(..., "--terms-file", help="Text file, one search term per line."),
+) -> None:
+    """Collect RepresentationLM term embeddings for every pending paper of a run, writing shards to REPR_DIR."""
+    from coastal_crawler.adapter import build_repr_adapter
+    from coastal_crawler.config import get_settings
+    from coastal_crawler.repr_worker import run_repr_worker
+
+    settings = get_settings()
+    assert settings.repr_lm_text_dir, "REPR_LM_TEXT_DIR must be set"
+    adapter = build_repr_adapter(settings)
+    done, failed, zero = run_repr_worker(
+        run_id=run_id,
+        adapter=adapter,
+        terms=_read_terms(terms_file),
+        text_dir=settings.repr_lm_text_dir,
+        repr_dir=settings.repr_dir,
+        store_dtype=settings.repr_lm_store_dtype,
+        batch_size=settings.repr_lm_batch_size,
+    )
+    typer.echo(f"Collected {done} paper(s) ({zero} with no term occurrences), failed {failed}.")
+
+
+@app.command(name="repr-index")
+def repr_index(
+    run_id: str = typer.Option(..., "--run-id", help="Representation run id (the experiment id)."),
+) -> None:
+    """Write REPR_DIR/<run_id>/index.parquet from the run's shards, reconciled against the DB."""
+    from coastal_crawler.config import get_settings
+    from coastal_crawler.repr_worker import build_index
+
+    n = build_index(run_id, get_settings().repr_dir)
+    typer.echo(f"Indexed {n} occurrence(s).")
+
+
+@app.command(name="requeue-repr-processing")
+def requeue_repr_processing(run_id: str = typer.Option(..., "--run-id")) -> None:
+    """Reset a run's rows stuck in 'processing' back to 'pending' (use after a killed repr job)."""
+    from coastal_crawler.repr_worker import requeue_repr_processing as _requeue
+
+    typer.echo(f"Requeued {_requeue(run_id)} stranded row(s).")
+
+
+@app.command(name="requeue-repr-failed")
+def requeue_repr_failed(run_id: str = typer.Option(..., "--run-id")) -> None:
+    """Reset a run's 'failed' rows back to 'pending' so they are retried."""
+    from coastal_crawler.repr_worker import requeue_repr_failed as _requeue
+
+    typer.echo(f"Requeued {_requeue(run_id)} failed row(s).")
+
+
 @app.command()
 def requeue_filtering() -> None:
     """Reset papers stuck in 'filtering' back to 'discovered' (use after a killed job)."""
@@ -537,8 +615,8 @@ def reset_pipeline(
 ) -> None:
     """DB-side reset of everything downstream of the filter stage, back to 'relevant'.
 
-    Deletes all extraction results (plus attributions, votes, and cached
-    paper_ocr_context rows) and resets every ocr_*/table_clean_*/processing/
+    Deletes all extraction results (plus attributions, votes, cached
+    paper_ocr_context rows, and paper_representations queue rows) and resets every ocr_*/table_clean_*/processing/
     extracted/failed paper back to 'relevant', so OCR, table-cleaning, and
     extraction all re-run from scratch. Discovery and filter results
     ('discovered'/'filtering'/'relevant'/'irrelevant'/'inaccessible' papers)
@@ -556,7 +634,8 @@ def reset_pipeline(
     if not yes:
         typer.confirm(
             "This will permanently delete ALL extraction results, attribution "
-            "rows, site-visitor votes, and cached OCR-context rows, and reset "
+            "rows, site-visitor votes, cached OCR-context rows, and repr queue "
+            "rows (paper_representations), and reset "
             "every ocr_*/table_clean_*/processing/extracted/failed paper back "
             "to 'relevant'. Filter/discovery results are untouched. This does "
             "NOT delete OCR_DIR/TABLE_CLEAN_DIR files on disk — do that "
@@ -565,12 +644,13 @@ def reset_pipeline(
         )
 
     with get_session() as session:
-        attributions, votes, extractions, ocr_context, reset = store.reset_pipeline(session)
+        attributions, votes, extractions, ocr_context, repr_rows, reset = store.reset_pipeline(session)
     typer.echo(
         f"Deleted {extractions} extraction row(s), {attributions} attribution row(s), "
-        f"{votes} vote(s), {ocr_context} cached OCR-context row(s); reset {reset} "
+        f"{votes} vote(s), {ocr_context} cached OCR-context row(s), {repr_rows} "
+        f"representation queue row(s); reset {reset} "
         f"paper(s) back to 'relevant'.\n"
-        f"OCR_DIR/TABLE_CLEAN_DIR files were NOT deleted — do that separately."
+        f"OCR_DIR/TABLE_CLEAN_DIR/REPR_DIR files were NOT deleted — do that separately."
     )
 
 

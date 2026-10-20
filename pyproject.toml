@@ -20,6 +20,7 @@ dependencies = [
     # JudgementLM/attribution.py.
     "nnsight==0.5.11",
     "nnterp>=1.2.1",
+    "numpy>=1.26",
     "openai>=1.0",
     "pillow>=10.0",
     "psycopg2-binary>=2.9",

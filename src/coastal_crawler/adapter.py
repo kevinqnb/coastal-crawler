@@ -737,3 +737,146 @@ def build_judge(settings: "Settings") -> JudgeComponents:
         attribution_methods=attribution_methods,
         instructions_prompt=settings.judge_instructions_prompt,
     )
+
+
+# ---------------------------------------------------------------------------
+# Representation stage — term embeddings via scholarlm.RepresentationLM
+# ---------------------------------------------------------------------------
+
+def parse_layers(csv: str) -> list[int]:
+    """Parse REPR_LM_LAYERS ("0,32") into a sorted, duplicate-free int list; raises on junk."""
+    layers = [int(x) for x in csv.split(",") if x.strip()]
+    if not layers or len(set(layers)) != len(layers) or any(L < 0 for L in layers):
+        raise ValueError(f"invalid REPR_LM_LAYERS {csv!r}")
+    return sorted(layers)
+
+
+@dataclass
+class ReprResult:
+    """Term-occurrence embeddings for ONE document, as parallel arrays.
+
+    ``representations`` maps layer index -> ``[n, hidden]`` array (float32 from
+    the real model), every layer with the same ``n`` rows in the same order as
+    the provenance arrays. ``n`` may be 0 — a paper that never mentions any
+    term is a legitimate result, not an error. ``n_truncated`` is
+    RepresentationLM's tail-truncation count for the document (0 or 1); the
+    worker treats nonzero as a failure.
+    """
+
+    representations: dict[int, Any]  # layer -> np.ndarray [n, hidden]
+    labels: Any  # np.ndarray[str] [n]
+    char_starts: Any  # np.ndarray[int64] [n]
+    char_ends: Any  # np.ndarray[int64] [n]
+    token_indices: Any  # np.ndarray[int64] [n]
+    n_truncated: int
+    hidden_size: int
+
+
+@runtime_checkable
+class ReprAdapter(Protocol):
+    """Collects embeddings of ``terms`` for one document at ``layers``."""
+
+    hidden_size: int
+    layers: list[int]
+
+    def collect(self, doc_id: str, text: str, terms: list[str]) -> ReprResult: ...
+
+
+class StubReprAdapter:
+    """Deterministic fake for tests: regex-matches terms the same way
+    RepresentationLM does (via its own ``find_key_term_occurrences``) and
+    emits tiny, hand-checkable embeddings (value = char_start/1000 + layer),
+    so tests can check counts, spans, shapes and layer handling without a GPU."""
+
+    def __init__(self, hidden_size: int = 4, layers: list[int] | None = None) -> None:
+        self.hidden_size = hidden_size
+        self.layers = [0, 32] if layers is None else layers
+
+    def collect(self, doc_id: str, text: str, terms: list[str]) -> ReprResult:
+        import numpy as np
+        from scholarlm.representationlm import find_key_term_occurrences
+
+        occ = find_key_term_occurrences(text, terms)
+        n = len(occ)
+        starts = np.asarray([s for _, s, _ in occ], dtype=np.float32)
+        reps = {
+            L: np.repeat((starts / 1000.0 + L)[:, None], self.hidden_size, axis=1).astype(np.float32)
+            for L in self.layers
+        }
+        return ReprResult(
+            representations=reps,
+            labels=np.asarray([t for t, _, _ in occ], dtype="U"),
+            char_starts=np.asarray([s for _, s, _ in occ], dtype=np.int64),
+            char_ends=np.asarray([e for _, _, e in occ], dtype=np.int64),
+            token_indices=np.arange(n, dtype=np.int64),
+            n_truncated=0,
+            hidden_size=self.hidden_size,
+        )
+
+
+class DirectReprAdapter:
+    """Wraps ``scholarlm.RepresentationLM`` (local nnsight model; needs the
+    multi-layer API, scholarlm >= 604bb0d)."""
+
+    def __init__(self, model: Any) -> None:
+        self._model = model
+        self.hidden_size: int = model.hidden_size
+        self.layers: list[int] = list(model.layers)
+
+    def collect(self, doc_id: str, text: str, terms: list[str]) -> ReprResult:
+        import numpy as np
+        from scholarlm.representationlm import find_key_term_occurrences
+
+        # RepresentationLM.collect() raises when NO term occurs in the
+        # document ("nothing to collect"). For a single paper that is a
+        # legitimate zero-occurrence result, so detect it up front with the
+        # same matcher the model uses, instead of catching the RuntimeError
+        # (which could mask a real failure).
+        if not find_key_term_occurrences(text, terms):
+            return ReprResult(
+                representations={L: np.zeros((0, self.hidden_size), dtype=np.float32) for L in self.layers},
+                labels=np.asarray([], dtype="U"),
+                char_starts=np.asarray([], dtype=np.int64),
+                char_ends=np.asarray([], dtype=np.int64),
+                token_indices=np.asarray([], dtype=np.int64),
+                n_truncated=0,
+                hidden_size=self.hidden_size,
+            )
+        out = self._model.collect({doc_id: text}, terms)
+        assert sorted(out["representations"]) == self.layers, (sorted(out["representations"]), self.layers)
+        return ReprResult(
+            representations=out["representations"],
+            labels=out["labels"],
+            char_starts=out["char_starts"],
+            char_ends=out["char_ends"],
+            token_indices=out["token_indices"],
+            n_truncated=int(self._model.n_truncated),
+            hidden_size=self.hidden_size,
+        )
+
+
+def build_repr_adapter(settings: "Settings") -> DirectReprAdapter:
+    """Construct the production ReprAdapter from Settings.
+
+    Raises RuntimeError if REPR_LM_MODEL is unset, or if no CUDA device is
+    visible — ``RepresentationLM`` silently falls back to CPU, which for an 8B
+    model over ~3k papers would be a (very slow) silent fallback, so this
+    refuses instead (CLAUDE.md: no silent fallbacks). Passing ``layers=``
+    requires the multi-layer scholarlm (>= 604bb0d); on the older pin it
+    fails with a TypeError rather than silently collecting only the last layer.
+    """
+    if not settings.repr_lm_model:
+        raise RuntimeError("REPR_LM_MODEL must be configured to run representation collection.")
+
+    import torch
+    from scholarlm.representationlm import RepresentationLM
+
+    if not torch.cuda.is_available():
+        raise RuntimeError("repr stage requires a CUDA GPU; torch.cuda.is_available() is False.")
+    torch.manual_seed(settings.repr_lm_seed)
+    model = RepresentationLM(
+        model_name=settings.repr_lm_model,
+        layers=parse_layers(settings.repr_lm_layers),
+        nnsight_kwargs={"torch_dtype": getattr(torch, settings.repr_lm_dtype)},
+    )
+    return DirectReprAdapter(model)

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from functools import lru_cache
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import Field, field_validator
 from pydantic_settings import (
@@ -531,6 +531,62 @@ class Settings(BaseSettings):
         ),
     )
 
+    # ------------------------------------------------------------- Representations
+    repr_lm_model: str | None = Field(
+        default=None,
+        description=(
+            "HuggingFace model id for scholarlm.RepresentationLM (must be a base, "
+            "non-instruct model, e.g. meta-llama/Llama-3.1-8B). Loaded locally "
+            "via nnsight in the repr process — there is no vLLM server for this "
+            "role, so REPR_LM_* has no port/TP/SIF settings."
+        ),
+    )
+    repr_lm_dtype: str = Field(
+        default="bfloat16",
+        description="torch dtype name passed to RepresentationLM's nnsight_kwargs as torch_dtype.",
+    )
+    repr_lm_seed: int = Field(
+        default=0,
+        description="Passed to torch.manual_seed before model load; forward passes are otherwise deterministic.",
+    )
+    repr_lm_layers: str = Field(
+        default="0,32",
+        description=(
+            "Comma-separated layer indices RepresentationLM collects in one pass "
+            "(scholarlm >= 604bb0d): 0 = token embeddings (context-independent "
+            "baseline), 1..n-1 = post-block residual, n (32 for Llama-3.1-8B) = "
+            "post-final-norm. Row norms are not comparable between layer 32 and "
+            "the rest."
+        ),
+    )
+    repr_lm_store_dtype: Literal["float16", "float32"] = Field(
+        default="float32",
+        description=(
+            "On-disk dtype of the stored embeddings. RepresentationLM returns "
+            "float32; the cast to this dtype is explicit and finiteness-checked "
+            "in repr_worker.py."
+        ),
+    )
+    repr_lm_batch_size: int = Field(
+        default=8,
+        description="Papers claimed per claim_batch_for_repr transaction. Papers are run through RepresentationLM one at a time within a batch.",
+    )
+    repr_lm_text_dir: str | None = Field(
+        default=None,
+        description=(
+            "Directory of {paper_id}.txt files to collect representations from. "
+            "Must be set explicitly (e.g. data/table_clean or data/ocr) — "
+            "never inferred from table_clean_dir/ocr_dir."
+        ),
+    )
+    repr_dir: str = Field(
+        default="data/representations",
+        description=(
+            "Root directory for representation outputs: REPR_DIR/<run_id>/"
+            "shards/{paper_id}.npz plus REPR_DIR/<run_id>/index.parquet."
+        ),
+    )
+
     # ------------------------------------------------------------- OCR
     ocr_dir: str = Field(
         default="data/ocr",
@@ -634,6 +690,8 @@ class Settings(BaseSettings):
         "table_clean_max_model_len",
         "table_clean_quantization",
         "table_clean_sif_path",
+        "repr_lm_model",
+        "repr_lm_text_dir",
         mode="before",
     )
     @classmethod

@@ -815,9 +815,19 @@ class TestResetPipeline:
         paper_id = db_session.scalars(select(Paper.id)).one()
         store.insert_extraction(paper_id, make_extraction_result(), db_session)
         store.insert_extraction(paper_id, make_extraction_result(), db_session)
-        _, _, deleted, _, _ = store.reset_pipeline(db_session)
+        _, _, deleted, _, _, _ = store.reset_pipeline(db_session)
         assert deleted == 2
         assert db_session.scalar(select(func.count(Extraction.id))) == 0
+
+    def test_deletes_repr_queue_rows_but_requeue_ocr_keeps_them(self, db_session: Session) -> None:
+        store.upsert_papers([make_paper(status="extracted")], db_session)
+        paper_id = db_session.scalars(select(Paper.id)).one()
+        store.seed_repr_queue("run1", "m", "h", [paper_id], db_session)
+        store.requeue_ocr(db_session)  # like extractions, repr rows are historical records
+        assert store.repr_status_counts("run1", db_session) == {"pending": 1}
+        *_, repr_rows, _ = store.reset_pipeline(db_session)
+        assert repr_rows == 1
+        assert store.repr_status_counts("run1", db_session) == {}
 
     def test_deletes_attributions_votes_and_paper_ocr_context(self, db_session: Session) -> None:
         store.upsert_papers([make_paper(status="extracted")], db_session)
@@ -827,7 +837,7 @@ class TestResetPipeline:
         store.record_vote(db_session, extraction.id, True, "voter-1")
         store.upsert_paper_ocr_context(paper_id, "the full ocr text", db_session)
 
-        attributions, votes, deleted, ocr_context, _ = store.reset_pipeline(db_session)
+        attributions, votes, deleted, ocr_context, _, _ = store.reset_pipeline(db_session)
         assert (attributions, votes, deleted, ocr_context) == (1, 1, 1, 1)
         assert db_session.scalar(select(func.count(Attribution.id))) == 0
         assert db_session.scalar(select(func.count(Vote.id))) == 0
