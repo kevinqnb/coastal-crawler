@@ -235,6 +235,23 @@ class Settings(BaseSettings):
         default=4,
         description="Maximum concurrent extraction API calls the client sends at once (client-side concurrency, not a vLLM server flag). Was hardcoded to 1.",
     )
+    meas_lm_parse_quantities_context: Literal["full", "value_only"] = Field(
+        default="full",
+        description=(
+            "scholarlm.MeasurementLM parse_quantities_context: what _parse_quantities() shows "
+            "the model. 'full' (scholarlm's default) = source text + entity/attribute "
+            "description + units + value; 'value_only' = the extracted value string alone."
+        ),
+    )
+    meas_lm_standardize_context: Literal["full", "value_only"] = Field(
+        default="full",
+        description=(
+            "scholarlm.MeasurementLM standardize_context: what _standardize() shows the model. "
+            "'full' (scholarlm's default) = source text + entity/attribute description + "
+            "terminology + available units + value/units; 'value_only' = available units + "
+            "extracted value/units only."
+        ),
+    )
     meas_lm_temperature: float = Field(
         default=0.90,
         description=(

@@ -22,6 +22,7 @@ from scholarlm import DocumentLM, MeasurementLM, TableCleaner
 from scholarlm.attribution import AttributionMethod, ContrastiveGradientAttribution, ProbeAttribution
 from scholarlm.instruction_prompts import DIRECT_TRIPLE_EXTRACTION_INSTRUCTIONS
 from scholarlm.judgementlm import JudgementLM
+from scholarlm.measurementlm import ContextLengthExceededError
 
 log = structlog.get_logger(__name__)
 
@@ -344,6 +345,29 @@ def _count_prompt_tokens(tokenizer: _Tokenizer, direct_extraction_prompt: str, c
     )
 
 
+#: Completion tokens scholarlm's direct-extraction call always requests
+#: (``max_tokens=32768`` hardcoded in ``MeasurementLM._extract_triples``,
+#: scholarlm/measurementlm.py). vLLM rejects a request whose prompt plus
+#: requested completion exceeds ``--max-model-len``, so the truncation
+#: backstop must leave this much of the context window free. Not tunable from
+#: here; tests/test_adapter.py asserts it still matches the installed
+#: scholarlm so a pin bump that changes it fails loudly.
+SCHOLARLM_EXTRACT_MAX_TOKENS = 32768
+
+
+#: ``response_format["json_schema"]["name"]`` of the per-document extraction
+#: call in scholarlm's ``MeasurementLM._extract_triples``; the other steps use
+#: ``standardize_response`` and ``parse_quantity_response``. Asserted against
+#: the installed scholarlm in tests/test_adapter.py.
+DIRECT_EXTRACTION_FORMAT_NAME = "direct_extraction_list"
+
+
+def _format_name(response_format: dict[str, Any] | None) -> str:
+    if response_format is None:
+        return "<no response_format>"
+    return str(response_format["json_schema"]["name"])
+
+
 def _truncate_context_to_budget(
     tokenizer: _Tokenizer,
     direct_extraction_prompt: str,
@@ -407,19 +431,60 @@ class DirectMeasurementAdapter:
         model_version: str,
         tokenizer: _Tokenizer,
         max_model_len: int,
+        reserved_completion_tokens: int,
         lat_field: str | None = None,
         lon_field: str | None = None,
     ) -> None:
+        if max_model_len <= reserved_completion_tokens:
+            raise ValueError(
+                f"max_model_len={max_model_len} leaves no room for a prompt after "
+                f"reserving reserved_completion_tokens={reserved_completion_tokens} "
+                f"for the completion."
+            )
         self.meas_lm = meas_lm
         self.schema_name = schema_name
         self.model_version = model_version
         self.tokenizer = tokenizer
         self.max_model_len = max_model_len
+        self.reserved_completion_tokens = reserved_completion_tokens
         self.lat_field = lat_field
         self.lon_field = lon_field
+        # scholarlm's _call_batch retries a response that is empty or fails
+        # its validator, and after the last retry hands back the bad response
+        # anyway; _extract_triples then substitutes an empty item list (a
+        # print, no exception), so a paper whose extraction call never
+        # produced a valid response is indistinguishable from one with
+        # nothing to extract. This wrapper re-applies _call_batch's own
+        # failure test to each final response and records which calls
+        # exhausted their retries, per step.
+        self.exhausted_calls: dict[str, set[int]] = {}
+        self._call_batch_original = meas_lm._call_batch
+        meas_lm._call_batch = self._recording_call_batch
         # Batch-local indices truncated by the backstop in the most recent
         # extract_batch() call — see MeasurementAdapter's docstring.
         self.truncated_docs: set[int] = set()
+
+    def _recording_call_batch(
+        self, message_sets: list[Any], *args: Any, **kwargs: Any
+    ) -> list[Any]:
+        results: list[Any] = self._call_batch_original(message_sets, *args, **kwargs)
+        assert len(results) == len(message_sets), (
+            f"_call_batch returned {len(results)} responses for {len(message_sets)} requests"
+        )
+        validator = kwargs.get("validator")
+        name = _format_name(kwargs.get("response_format"))
+        for i, resp in enumerate(results):
+            if isinstance(resp, ContextLengthExceededError):
+                continue  # tracked separately via context_length_exceeded_docs
+            exhausted = not resp
+            if not exhausted and validator is not None:
+                try:
+                    validator(resp)
+                except Exception:  # noqa: BLE001 - same failure test _call_batch applies; recorded, surfaced in extract_batch
+                    exhausted = True
+            if exhausted:
+                self.exhausted_calls.setdefault(name, set()).add(i)
+        return results
 
     def extract_batch(self, ocr_texts: list[str]) -> list[DocumentOutcome]:
         # MeasurementLM.fit() in extraction_mode="direct" runs two LLM calls
@@ -438,10 +503,11 @@ class DirectMeasurementAdapter:
             "needs the same prompt text the server will actually receive."
         )
 
+        prompt_token_limit = self.max_model_len - self.reserved_completion_tokens
         processed_texts: list[str] = []
         for i, text in enumerate(ocr_texts):
             truncated_text, was_truncated = _truncate_context_to_budget(
-                self.tokenizer, direct_extraction_prompt, text, self.max_model_len
+                self.tokenizer, direct_extraction_prompt, text, prompt_token_limit
             )
             if was_truncated:
                 self.truncated_docs.add(i)
@@ -450,10 +516,24 @@ class DirectMeasurementAdapter:
                     batch_index=i,
                     original_tokens=len(self.tokenizer.encode(text, add_special_tokens=False)),
                     max_model_len=self.max_model_len,
+                    prompt_token_limit=prompt_token_limit,
                 )
             processed_texts.append(truncated_text)
 
+        self.exhausted_calls = {}
         raw: list[dict[str, Any]] = self.meas_lm.fit(processed_texts)
+        extraction_exhausted = self.exhausted_calls.get(DIRECT_EXTRACTION_FORMAT_NAME, set())
+        for step, indices in self.exhausted_calls.items():
+            if step != DIRECT_EXTRACTION_FORMAT_NAME:
+                # Indices here are per-step request positions, not document
+                # ids. Standardize failures leave original units; parse
+                # failures leave the seven parsed keys absent (the warehouse
+                # skips and logs those as missing_parse).
+                log.warning(
+                    "extraction_followup_calls_exhausted_retries",
+                    step=step,
+                    count=len(indices),
+                )
 
         by_document: dict[int, list[dict[str, Any]]] = defaultdict(list)
         for record in raw:
@@ -482,6 +562,17 @@ class DirectMeasurementAdapter:
         results: list[DocumentOutcome] = []
         for i in range(len(ocr_texts)):
             records = by_document[i]
+            if i in extraction_exhausted:
+                assert not records, (
+                    f"document {i} has {len(records)} records although its extraction "
+                    f"call exhausted retries; batch positions no longer line up"
+                )
+                results.append(
+                    f"MeasurementLM extraction call for document {i} exhausted its "
+                    f"retries without a valid response (empty or failed validation); "
+                    f"zero records extracted."
+                )
+                continue
             if i in context_length_exceeded:
                 if not records:
                     results.append(
@@ -587,6 +678,8 @@ def build_measurement_adapter(settings: "Settings") -> DirectMeasurementAdapter:
         direct_extraction_schema=DirectExtractionSchema,
         direct_extraction_prompt=build_direct_extraction_prompt(settings.meas_lm_entity_identification_prompt),
         collect_attribute_terms=False,
+        parse_quantities_context=settings.meas_lm_parse_quantities_context,
+        standardize_context=settings.meas_lm_standardize_context,
         sampling_params={
             "temperature": settings.meas_lm_temperature,
             "top_p": settings.meas_lm_top_p,
@@ -614,6 +707,7 @@ def build_measurement_adapter(settings: "Settings") -> DirectMeasurementAdapter:
         ),
         tokenizer=tokenizer,
         max_model_len=settings.meas_lm_max_model_len,
+        reserved_completion_tokens=SCHOLARLM_EXTRACT_MAX_TOKENS,
         lat_field=settings.extraction_lat_field,
         lon_field=settings.extraction_lon_field,
     )
