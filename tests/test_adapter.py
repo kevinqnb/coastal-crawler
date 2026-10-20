@@ -188,17 +188,16 @@ class TestBuildTableCleanAdapterGuards:
 
 
 class TestBuildTableCleanAdapterConstruction:
-    def test_constructs_meas_lm_with_settings(self, mocker: Any) -> None:
-        meas_lm_cls = mocker.patch("coastal_crawler.adapter.MeasurementLM")
+    def test_constructs_table_cleaner_with_settings(self, mocker: Any) -> None:
+        cleaner_cls = mocker.patch("coastal_crawler.adapter.TableCleaner")
 
         build_table_clean_adapter(_fake_settings())
 
-        kwargs = meas_lm_cls.call_args.kwargs
+        kwargs = cleaner_cls.call_args.kwargs
         assert kwargs["model_name"] == "test-table-clean-model"
         assert kwargs["api_base"] == "http://localhost:8085/v1"
         assert kwargs["api_key"] == "EMPTY"
-        assert kwargs["clean_tables"] is False
-        assert kwargs["cleaned_ocr_output_dir"] is None
+        assert "output_dir" not in kwargs  # the worker writes cleaned text itself
         assert kwargs["sampling_params"] == {
             "temperature": 0.0,
             "top_p": 0.95,
@@ -208,47 +207,43 @@ class TestBuildTableCleanAdapterConstruction:
         }
 
     def test_returns_direct_table_clean_adapter(self, mocker: Any) -> None:
-        meas_lm_sentinel = mocker.MagicMock()
-        mocker.patch("coastal_crawler.adapter.MeasurementLM", return_value=meas_lm_sentinel)
+        cleaner_sentinel = mocker.MagicMock()
+        mocker.patch("coastal_crawler.adapter.TableCleaner", return_value=cleaner_sentinel)
 
         adapter = build_table_clean_adapter(_fake_settings())
 
         assert isinstance(adapter, DirectTableCleanAdapter)
-        assert adapter.meas_lm is meas_lm_sentinel
+        assert adapter.cleaner is cleaner_sentinel
 
 
 class TestDirectTableCleanAdapterCleanTablesBatch:
-    def test_calls_clean_tables_directly_not_fit(self) -> None:
-        """The whole point of this adapter is to call _clean_tables()
-        without running fit()'s full extraction pipeline."""
-        meas_lm = MagicMock()
-        meas_lm.context_length_exceeded_docs = set()
-        meas_lm._clean_tables.return_value = ["cleaned 0", "cleaned 1"]
-        adapter = DirectTableCleanAdapter(meas_lm=meas_lm)
+    def test_calls_clean(self) -> None:
+        cleaner = MagicMock()
+        cleaner.context_length_exceeded_docs = set()
+        cleaner.clean.return_value = ["cleaned 0", "cleaned 1"]
+        adapter = DirectTableCleanAdapter(cleaner=cleaner)
 
         result = adapter.clean_tables_batch(["doc 0", "doc 1"], ["/scratch/0", "/scratch/1"])
 
-        meas_lm._clean_tables.assert_called_once_with(["doc 0", "doc 1"], ["/scratch/0", "/scratch/1"])
-        meas_lm.fit.assert_not_called()
+        cleaner.clean.assert_called_once_with(["doc 0", "doc 1"], ["/scratch/0", "/scratch/1"])
         assert result == ["cleaned 0", "cleaned 1"]
 
     def test_resets_context_length_exceeded_docs_before_call(self) -> None:
-        """fit() resets this at the start of each call; since _clean_tables
-        is called directly (never fit()), the adapter must reset it itself
-        or a failure from a previous batch would leak into this one."""
-        meas_lm = MagicMock()
-        meas_lm.context_length_exceeded_docs = {0, 1}
-        meas_lm._clean_tables.return_value = ["cleaned"]
-        adapter = DirectTableCleanAdapter(meas_lm=meas_lm)
+        """TableCleaner only adds to this set, so the adapter must reset it
+        itself or a failure from a previous batch would leak into this one."""
+        cleaner = MagicMock()
+        cleaner.context_length_exceeded_docs = {0, 1}
+        cleaner.clean.return_value = ["cleaned"]
+        adapter = DirectTableCleanAdapter(cleaner=cleaner)
 
         adapter.clean_tables_batch(["doc"], ["/scratch/0"])
 
-        assert meas_lm.context_length_exceeded_docs == set()
+        assert cleaner.context_length_exceeded_docs == set()
 
     def test_context_length_exceeded_docs_property_reads_through(self) -> None:
-        meas_lm = MagicMock()
-        meas_lm.context_length_exceeded_docs = {2}
-        adapter = DirectTableCleanAdapter(meas_lm=meas_lm)
+        cleaner = MagicMock()
+        cleaner.context_length_exceeded_docs = {2}
+        adapter = DirectTableCleanAdapter(cleaner=cleaner)
         assert adapter.context_length_exceeded_docs == {2}
 
 

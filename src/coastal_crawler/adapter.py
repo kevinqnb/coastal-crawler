@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any, Protocol, cast, runtime_checkable
 
 import structlog
 from pydantic import BaseModel
-from scholarlm import DocumentLM, MeasurementLM
+from scholarlm import DocumentLM, MeasurementLM, TableCleaner
 from scholarlm.attribution import AttributionMethod, ContrastiveGradientAttribution, ProbeAttribution
 from scholarlm.instruction_prompts import DIRECT_TRIPLE_EXTRACTION_INSTRUCTIONS
 from scholarlm.judgementlm import JudgementLM
@@ -135,12 +135,6 @@ def build_ocr_adapter(settings: "Settings") -> DirectOCRAdapter:
 # Table-clean stage — OCR text + page images in, normalized OCR text out
 # ---------------------------------------------------------------------------
 
-class _UnusedTableCleanEntitySchema(BaseModel):
-    """Placeholder — MeasurementLM.__init__ requires entity_identification_schema
-    positionally, but the table-clean adapter only ever calls _clean_tables(),
-    which never touches entity/attribute extraction."""
-
-
 @runtime_checkable
 class TableCleanAdapter(Protocol):
     """Interface the table-clean worker calls. Lives in one place so it is easy to mock."""
@@ -185,34 +179,30 @@ class StubTableCleanAdapter:
 
 
 class DirectTableCleanAdapter:
-    """Calls scholarlm's MeasurementLM._clean_tables directly — NOT fit(),
-    which would also run the full extraction pipeline.
+    """Calls scholarlm's standalone ``TableCleaner.clean`` (scholarlm >= d40846c).
 
-    _clean_tables is a private (underscore-prefixed) method, not part of
-    scholarlm's public API contract — a future scholarlm release could
-    change or remove it with no deprecation path. This is an accepted,
-    explicit coupling risk, taken because it reuses scholarlm's
-    already-tested prompt/batching/splicing logic rather than
-    reimplementing it.
+    Before that commit table cleaning was the private
+    ``MeasurementLM._clean_tables``; ``TableCleaner.clean`` has the same inputs,
+    outputs, prompt (``CLEAN_TABLE_INSTRUCTIONS`` is byte-identical) and
+    call parameters, so cleaned text is expected to match earlier runs.
     """
 
-    def __init__(self, meas_lm: MeasurementLM) -> None:
-        self.meas_lm = meas_lm
+    def __init__(self, cleaner: TableCleaner) -> None:
+        self.cleaner = cleaner
 
     @property
     def context_length_exceeded_docs(self) -> set[int]:
         # scholarlm ships no py.typed marker, so this attribute is Any to
-        # mypy — cast to the type MeasurementLM.__init__ actually assigns
+        # mypy — cast to the type BatchLLMBase.__init__ actually assigns
         # (self.context_length_exceeded_docs: set[int] = set()).
-        return cast("set[int]", self.meas_lm.context_length_exceeded_docs)
+        return cast("set[int]", self.cleaner.context_length_exceeded_docs)
 
     def clean_tables_batch(self, documents: list[str], processed_pdf_dirs: list[str]) -> list[str]:
-        # fit() resets this at the start of each call; since we call
-        # _clean_tables directly (never fit()), we must reset it ourselves
-        # or a context-length failure from a previous batch would leak into
-        # this one's worker-side fail-loud check.
-        self.meas_lm.context_length_exceeded_docs = set()
-        result: list[str] = self.meas_lm._clean_tables(documents, processed_pdf_dirs)
+        # TableCleaner only ever adds to this set; reset it ourselves or a
+        # context-length failure from a previous batch would leak into this
+        # one's worker-side fail-loud check.
+        self.cleaner.context_length_exceeded_docs = set()
+        result: list[str] = self.cleaner.clean(documents, processed_pdf_dirs)
         return result
 
 
@@ -222,29 +212,19 @@ def build_table_clean_adapter(settings: "Settings") -> DirectTableCleanAdapter:
     Raises RuntimeError if TABLE_CLEAN_MODEL is missing (mirrors
     build_ocr_adapter's guard for DOC_LM_MODEL).
 
-    Constructs a MeasurementLM solely to reuse its _clean_tables() method —
-    entity_identification_prompt/schema/attribute_info_dict are required
-    positionally by MeasurementLM.__init__ but never used by _clean_tables,
-    so inert placeholders are passed. clean_tables=False and
-    cleaned_ocr_output_dir=None are both correct here regardless of value:
-    fit() (the only place either is read) is never called — the worker
+    ``TableCleaner.output_dir`` is left unset: the worker
     (table_clean_worker.py) writes cleaned text to disk itself, atomically.
 
     table_clean_max_concurrent is intentionally NOT a Settings field:
-    _clean_tables hardcodes max_concurrent=2 in its own _call_batch call,
-    ignoring MeasurementLM.max_concurrent for this code path — a
+    ``TableCleaner.clean`` hardcodes max_concurrent=2 in its own _call_batch
+    call, ignoring the constructor's max_concurrent for this code path — a
     TABLE_CLEAN_MAX_CONCURRENT setting would silently do nothing.
     """
     if not settings.table_clean_model:
         raise RuntimeError("TABLE_CLEAN_MODEL must be configured to run table cleaning.")
 
-    meas_lm = MeasurementLM(
+    cleaner = TableCleaner(
         model_name=settings.table_clean_model,
-        entity_identification_prompt="unused: table-clean adapter only calls _clean_tables",
-        entity_identification_schema=_UnusedTableCleanEntitySchema,
-        attribute_info_dict={},
-        clean_tables=False,
-        cleaned_ocr_output_dir=None,
         sampling_params={
             "temperature": settings.table_clean_temperature,
             "top_p": settings.table_clean_top_p,
@@ -255,7 +235,7 @@ def build_table_clean_adapter(settings: "Settings") -> DirectTableCleanAdapter:
         api_base=settings.table_clean_base_url,
         api_key=settings.table_clean_api_key,
     )
-    return DirectTableCleanAdapter(meas_lm=meas_lm)
+    return DirectTableCleanAdapter(cleaner=cleaner)
 
 
 # ---------------------------------------------------------------------------
