@@ -1,0 +1,31 @@
+id: 2026-10-20-extract-smoke-03
+project: coastal-crawler
+description: >
+  Rerun of 2026-10-20-extract-smoke-02 (Llama-3.1-8B-Instruct plumbing smoke)
+  with MEAS_LM_MAX_MODEL_LEN=81920, matching the production setting. -02 failed
+  all 3 papers with 400 context-length errors because it set the limit to
+  32768 while scholarlm's _extract_triples always requests max_tokens=32768,
+  leaving no room for any prompt. params.env did reach the server in -02
+  (served model and --max-model-len 32768 confirmed in its log), so that part
+  of the script fix is verified.
+
+  Same checks as -01's PREDICTION: extracted=3, failed=0, all seven parsed
+  keys on every extraction row, no document_partially_standardized warning,
+  missing_parse=0 after a build_warehouse run. Says nothing about
+  gpt-oss-120b; -01 still has to pass before any full run.
+
+  CLEANUP REQUIRED afterwards: writes real extractions rows (model_version
+  contains Llama-3.1-8B-Instruct) into the production DB; run
+  `coastal-crawler reset-extractions` once the checks are done.
+seed: 342
+params:
+  stage: extract
+  batch_size: 3
+  gpu_memory: 32G
+  gpu_c: 8.0
+  env:
+    MEAS_LM_MODEL: meta-llama/Llama-3.1-8B-Instruct
+    MEAS_LM_MAX_MODEL_LEN: 81920
+    # Explicitly blank so a quantization setting in .env meant for gpt-oss
+    # can't leak into an unquantized Llama.
+    MEAS_LM_QUANTIZATION: ""

@@ -57,6 +57,23 @@ config = yaml.safe_load(open(sys.argv[1]))
 print(config.get('params', {}).get('gpu_type', '') or '')
 " "$CONFIG_PATH")"
 
+# Optional per-run overrides of the stage profile below (blank = profile value):
+# params.gpu_memory (e.g. "32G"), params.gpu_c (e.g. 8.0), params.h_rt
+# (e.g. "2:00:00"). For smoke runs on a smaller model than the stage's
+# production one (see 2026-10-20-extract-smoke-02); they are not validated
+# against the model, so pair them with the right params.env.
+_param() {
+    "$REPO_DIR/.venv/bin/python" -c "
+import sys, yaml
+config = yaml.safe_load(open(sys.argv[1]))
+v = config.get('params', {}).get(sys.argv[2])
+print('' if v is None else v)
+" "$CONFIG_PATH" "$1"
+}
+OVR_GPU_MEMORY="$(_param gpu_memory)"
+OVR_GPU_C="$(_param gpu_c)"
+OVR_H_RT="$(_param h_rt)"
+
 # GPU profile per stage — copied from submit_filter_job.sh / submit_ocr_job.sh
 # / submit_extract_job.sh's #$ directives. judge has no legacy submit_*_job.sh
 # precedent (new stage, no vLLM server — see run_experiment_job.sh's
@@ -97,6 +114,10 @@ case "$STAGE" in
         exit 1
         ;;
 esac
+
+[ -n "$OVR_GPU_MEMORY" ] && GPU_MEMORY="$OVR_GPU_MEMORY"
+[ -n "$OVR_GPU_C" ] && GPU_C="$OVR_GPU_C"
+[ -n "$OVR_H_RT" ] && H_RT="$OVR_H_RT"
 
 mkdir -p "$REPO_DIR/out"
 
