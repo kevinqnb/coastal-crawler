@@ -55,7 +55,10 @@ mkdir -p logs out
 # ---- Preflight: fail fast if the DB isn't reachable --------------------------
 python3 scripts/check_db.py
 
-if [ "$STAGE" != "judge" ]; then
+NEEDS_SERVER=1
+case "$STAGE" in judge|repr) NEEDS_SERVER=0 ;; esac
+
+if [ "$NEEDS_SERVER" = "1" ]; then
     # Pick a private port for this job's model server rather than using the
     # static <ROLE>_PORT from .env: two same-role experiments (e.g. two "ocr"
     # configs) submitted at once can land on the same host, and a shared static
@@ -82,7 +85,7 @@ if [ "$STAGE" != "judge" ]; then
 else
     # judge: JudgementLM loads weights directly in-process via nnsight (see
     # adapter.build_judge) — no vLLM server, no port, nothing to health-check.
-    echo "STAGE=judge: no model server to start (JudgementLM loads in-process)."
+    echo "STAGE=$STAGE: no model server to start (model loads in-process via nnsight)."
 fi
 
 # ---- Run the experiment --------------------------------------------------------

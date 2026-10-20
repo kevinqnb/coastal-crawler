@@ -1,0 +1,20 @@
+id: 2026-10-19-repr-llama31-8b-tiny-01
+project: coastal-crawler
+description: >
+  RepresentationLM tiny end-to-end (rung 3): the 5 lowest-id papers.
+  Prediction recorded BEFORE the run: per-paper stored occurrence count ==
+  an independent regex count (find_key_term_occurrences) over the same
+  data/table_clean text, both layers present, shapes (n, 4096), no NaN.
+  A mismatch stops the ladder.
+seed: 342
+params:
+  stage: repr
+  terms_file: configs/repr-terms/coastal-terms-01.txt
+  source_statuses: [table_clean_done, processing, extracted, failed]
+  max_papers: 5
+  batch_size: 5
+  env:
+    REPR_LM_MODEL: meta-llama/Llama-3.1-8B
+    REPR_LM_LAYERS: "0,32"
+    REPR_LM_STORE_DTYPE: float32
+    REPR_LM_TEXT_DIR: data/table_clean

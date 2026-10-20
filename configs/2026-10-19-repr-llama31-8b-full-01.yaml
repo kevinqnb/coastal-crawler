@@ -1,0 +1,20 @@
+id: 2026-10-19-repr-llama31-8b-full-01
+project: coastal-crawler
+description: >
+  RepresentationLM full run: all papers in table_clean_done/processing/
+  extracted/failed with a non-empty table_clean text file, 49 terms, layers
+  0 and 32, float32, meta-llama/Llama-3.1-8B (base). Embeddings in
+  data/representations/<id>/. Submit only after the smoke and tiny runs
+  match their predictions and the scholarlm pin has been bumped.
+seed: 342
+params:
+  stage: repr
+  terms_file: configs/repr-terms/coastal-terms-01.txt
+  source_statuses: [table_clean_done, processing, extracted, failed]
+  max_papers: null
+  batch_size: 8
+  env:
+    REPR_LM_MODEL: meta-llama/Llama-3.1-8B
+    REPR_LM_LAYERS: "0,32"
+    REPR_LM_STORE_DTYPE: float32
+    REPR_LM_TEXT_DIR: data/table_clean

@@ -1,0 +1,49 @@
+estuary
+estuaries
+salt marsh
+salt marshes
+salt-marsh
+saltmarsh
+saltmarshes
+tidal flat
+tidal-flat
+mud flat
+mudflat
+sand flat
+sandflat
+mangrove
+mangrove forest
+lagoon
+tidal creek
+coastal wetland
+wetland
+tidal wetland
+estuarine wetland
+freshwater wetland
+marsh
+marshes
+tidal marsh
+tidal marshes
+coastal marsh
+coastal marshes
+freshwater marsh
+brackish marsh
+swamp
+seagrass
+seagrass bed
+kelp forest
+kelp bed
+coral reef
+shellfish reef
+rocky shore
+intertidal zone
+subtidal zone
+continental shelf
+continental shelves
+shelf sea
+upwelling zone
+frontal zone
+oxygen minimum zone
+hydrothermal vent
+cold seep
+seamount

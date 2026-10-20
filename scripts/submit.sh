@@ -77,14 +77,20 @@ print(config.get('params', {}).get('gpu_type', '') or '')
 # faster (cluster courtesy) before treating this as settled.
 # H_RT=48:00:00 is an unvalidated placeholder — no walltime precedent exists
 # for this workload; revise once a real table-clean run's throughput is known.
+# repr (RepresentationLM, no vLLM server — in-process nnsight like judge) has no
+# legacy precedent. GPU_MEMORY=32G follows scholarlm's own Llama-3.1-8B
+# representation_lm config (an 8B bf16 model is ~16GB plus activations for
+# ~20K-token papers); GPU_C=8.0 is the floor for bf16. H_RT=12:00:00 is an
+# UNVALIDATED placeholder — set it from the smoke run's measured per-paper time.
 case "$STAGE" in
     filter)      ROLE=FILTER;      H_RT=2:00:00;  GPU_MEMORY=8G;  GPU_C=7.0 ;;
     ocr)         ROLE=DOC_LM;      H_RT=72:00:00; GPU_MEMORY=24G; GPU_C=7.0 ;;
     table_clean) ROLE=TABLE_CLEAN; H_RT=48:00:00; GPU_MEMORY=80G; GPU_C=8.0 ;;
     extract)     ROLE=MEAS_LM;     H_RT=24:00:00; GPU_MEMORY=80G; GPU_C=9.0 ;;
     judge)       ROLE=JUDGE;       H_RT=24:00:00; GPU_MEMORY=80G; GPU_C=9.0 ;;
+    repr)        ROLE=REPR_LM;     H_RT=12:00:00; GPU_MEMORY=32G; GPU_C=8.0 ;;
     *)
-        echo "Error: configs/${ID}.yaml params.stage must be filter, ocr, table_clean, extract, or judge (got '$STAGE')." >&2
+        echo "Error: configs/${ID}.yaml params.stage must be filter, ocr, table_clean, extract, judge, or repr (got '$STAGE')." >&2
         exit 1
         ;;
 esac
