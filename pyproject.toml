@@ -48,7 +48,11 @@ dependencies = [
 # bump to pick up drop_references/context_length_exceeded_docs), and
 # SCHOLARLM_UNKNOWN_LABEL_TASK.md (pin bump to pick up the chandra-ocr-2
 # unknown-data-label fallback, landed on `naacl` rather than `advances`).
-scholarlm = { git = "https://github.com/kevinqnb/scholarlm.git", rev = "86f0f857d94912adc6ab9875e413522b3091153d" }  # branch: naacl
+# Bumped from 86f0f857 (branch: naacl) to pick up the multi-layer RepresentationLM
+# (604bb0d, `layers=`) for the repr stage. This rev removed MeasurementLM._clean_tables
+# and the clean_tables=/cleaned_ocr_output_dir= kwargs (table cleaning is now the
+# standalone TableCleaner, d40846c) -- see notes/coastal-crawler/builds/2026-10-19-repr-stage-01.md.
+scholarlm = { git = "https://github.com/kevinqnb/scholarlm.git", rev = "e187c2fdae8a707643d8681953eb76c4d66f7ef4" }  # branch: acl26
 
 [project.optional-dependencies]
 dev = [

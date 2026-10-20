@@ -309,7 +309,6 @@ class TestBuildMeasurementAdapterConstruction:
             attribute_info_dict=ATTRIBUTE_INFO_DICT,
             measurement_event_schema=MeasurementEventSchema,
             extraction_mode="direct",
-            clean_tables=False,
             direct_extraction_schema=DirectExtractionSchema,
             direct_extraction_prompt=build_direct_extraction_prompt("Identify coastal sites."),
             collect_attribute_terms=False,
