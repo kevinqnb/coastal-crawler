@@ -550,7 +550,7 @@ class Settings(BaseSettings):
         description="Passed to torch.manual_seed before model load; forward passes are otherwise deterministic.",
     )
     repr_lm_layers: str = Field(
-        default="0,32",
+        default="32",
         description=(
             "Comma-separated layer indices RepresentationLM collects in one pass "
             "(scholarlm >= 604bb0d): 0 = token embeddings (context-independent "

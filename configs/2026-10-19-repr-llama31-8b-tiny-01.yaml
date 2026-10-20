@@ -5,7 +5,7 @@ description: >
   Prediction recorded BEFORE the run (regex count with scholarlm's
   find_key_term_occurrences over the same data/table_clean text): papers
   72, 75, 81, 87, 88 -> 0, 15, 18, 89, 16 occurrences, 138 in total, no
-  duplicate spans; every shard holds layers 0 and 32 with shape (n, 4096)
+  duplicate spans; every shard holds layer 32 only with shape (n, 4096)
   float32, no NaN; DB n_occurrences == shard rows == index rows. A mismatch
   stops the ladder.
 seed: 342
@@ -17,6 +17,6 @@ params:
   batch_size: 5
   env:
     REPR_LM_MODEL: meta-llama/Llama-3.1-8B
-    REPR_LM_LAYERS: "0,32"
+    REPR_LM_LAYERS: "32"
     REPR_LM_STORE_DTYPE: float32
     REPR_LM_TEXT_DIR: data/table_clean

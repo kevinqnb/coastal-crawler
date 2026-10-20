@@ -1,0 +1,21 @@
+id: 2026-10-19-repr-llama31-8b-tiny-02
+project: coastal-crawler
+description: >
+  Seed-determinism twin of 2026-10-19-repr-llama31-8b-tiny-01: identical
+  params and seed, different run id (and therefore its own queue rows and
+  shards). Prediction recorded BEFORE the run: every shard array is exactly
+  equal to tiny-01's (labels, spans, token indices, and layer-32 values). If
+  the floats differ, find out why (kernel nondeterminism, batching) before
+  interpreting anything else; if the integer arrays differ, stop.
+seed: 342
+params:
+  stage: repr
+  terms_file: configs/repr-terms/coastal-terms-01.txt
+  source_statuses: [table_clean_done, processing, extracted, failed]
+  max_papers: 5
+  batch_size: 5
+  env:
+    REPR_LM_MODEL: meta-llama/Llama-3.1-8B
+    REPR_LM_LAYERS: "32"
+    REPR_LM_STORE_DTYPE: float32
+    REPR_LM_TEXT_DIR: data/table_clean
