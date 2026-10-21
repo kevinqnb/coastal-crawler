@@ -5,6 +5,7 @@ description: >
 seed: 342
 params:
   stage: repr_terms
+  gpu_type: L40S
   terms_file: configs/repr-terms/coastal-terms-01.txt
   env:
     REPR_LM_MODEL: answerdotai/ModernBERT-large

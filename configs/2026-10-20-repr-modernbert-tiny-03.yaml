@@ -1,0 +1,36 @@
+id: 2026-10-20-repr-modernbert-tiny-03
+project: coastal-crawler
+description: >
+  Same-GPU determinism check for 2026-10-20-repr-modernbert-tiny-02. The first twin
+  (tiny-01 on an A40 vs tiny-02 on an L40S) matched exactly in every integer and
+  metadata array but differed in the bf16 embedding values (~1% relative). Hypothesis:
+  GPU type, not seed. Prediction: pinned to L40S like tiny-02, every array equals
+  tiny-02's exactly. If the floats still differ on identical hardware, find out why
+  before interpreting anything.
+seed: 342
+params:
+  stage: repr
+  gpu_type: L40S
+  terms_file: configs/repr-terms/coastal-terms-01.txt
+  source_statuses: [table_clean_done, processing, extracted, failed]
+  max_papers: 5
+  batch_size: 5
+  skip_overflow: true
+  skip_clean_errors: true
+  env:
+    REPR_LM_MODEL: answerdotai/ModernBERT-large
+    REPR_LM_ARCHITECTURE: bidirectional
+    REPR_LM_POOLING: mean
+    REPR_LM_CONTEXT_RADIUS: "1"
+    REPR_LM_LAYERS: "24,28"
+    REPR_LM_DEVICE: cuda:0
+    REPR_LM_DTYPE: bfloat16
+    REPR_LM_ATTN_IMPLEMENTATION: sdpa
+    REPR_LM_HF_CACHE_DIR: /projectnb/mcnet/kevin/cache-hf
+    REPR_LM_REMOVE_REFERENCES: "true"
+    REPR_LM_REMOVE_TABLES: "true"
+    REPR_LM_REMOVE_PAGE_TAGS: "true"
+    REPR_LM_MIN_KEPT_FRACTION: "0.5"
+    REPR_LM_STORE_DTYPE: float32
+    REPR_LM_TEXT_DIR: data/table_clean
+    HF_HUB_OFFLINE: "1"
