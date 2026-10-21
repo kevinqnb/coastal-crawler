@@ -1,0 +1,45 @@
+id: 2026-10-20-extract-tiny-05
+project: coastal-crawler
+description: >
+  Rung-3 tiny end-to-end for extraction with model-parsed fields on the
+  production model, openai/gpt-oss-120b (MEAS_LM_MODEL inherits .env), with
+  both follow-up steps in value_only mode as in 2026-10-20-extract-tiny-04.
+  The two gemma tiny runs (-03 E4B, -04 12B) were accepted as passes on
+  plumbing only: both missed their quality/timing predictions (low yield, 3 of
+  10 papers failed on out-of-vocabulary attributes in -04, 4 retry rounds,
+  2 h 06 min), which are model-quality problems this run is meant to test on
+  the real model. batch_size=10 is one-shot: claims at most 10
+  table_clean_done papers, exits. h_rt left at the extract profile (24 h):
+  scholarlm's extraction call is serial (max_concurrent=1) and each retry
+  regenerates a whole response, so wall time is dominated by retries.
+
+  PREDICTION (recorded before the run): metrics extracted=10, failed=0,
+  requeued=0; every new extractions row's data has all seven parsed keys
+  (qualifiers, point_value, lower, upper, list_values, tolerance,
+  standard_deviation) with qualifiers a list; log.txt has no
+  document_partially_standardized, document_truncated_for_extraction or
+  extraction_followup_calls_exhausted_retries lines; at least 8 of the 10
+  papers yield >=1 measurement; out/*_out.txt shows at most 2 "Retrying"
+  rounds; the run finishes inside 3 hours; a build_warehouse run over the new
+  gpt-oss-120b rows reports missing_parse=0, orphaned_paper=0 and at most 2
+  duplicate_fact_row (missing_parse is the real test here: an earlier
+  scholarlm note found _parse_quantities failing on ~88% of gpt-oss-120b
+  records before the point_value schema change, assumed fixed in the pin).
+  If any of this misses, stop; do not scale up.
+
+  CLEANUP REQUIRED afterwards: writes real extractions rows (model_version
+  contains gpt-oss-120b). The Llama smoke-03 and both gemma tiny-run rows are
+  also still in the DB; run `coastal-crawler reset-extractions` before the full
+  extraction (this run's rows go too, which is fine -- the full run redoes
+  them).
+seed: 342
+params:
+  stage: extract
+  batch_size: 10
+  # gpt-oss-120b's MARLIN mxfp4 MoE kernel fails on cards newer than the
+  # cc-9.0 H200 — see 2026-09-08-extract-full-split-03.yaml.
+  gpu_type: H200
+  env:
+    MEAS_LM_MAX_MODEL_LEN: 81920
+    MEAS_LM_PARSE_QUANTITIES_CONTEXT: value_only
+    MEAS_LM_STANDARDIZE_CONTEXT: value_only

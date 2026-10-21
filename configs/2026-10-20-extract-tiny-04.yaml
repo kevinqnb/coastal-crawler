@@ -1,0 +1,49 @@
+id: 2026-10-20-extract-tiny-04
+project: coastal-crawler
+description: >
+  Rung-3 tiny end-to-end for extraction with model-parsed fields on
+  google/gemma-4-12B-it with BOTH follow-up steps in value_only mode
+  (MEAS_LM_PARSE_QUANTITIES_CONTEXT / MEAS_LM_STANDARDIZE_CONTEXT =
+  value_only: _parse_quantities sees only the value string; _standardize sees
+  only the unit list and the extracted value/units). Rerun of
+  2026-10-20-extract-tiny-03 (gemma-4-E4B-it, full context), which missed its
+  prediction (4/10 papers with measurements, 4 retry rounds, 4 duplicate fact
+  rows) after 37 min. batch_size=10 is one-shot: claims at most 10
+  table_clean_done papers, exits. Says nothing about gpt-oss-120b.
+
+  Also the first run with the adapter's exhausted-retries check: an extraction
+  call that never yields a valid response now fails the paper instead of
+  recording extracted-with-0-measurements.
+
+  PREDICTION (recorded before the run): metrics extracted=10, failed=0,
+  requeued=0; every new extractions row's data has all seven parsed keys
+  (qualifiers, point_value, lower, upper, list_values, tolerance,
+  standard_deviation) with qualifiers a list; log.txt has no
+  document_partially_standardized and no document_truncated_for_extraction
+  lines and no extraction_followup_calls_exhausted_retries warning; at least 6
+  of the 10 papers yield >=1 measurement; out/*_out.txt shows at most 1
+  "Retrying" round; the run finishes inside 2 hours (serial extraction call,
+  max_concurrent=1 in scholarlm, bounds it); a build_warehouse run over the
+  new gemma-4-12B-it rows reports missing_parse=0, orphaned_paper=0 and at
+  most 2 duplicate_fact_row. If any of this misses, stop; do not scale up.
+
+  CLEANUP REQUIRED afterwards: writes real extractions rows (model_version
+  contains gemma-4-12B-it) into the production DB, alongside the Llama
+  smoke-03 and gemma-E4B tiny-03 rows. Run `coastal-crawler reset-extractions`
+  before the real extraction.
+seed: 342
+params:
+  stage: extract
+  batch_size: 10
+  # 12B bf16 weights are ~23GB; 48G keeps it off 32GB cards that would leave
+  # almost no KV cache at the 81920 window.
+  gpu_memory: 48G
+  gpu_c: 8.0
+  env:
+    MEAS_LM_MODEL: google/gemma-4-12B-it
+    MEAS_LM_MAX_MODEL_LEN: 81920
+    # Explicitly blank so a quantization setting in .env meant for gpt-oss
+    # can't leak into an unquantized gemma.
+    MEAS_LM_QUANTIZATION: ""
+    MEAS_LM_PARSE_QUANTITIES_CONTEXT: value_only
+    MEAS_LM_STANDARDIZE_CONTEXT: value_only
