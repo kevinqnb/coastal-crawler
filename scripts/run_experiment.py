@@ -115,6 +115,11 @@ class _Tee:
         for s in self._streams:
             s.flush()
 
+    def isatty(self) -> bool:
+        # Libraries (e.g. transformers' load report) probe sys.stdout.isatty();
+        # the tee also feeds a log file, so it is never a terminal.
+        return False
+
 
 def _git(*args: str) -> str:
     return subprocess.run(

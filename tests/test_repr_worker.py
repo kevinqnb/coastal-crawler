@@ -423,3 +423,21 @@ class TestIsolatedTerms:
             # stub value = char_start/1000 + layer and every isolated term starts at 0 -> exactly the layer
             np.testing.assert_array_equal(z["rep_layer_32"], np.full((3, 4), 32.0, dtype=np.float32))
             assert z["n_pooled_tokens"].tolist() == [1, 1, 1]
+
+
+def test_run_experiment_tee_is_not_a_tty() -> None:
+    """transformers probes sys.stdout.isatty() while loading weights; the runner's tee must answer."""
+    import importlib.util
+    import io
+
+    spec = importlib.util.spec_from_file_location(
+        "run_experiment", Path(__file__).resolve().parent.parent / "scripts" / "run_experiment.py"
+    )
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    a, b = io.StringIO(), io.StringIO()
+    tee = mod._Tee(a, b)
+    assert tee.isatty() is False
+    tee.write("x")
+    assert a.getvalue() == b.getvalue() == "x"
