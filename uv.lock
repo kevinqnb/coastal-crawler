@@ -455,7 +455,7 @@ requires-dist = [
     { name = "pytest-mock", marker = "extra == 'dev'", specifier = ">=3.14" },
     { name = "python-multipart", specifier = ">=0.0.9" },
     { name = "pyyaml", specifier = ">=6.0" },
-    { name = "scholarlm", git = "https://github.com/kevinqnb/scholarlm.git?rev=e187c2fdae8a707643d8681953eb76c4d66f7ef4" },
+    { name = "scholarlm", git = "https://github.com/kevinqnb/scholarlm.git?rev=95bde634287fa1a2b9f998ec2ef2619410013851" },
     { name = "sqlalchemy", specifier = ">=2.0" },
     { name = "structlog", specifier = ">=24.0" },
     { name = "transformers", specifier = ">=4.0" },
@@ -3629,7 +3629,7 @@ torch = [
 [[package]]
 name = "scholarlm"
 version = "0.1.0"
-source = { git = "https://github.com/kevinqnb/scholarlm.git?rev=e187c2fdae8a707643d8681953eb76c4d66f7ef4#e187c2fdae8a707643d8681953eb76c4d66f7ef4" }
+source = { git = "https://github.com/kevinqnb/scholarlm.git?rev=95bde634287fa1a2b9f998ec2ef2619410013851#95bde634287fa1a2b9f998ec2ef2619410013851" }
 dependencies = [
     { name = "anthropic" },
     { name = "backoff" },

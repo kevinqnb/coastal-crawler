@@ -596,6 +596,43 @@ class Settings(BaseSettings):
             "never inferred from table_clean_dir/ocr_dir."
         ),
     )
+    repr_lm_architecture: Literal["causal", "bidirectional"] | None = Field(
+        default=None,
+        description="RepresentationLM backend: causal (nnterp, e.g. Llama) or bidirectional (HF AutoModel, e.g. ModernBERT). Required; never inferred from the model name.",
+    )
+    repr_lm_pooling: Literal["mean", "last"] | None = Field(
+        default=None,
+        description="How the token states of one term match are combined: mean over all tokens in the match, or the last token only. Required.",
+    )
+    repr_lm_context_radius: str | None = Field(
+        default=None,
+        description="Paragraphs on each side of a match's paragraph fed to the model (int >= 0), or the literal 'none' for the whole cleaned document. Required.",
+    )
+    repr_lm_device: str | None = Field(
+        default=None,
+        description="Torch device for the bidirectional backend, e.g. cuda:0. Required for bidirectional; the causal backend picks its own.",
+    )
+    repr_lm_attn_implementation: str | None = Field(
+        default=None,
+        description="HF attn_implementation for the bidirectional backend (e.g. sdpa), pinned so the numbers do not depend on which attention libraries happen to be installed.",
+    )
+    repr_lm_hf_cache_dir: str | None = Field(
+        default=None,
+        description="HF cache directory for the bidirectional backend (this cluster's weights live in HF_HOME itself, not HF_HOME/hub).",
+    )
+    repr_lm_remove_references: bool | None = Field(
+        default=None, description="Cut the references section before collecting (CleaningConfig.remove_references). Required."
+    )
+    repr_lm_remove_tables: bool | None = Field(
+        default=None, description="Remove <table> blocks before collecting (CleaningConfig.remove_tables). Required."
+    )
+    repr_lm_remove_page_tags: bool | None = Field(
+        default=None, description="Remove <page> tags before collecting (CleaningConfig.remove_page_tags). Required."
+    )
+    repr_lm_min_kept_fraction: float | None = Field(
+        default=None,
+        description="Guard in (0, 1]: a reference cut keeping less than this fraction of the text raises. Must be set iff REPR_LM_REMOVE_REFERENCES is true.",
+    )
     repr_dir: str = Field(
         default="data/representations",
         description=(

@@ -456,15 +456,27 @@ def repr_seed(
     source_status: list[str] = typer.Option(
         ..., "--source-status", help="papers.status value(s) to include (repeatable), e.g. table_clean_done, processing, extracted, failed."
     ),
-    max_papers: Optional[int] = typer.Option(None, "--max-papers", help="Seed only the N lowest-id qualifying papers (smoke/tiny runs). Omit for all."),
+    max_papers: Optional[int] = typer.Option(None, "--max-papers", help="Seed only the N lowest-id ELIGIBLE papers (smoke/tiny runs). Omit for all."),
+    skip_overflow: bool = typer.Option(..., "--skip-overflow/--no-skip-overflow", help="Exclude papers with a window over the model's length (else abort if one exists)."),
+    skip_clean_errors: bool = typer.Option(..., "--skip-clean-errors/--no-skip-clean-errors", help="Exclude papers whose text cleaning raises, e.g. unclosed <table> (else abort)."),
+    skip_manifest: str = typer.Option(..., "--skip-manifest", help="Where to write the JSON list of excluded papers and reasons."),
 ) -> None:
-    """Create pending repr queue rows for papers in the given statuses (idempotent)."""
+    """Create pending repr queue rows for eligible papers in the given statuses (idempotent)."""
+    from pathlib import Path
+
+    from coastal_crawler.adapter import build_repr_adapter
     from coastal_crawler.config import get_settings
     from coastal_crawler.repr_worker import seed_repr
 
     settings = get_settings()
     assert settings.repr_lm_model and settings.repr_lm_text_dir, "REPR_LM_MODEL and REPR_LM_TEXT_DIR must be set"
-    n = seed_repr(run_id, settings.repr_lm_model, _read_terms(terms_file), settings.repr_lm_text_dir, source_status, max_papers)
+    n = seed_repr(
+        run_id, settings.repr_lm_model, _read_terms(terms_file), settings.repr_lm_text_dir, source_status, max_papers,
+        adapter=build_repr_adapter(settings),
+        skip_overflow=skip_overflow,
+        skip_clean_errors=skip_clean_errors,
+        skip_manifest=Path(skip_manifest),
+    )
     typer.echo(f"Seeded {n} new pending row(s) for run {run_id}.")
 
 

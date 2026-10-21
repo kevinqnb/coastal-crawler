@@ -108,9 +108,9 @@ case "$STAGE" in
     table_clean) ROLE=TABLE_CLEAN; H_RT=48:00:00; GPU_MEMORY=80G; GPU_C=8.0 ;;
     extract)     ROLE=MEAS_LM;     H_RT=24:00:00; GPU_MEMORY=80G; GPU_C=9.0 ;;
     judge)       ROLE=JUDGE;       H_RT=24:00:00; GPU_MEMORY=80G; GPU_C=9.0 ;;
-    repr)        ROLE=REPR_LM;     H_RT=24:00:00; GPU_MEMORY=32G; GPU_C=8.0 ;;
+    repr|repr_terms) ROLE=REPR_LM;     H_RT=24:00:00; GPU_MEMORY=32G; GPU_C=8.0 ;;
     *)
-        echo "Error: configs/${ID}.yaml params.stage must be filter, ocr, table_clean, extract, judge, or repr (got '$STAGE')." >&2
+        echo "Error: configs/${ID}.yaml params.stage must be filter, ocr, table_clean, extract, judge, repr, or repr_terms (got '$STAGE')." >&2
         exit 1
         ;;
 esac

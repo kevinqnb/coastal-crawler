@@ -1,0 +1,24 @@
+id: 2026-10-20-repr-modernbert-terms-01
+project: coastal-crawler
+description: >
+  Isolated-term control: each of the 49 terms embedded ALONE (the term string is the whole input; no paper text, no DB), same model, pooling, dtype and layers (24, 28) as the paper runs. Output isolated_terms.npz in the run's repr dir. Not a paper run: skips and the queue do not apply. Known answer: 49 rows, one per term in file order, n_pooled_tokens >= 1.
+seed: 342
+params:
+  stage: repr_terms
+  terms_file: configs/repr-terms/coastal-terms-01.txt
+  env:
+    REPR_LM_MODEL: answerdotai/ModernBERT-large
+    REPR_LM_ARCHITECTURE: bidirectional
+    REPR_LM_POOLING: mean
+    REPR_LM_CONTEXT_RADIUS: "none"
+    REPR_LM_LAYERS: "24,28"
+    REPR_LM_DEVICE: cuda:0
+    REPR_LM_DTYPE: bfloat16
+    REPR_LM_ATTN_IMPLEMENTATION: sdpa
+    REPR_LM_HF_CACHE_DIR: /projectnb/mcnet/kevin/cache-hf
+    REPR_LM_REMOVE_REFERENCES: "true"
+    REPR_LM_REMOVE_TABLES: "true"
+    REPR_LM_REMOVE_PAGE_TAGS: "true"
+    REPR_LM_MIN_KEPT_FRACTION: "0.5"
+    REPR_LM_STORE_DTYPE: float32
+    HF_HUB_OFFLINE: "1"

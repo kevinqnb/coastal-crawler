@@ -56,7 +56,7 @@ mkdir -p logs out
 python3 scripts/check_db.py
 
 NEEDS_SERVER=1
-case "$STAGE" in judge|repr) NEEDS_SERVER=0 ;; esac
+case "$STAGE" in judge|repr|repr_terms) NEEDS_SERVER=0 ;; esac
 
 if [ "$NEEDS_SERVER" = "1" ]; then
     # Pick a private port for this job's model server rather than using the

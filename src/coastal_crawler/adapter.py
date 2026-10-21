@@ -824,6 +824,16 @@ def parse_layers(csv: str) -> list[int]:
     return sorted(layers)
 
 
+def parse_context_radius(value: str) -> int | None:
+    """Parse REPR_LM_CONTEXT_RADIUS: the literal ``none`` (whole document) or an int >= 0."""
+    if value.strip().lower() == "none":
+        return None
+    radius = int(value)
+    if radius < 0:
+        raise ValueError(f"invalid REPR_LM_CONTEXT_RADIUS {value!r}")
+    return radius
+
+
 @dataclass
 class ReprResult:
     """Term-occurrence embeddings for ONE document, as parallel arrays.
@@ -831,18 +841,58 @@ class ReprResult:
     ``representations`` maps layer index -> ``[n, hidden]`` array (float32 from
     the real model), every layer with the same ``n`` rows in the same order as
     the provenance arrays. ``n`` may be 0 — a paper that never mentions any
-    term is a legitimate result, not an error. ``n_truncated`` is
-    RepresentationLM's tail-truncation count for the document (0 or 1); the
-    worker treats nonzero as a failure.
+    term is a legitimate result, not an error.
+
+    ``char_starts``/``char_ends``/``window_starts``/``window_ends`` index the
+    CLEANED text (``cleaned_sha256`` identifies it), not the file on disk.
+    ``token_indices``/``token_first_indices`` are relative to the forward pass's
+    window. ``n_truncated`` is always 0 for bidirectional models (overflow raises);
+    the worker treats nonzero as a failure.
     """
 
     representations: dict[int, Any]  # layer -> np.ndarray [n, hidden]
     labels: Any  # np.ndarray[str] [n]
     char_starts: Any  # np.ndarray[int64] [n]
     char_ends: Any  # np.ndarray[int64] [n]
-    token_indices: Any  # np.ndarray[int64] [n]
+    token_indices: Any  # np.ndarray[int64] [n], last pooled token, window-relative
+    token_first_indices: Any  # np.ndarray[int64] [n], first pooled token, window-relative
+    n_pooled_tokens: Any  # np.ndarray[int64] [n]
+    paragraph_indices: Any  # np.ndarray[int64] [n]
+    window_starts: Any  # np.ndarray[int64] [n]
+    window_ends: Any  # np.ndarray[int64] [n]
     n_truncated: int
     hidden_size: int
+    cleaned_sha256: str
+    reference_heading_found: bool | None  # None iff references are not removed
+    kept_fraction_after_references: float | None
+
+
+@dataclass(frozen=True)
+class SkipReason:
+    """Why a document cannot be run: ``kind`` is ``clean_error`` or ``overflow``."""
+
+    kind: str
+    detail: str
+
+
+def window_units(
+    cleaned: str, occurrences: list[tuple[str, int, int]], context_radius: int | None
+) -> list[tuple[tuple[int, int], list[tuple[str, int, int, int]]]]:
+    """Group occurrences into forward-pass units exactly as ``RepresentationLM.collect`` does.
+
+    Returns ``[((window_start, window_end), [(term, start, end, paragraph_index)])]``.
+    """
+    from scholarlm.representationlm import paragraph_of_span, split_paragraphs, window_span
+
+    paragraphs = split_paragraphs(cleaned)
+    assert paragraphs, "occurrences but no paragraphs"
+    occ_para = [(t, s, e, paragraph_of_span(paragraphs, s, e)) for t, s, e in occurrences]
+    if context_radius is None:
+        return [((0, len(cleaned)), occ_para)]
+    by_para: dict[int, list[tuple[str, int, int, int]]] = {}
+    for o in occ_para:
+        by_para.setdefault(o[3], []).append(o)
+    return [(window_span(paragraphs, pi, context_radius), occs) for pi, occs in sorted(by_para.items())]
 
 
 @runtime_checkable
@@ -854,102 +904,228 @@ class ReprAdapter(Protocol):
 
     def collect(self, doc_id: str, text: str, terms: list[str]) -> ReprResult: ...
 
+    def skip_reason(self, doc_id: str, text: str, terms: list[str]) -> SkipReason | None:
+        """Why ``collect`` would raise for this document (cleaning error or over-length window), else None."""
+        ...
+
 
 class StubReprAdapter:
-    """Deterministic fake for tests: regex-matches terms the same way
-    RepresentationLM does (via its own ``find_key_term_occurrences``) and
-    emits tiny, hand-checkable embeddings (value = char_start/1000 + layer),
-    so tests can check counts, spans, shapes and layer handling without a GPU."""
+    """Deterministic fake for tests. Cleans the text and matches terms on the
+    CLEANED text with scholarlm's own helpers (as RepresentationLM does), forms
+    the same paragraph windows, and emits tiny hand-checkable embeddings
+    (value = char_start/1000 + layer). "Tokens" are whitespace-separated words,
+    so ``max_tokens`` lets tests exercise the overflow predicate without a model."""
 
-    def __init__(self, hidden_size: int = 4, layers: list[int] | None = None) -> None:
+    def __init__(
+        self,
+        hidden_size: int = 4,
+        layers: list[int] | None = None,
+        context_radius: int | None = None,
+        max_tokens: int | None = None,
+        remove_references: bool = False,
+    ) -> None:
+        from scholarlm.representationlm import CleaningConfig
+
         self.hidden_size = hidden_size
         self.layers = [0, 32] if layers is None else layers
+        self.context_radius = context_radius
+        self.max_tokens = max_tokens
+        self._cleaning = CleaningConfig(remove_references=remove_references)
+
+    def _clean(self, text: str) -> tuple[str, dict]:
+        from scholarlm.representationlm import clean_ocr_text
+
+        return clean_ocr_text(text, self._cleaning)
+
+    def skip_reason(self, doc_id: str, text: str, terms: list[str]) -> SkipReason | None:
+        from scholarlm.representationlm import find_key_term_occurrences
+
+        try:
+            cleaned, _ = self._clean(text)
+        except (AssertionError, ValueError) as e:
+            return SkipReason("clean_error", str(e))
+        occ = find_key_term_occurrences(cleaned, terms)
+        if not occ or self.max_tokens is None:
+            return None
+        for (a, b), _ in window_units(cleaned, occ, self.context_radius):
+            n = len(cleaned[a:b].split())
+            if n > self.max_tokens:
+                return SkipReason("overflow", f"window [{a}, {b}) has {n} tokens > {self.max_tokens}")
+        return None
 
     def collect(self, doc_id: str, text: str, terms: list[str]) -> ReprResult:
+        import hashlib
+
         import numpy as np
         from scholarlm.representationlm import find_key_term_occurrences
 
-        occ = find_key_term_occurrences(text, terms)
+        cleaned, info = self._clean(text)
+        occ = find_key_term_occurrences(cleaned, terms)
         n = len(occ)
         starts = np.asarray([s for _, s, _ in occ], dtype=np.float32)
         reps = {
             L: np.repeat((starts / 1000.0 + L)[:, None], self.hidden_size, axis=1).astype(np.float32)
             for L in self.layers
         }
+        win: dict[tuple[int, int], tuple[int, int]] = {}
+        para_of: dict[tuple[int, int], int] = {}
+        if n:
+            for (a, b), occs in window_units(cleaned, occ, self.context_radius):
+                for _, s, e, pi in occs:
+                    win[(s, e)] = (a, b)
+                    para_of[(s, e)] = pi
         return ReprResult(
             representations=reps,
             labels=np.asarray([t for t, _, _ in occ], dtype="U"),
             char_starts=np.asarray([s for _, s, _ in occ], dtype=np.int64),
             char_ends=np.asarray([e for _, _, e in occ], dtype=np.int64),
             token_indices=np.arange(n, dtype=np.int64),
+            token_first_indices=np.arange(n, dtype=np.int64),
+            n_pooled_tokens=np.ones(n, dtype=np.int64),
+            paragraph_indices=np.asarray([para_of[(s, e)] for _, s, e in occ], dtype=np.int64),
+            window_starts=np.asarray([win[(s, e)][0] for _, s, e in occ], dtype=np.int64),
+            window_ends=np.asarray([win[(s, e)][1] for _, s, e in occ], dtype=np.int64),
             n_truncated=0,
             hidden_size=self.hidden_size,
+            cleaned_sha256=hashlib.sha256(cleaned.encode("utf-8")).hexdigest(),
+            reference_heading_found=info["reference_heading_found"],
+            kept_fraction_after_references=info["kept_fraction_after_references"],
         )
 
 
 class DirectReprAdapter:
-    """Wraps ``scholarlm.RepresentationLM`` (local nnsight model; needs the
-    multi-layer API, scholarlm >= 604bb0d)."""
+    """Wraps ``scholarlm.RepresentationLM`` (needs scholarlm >= 95bde63: bidirectional
+    backend, cleaning, paragraph windows, mean pooling)."""
 
     def __init__(self, model: Any) -> None:
         self._model = model
         self.hidden_size: int = model.hidden_size
         self.layers: list[int] = list(model.layers)
 
+    def skip_reason(self, doc_id: str, text: str, terms: list[str]) -> SkipReason | None:
+        from scholarlm.representationlm import find_key_term_occurrences
+
+        try:
+            cleaned_docs, _ = self._model.prepare_documents({doc_id: text})
+        except (AssertionError, ValueError) as e:
+            return SkipReason("clean_error", str(e))
+        cleaned = cleaned_docs[doc_id]
+        occ = find_key_term_occurrences(cleaned, terms)
+        if not occ:
+            return None
+        limit = self._model.max_position_embeddings
+        for (a, b), _ in window_units(cleaned, occ, self._model.context_radius):
+            input_ids, _ = self._model._tokenize(cleaned[a:b])
+            if len(input_ids) > limit:
+                return SkipReason("overflow", f"window [{a}, {b}) has {len(input_ids)} tokens > {limit}")
+        return None
+
     def collect(self, doc_id: str, text: str, terms: list[str]) -> ReprResult:
         import numpy as np
         from scholarlm.representationlm import find_key_term_occurrences
 
-        # RepresentationLM.collect() raises when NO term occurs in the
-        # document ("nothing to collect"). For a single paper that is a
-        # legitimate zero-occurrence result, so detect it up front with the
-        # same matcher the model uses, instead of catching the RuntimeError
-        # (which could mask a real failure).
-        if not find_key_term_occurrences(text, terms):
+        # RepresentationLM.collect() raises when NO term occurs in the CLEANED
+        # document ("nothing to collect"). For a single paper that is a legitimate
+        # zero-occurrence result, so detect it up front on the same cleaned text
+        # with the same matcher (a term only inside a table or the references
+        # would otherwise crash the run), rather than catching the RuntimeError.
+        cleaned_docs, infos = self._model.prepare_documents({doc_id: text})
+        info = infos[doc_id]
+        meta = {
+            "cleaned_sha256": info["cleaned_sha256"],
+            "reference_heading_found": info["reference_heading_found"],
+            "kept_fraction_after_references": info["kept_fraction_after_references"],
+        }
+        if not find_key_term_occurrences(cleaned_docs[doc_id], terms):
+            empty_i = np.asarray([], dtype=np.int64)
             return ReprResult(
                 representations={L: np.zeros((0, self.hidden_size), dtype=np.float32) for L in self.layers},
                 labels=np.asarray([], dtype="U"),
-                char_starts=np.asarray([], dtype=np.int64),
-                char_ends=np.asarray([], dtype=np.int64),
-                token_indices=np.asarray([], dtype=np.int64),
-                n_truncated=0,
-                hidden_size=self.hidden_size,
+                char_starts=empty_i, char_ends=empty_i, token_indices=empty_i,
+                token_first_indices=empty_i, n_pooled_tokens=empty_i,
+                paragraph_indices=empty_i, window_starts=empty_i, window_ends=empty_i,
+                n_truncated=0, hidden_size=self.hidden_size, **meta,
             )
         out = self._model.collect({doc_id: text}, terms)
         assert sorted(out["representations"]) == self.layers, (sorted(out["representations"]), self.layers)
+        assert self._model.doc_info[doc_id]["cleaned_sha256"] == meta["cleaned_sha256"]
         return ReprResult(
             representations=out["representations"],
             labels=out["labels"],
             char_starts=out["char_starts"],
             char_ends=out["char_ends"],
             token_indices=out["token_indices"],
+            token_first_indices=out["token_first_indices"],
+            n_pooled_tokens=out["n_pooled_tokens"],
+            paragraph_indices=out["paragraph_indices"],
+            window_starts=out["window_starts"],
+            window_ends=out["window_ends"],
             n_truncated=int(self._model.n_truncated),
             hidden_size=self.hidden_size,
+            **meta,
         )
 
 
 def build_repr_adapter(settings: "Settings") -> DirectReprAdapter:
     """Construct the production ReprAdapter from Settings.
 
-    Raises RuntimeError if REPR_LM_MODEL is unset, or if no CUDA device is
-    visible — ``RepresentationLM`` silently falls back to CPU, which for an 8B
-    model over ~3k papers would be a (very slow) silent fallback, so this
-    refuses instead (CLAUDE.md: no silent fallbacks). Passing ``layers=``
-    requires the multi-layer scholarlm (>= 604bb0d); on the older pin it
-    fails with a TypeError rather than silently collecting only the last layer.
+    Every RepresentationLM option is read from ``REPR_LM_*`` and a missing one is a
+    RuntimeError (no defaults). Refuses to run without CUDA when the device is a
+    CUDA device, and always passes ``overflow_policy="error"``: over-length input
+    must be excluded up front (``seed_repr``), never truncated.
     """
-    if not settings.repr_lm_model:
-        raise RuntimeError("REPR_LM_MODEL must be configured to run representation collection.")
-
     import torch
-    from scholarlm.representationlm import RepresentationLM
+    from scholarlm.representationlm import CleaningConfig, RepresentationLM
 
-    if not torch.cuda.is_available():
-        raise RuntimeError("repr stage requires a CUDA GPU; torch.cuda.is_available() is False.")
-    torch.manual_seed(settings.repr_lm_seed)
-    model = RepresentationLM(
-        model_name=settings.repr_lm_model,
-        layers=parse_layers(settings.repr_lm_layers),
-        nnsight_kwargs={"torch_dtype": getattr(torch, settings.repr_lm_dtype)},
+    s = settings
+    required = {
+        "REPR_LM_MODEL": s.repr_lm_model,
+        "REPR_LM_ARCHITECTURE": s.repr_lm_architecture,
+        "REPR_LM_POOLING": s.repr_lm_pooling,
+        "REPR_LM_CONTEXT_RADIUS": s.repr_lm_context_radius,
+        "REPR_LM_REMOVE_REFERENCES": s.repr_lm_remove_references,
+        "REPR_LM_REMOVE_TABLES": s.repr_lm_remove_tables,
+        "REPR_LM_REMOVE_PAGE_TAGS": s.repr_lm_remove_page_tags,
+    }
+    missing = [k for k, v in required.items() if v is None]
+    if missing:
+        raise RuntimeError(f"{', '.join(missing)} must be configured to run representation collection.")
+    if s.repr_lm_remove_references and s.repr_lm_min_kept_fraction is None:
+        raise RuntimeError("REPR_LM_MIN_KEPT_FRACTION must be set when REPR_LM_REMOVE_REFERENCES is true.")
+    if not s.repr_lm_remove_references and s.repr_lm_min_kept_fraction is not None:
+        raise RuntimeError("REPR_LM_MIN_KEPT_FRACTION is set but REPR_LM_REMOVE_REFERENCES is false.")
+
+    cleaning = CleaningConfig(
+        remove_references=bool(s.repr_lm_remove_references),
+        remove_tables=bool(s.repr_lm_remove_tables),
+        remove_page_tags=bool(s.repr_lm_remove_page_tags),
+        min_kept_fraction_after_references=s.repr_lm_min_kept_fraction,
     )
-    return DirectReprAdapter(model)
+    common: dict[str, Any] = dict(
+        model_name=s.repr_lm_model,
+        architecture=s.repr_lm_architecture,
+        layers=parse_layers(s.repr_lm_layers),
+        pooling=s.repr_lm_pooling,
+        cleaning=cleaning,
+        context_radius=parse_context_radius(cast(str, s.repr_lm_context_radius)),
+        overflow_policy="error",
+    )
+    dtype = getattr(torch, s.repr_lm_dtype)
+    if s.repr_lm_architecture == "bidirectional":
+        if not s.repr_lm_device or not s.repr_lm_attn_implementation or not s.repr_lm_hf_cache_dir:
+            raise RuntimeError(
+                "bidirectional repr needs REPR_LM_DEVICE, REPR_LM_ATTN_IMPLEMENTATION and REPR_LM_HF_CACHE_DIR."
+            )
+        if s.repr_lm_device.startswith("cuda") and not torch.cuda.is_available():
+            raise RuntimeError("repr stage requires a CUDA GPU; torch.cuda.is_available() is False.")
+        common.update(
+            device=s.repr_lm_device,
+            hf_cache_dir=s.repr_lm_hf_cache_dir,
+            hf_kwargs={"torch_dtype": dtype, "attn_implementation": s.repr_lm_attn_implementation},
+        )
+    else:
+        if not torch.cuda.is_available():
+            raise RuntimeError("repr stage requires a CUDA GPU; torch.cuda.is_available() is False.")
+        common.update(nnsight_kwargs={"torch_dtype": dtype})
+    torch.manual_seed(s.repr_lm_seed)
+    return DirectReprAdapter(RepresentationLM(**common))

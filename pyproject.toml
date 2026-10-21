@@ -52,7 +52,9 @@ dependencies = [
 # (604bb0d, `layers=`) for the repr stage. This rev removed MeasurementLM._clean_tables
 # and the clean_tables=/cleaned_ocr_output_dir= kwargs (table cleaning is now the
 # standalone TableCleaner, d40846c) -- see notes/coastal-crawler/builds/2026-10-19-repr-stage-01.md.
-scholarlm = { git = "https://github.com/kevinqnb/scholarlm.git", rev = "e187c2fdae8a707643d8681953eb76c4d66f7ef4" }  # branch: acl26
+# Bumped e187c2f -> 95bde63 for the bidirectional/windowed/mean-pooled RepresentationLM (ModernBERT);
+# the e187c2f..95bde63 diff touches only representationlm.py, its tests and experiment configs.
+scholarlm = { git = "https://github.com/kevinqnb/scholarlm.git", rev = "95bde634287fa1a2b9f998ec2ef2619410013851" }  # branch: main (merge of PR #16, bidirectional RepresentationLM)
 
 [project.optional-dependencies]
 dev = [
