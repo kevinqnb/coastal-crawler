@@ -1,0 +1,52 @@
+# Analysis config for the "Representations" tab (scripts/build_repr_plots.py).
+# Not an experiment run: it reads the finished repr runs below and writes the
+# site's plot data. Every value that could change the plots lives here.
+id: modernbert-01
+shards_run: 2026-10-20-repr-modernbert-full-01      # REPR_DIR/<run>/shards/*.npz
+terms_run: 2026-10-20-repr-modernbert-terms-01      # REPR_DIR/<run>/isolated_terms.npz
+terms_file: configs/repr-terms/coastal-terms-01.txt
+layers: [24, 28]
+pca_components: 3          # main plot: one fit, 2D view uses PC1-2, 3D uses PC1-3
+relative_components: 2     # relative-differences plot (2D only)
+pastel_white_mix: 0.35     # fraction of white mixed into each tab20 colour
+coord_decimals: 4
+# Terms in the file that have no data in the run (asserted: exactly these have 0 rows).
+terms_without_data: [shellfish reef]
+# Groups shown in the main PCA plot (<= max_main_groups). Chosen by deduped row
+# count (top 20 by rows: Estuary, Marsh, Seagrass, Lagoon, Salt marsh, Mangrove,
+# Wetland, Coral reef, Continental shelf, Tidal/mud flat, Tidal creek, Kelp, Sand
+# flat, Hydrothermal vent, Coastal wetland, Swamp, Intertidal, OMZ, Upwelling,
+# Frontal zone), then adjusted for coverage: Sand flat (569 rows; overlaps
+# Tidal / mud flat) and Frontal zone (182; a hydrographic feature, not an
+# ecosystem type) were swapped for Cold seep (133) and Rocky shore (77), the only
+# seep and rocky-coast ecosystems otherwise missing.
+max_main_groups: 20
+main_groups: [Estuary, Marsh (generic), Seagrass, Lagoon, Salt marsh, Mangrove, Wetland (generic), Coral reef, Continental shelf, Tidal / mud flat, Tidal creek, Kelp, Hydrothermal vent, Coastal wetland, Swamp, Intertidal zone, Oxygen minimum zone, Upwelling zone, Cold seep, Rocky shore]
+# Group -> member surface terms (labels exactly as stored in the shards).
+# Every term in terms_file must appear in exactly one group or in terms_without_data.
+groups:
+  Estuary: [estuary, estuaries]
+  Salt marsh: [salt marsh, salt marshes, salt-marsh, saltmarsh, saltmarshes, tidal marsh, tidal marshes, coastal marsh, coastal marshes, brackish marsh]
+  Marsh (generic): [marsh, marshes]
+  Tidal / mud flat: [tidal flat, tidal-flat, mud flat, mudflat]
+  Sand flat: [sand flat, sandflat]
+  Mangrove: [mangrove, mangrove forest]
+  Seagrass: [seagrass, seagrass bed]
+  Kelp: [kelp forest, kelp bed]
+  Lagoon: [lagoon]
+  Tidal creek: [tidal creek]
+  Coastal wetland: [coastal wetland, tidal wetland, estuarine wetland]
+  Freshwater wetland/marsh: [freshwater wetland, freshwater marsh]
+  Wetland (generic): [wetland]
+  Swamp: [swamp]
+  Coral reef: [coral reef]
+  Rocky shore: [rocky shore]
+  Intertidal zone: [intertidal zone]
+  Subtidal zone: [subtidal zone]
+  Continental shelf: [continental shelf, continental shelves, shelf sea]
+  Upwelling zone: [upwelling zone]
+  Frontal zone: [frontal zone]
+  Oxygen minimum zone: [oxygen minimum zone]
+  Hydrothermal vent: [hydrothermal vent]
+  Cold seep: [cold seep]
+  Seamount: [seamount]

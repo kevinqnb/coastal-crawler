@@ -691,6 +691,19 @@ class Settings(BaseSettings):
         ),
     )
 
+    # ------------------------------------------------- Representations tab
+    repr_site_dir: str = Field(
+        default="data/repr_site",
+        description=(
+            "Directory of plot JSON for the site's Representations tab, written by "
+            "scripts/build_repr_plots.py as REPR_SITE_DIR/<analysis id>/*.json."
+        ),
+    )
+    repr_site_analysis_id: str = Field(
+        default="modernbert-01",
+        description="Which configs/repr-analysis/<id>.yaml build the Representations tab serves.",
+    )
+
     # ------------------------------------------------------- Wiley TDM
     wiley_api_key: str | None = Field(
         default=None,
