@@ -18,10 +18,11 @@ from typing import TYPE_CHECKING, Any, Protocol, cast, runtime_checkable
 
 import structlog
 from pydantic import BaseModel
-from scholarlm import DocumentLM, MeasurementLM
+from scholarlm import DocumentLM, MeasurementLM, TableCleaner
 from scholarlm.attribution import AttributionMethod, ContrastiveGradientAttribution, ProbeAttribution
 from scholarlm.instruction_prompts import DIRECT_TRIPLE_EXTRACTION_INSTRUCTIONS
 from scholarlm.judgementlm import JudgementLM
+from scholarlm.measurementlm import ContextLengthExceededError
 
 log = structlog.get_logger(__name__)
 
@@ -135,12 +136,6 @@ def build_ocr_adapter(settings: "Settings") -> DirectOCRAdapter:
 # Table-clean stage — OCR text + page images in, normalized OCR text out
 # ---------------------------------------------------------------------------
 
-class _UnusedTableCleanEntitySchema(BaseModel):
-    """Placeholder — MeasurementLM.__init__ requires entity_identification_schema
-    positionally, but the table-clean adapter only ever calls _clean_tables(),
-    which never touches entity/attribute extraction."""
-
-
 @runtime_checkable
 class TableCleanAdapter(Protocol):
     """Interface the table-clean worker calls. Lives in one place so it is easy to mock."""
@@ -185,34 +180,30 @@ class StubTableCleanAdapter:
 
 
 class DirectTableCleanAdapter:
-    """Calls scholarlm's MeasurementLM._clean_tables directly — NOT fit(),
-    which would also run the full extraction pipeline.
+    """Calls scholarlm's standalone ``TableCleaner.clean`` (scholarlm >= d40846c).
 
-    _clean_tables is a private (underscore-prefixed) method, not part of
-    scholarlm's public API contract — a future scholarlm release could
-    change or remove it with no deprecation path. This is an accepted,
-    explicit coupling risk, taken because it reuses scholarlm's
-    already-tested prompt/batching/splicing logic rather than
-    reimplementing it.
+    Before that commit table cleaning was the private
+    ``MeasurementLM._clean_tables``; ``TableCleaner.clean`` has the same inputs,
+    outputs, prompt (``CLEAN_TABLE_INSTRUCTIONS`` is byte-identical) and
+    call parameters, so cleaned text is expected to match earlier runs.
     """
 
-    def __init__(self, meas_lm: MeasurementLM) -> None:
-        self.meas_lm = meas_lm
+    def __init__(self, cleaner: TableCleaner) -> None:
+        self.cleaner = cleaner
 
     @property
     def context_length_exceeded_docs(self) -> set[int]:
         # scholarlm ships no py.typed marker, so this attribute is Any to
-        # mypy — cast to the type MeasurementLM.__init__ actually assigns
+        # mypy — cast to the type BatchLLMBase.__init__ actually assigns
         # (self.context_length_exceeded_docs: set[int] = set()).
-        return cast("set[int]", self.meas_lm.context_length_exceeded_docs)
+        return cast("set[int]", self.cleaner.context_length_exceeded_docs)
 
     def clean_tables_batch(self, documents: list[str], processed_pdf_dirs: list[str]) -> list[str]:
-        # fit() resets this at the start of each call; since we call
-        # _clean_tables directly (never fit()), we must reset it ourselves
-        # or a context-length failure from a previous batch would leak into
-        # this one's worker-side fail-loud check.
-        self.meas_lm.context_length_exceeded_docs = set()
-        result: list[str] = self.meas_lm._clean_tables(documents, processed_pdf_dirs)
+        # TableCleaner only ever adds to this set; reset it ourselves or a
+        # context-length failure from a previous batch would leak into this
+        # one's worker-side fail-loud check.
+        self.cleaner.context_length_exceeded_docs = set()
+        result: list[str] = self.cleaner.clean(documents, processed_pdf_dirs)
         return result
 
 
@@ -222,29 +213,19 @@ def build_table_clean_adapter(settings: "Settings") -> DirectTableCleanAdapter:
     Raises RuntimeError if TABLE_CLEAN_MODEL is missing (mirrors
     build_ocr_adapter's guard for DOC_LM_MODEL).
 
-    Constructs a MeasurementLM solely to reuse its _clean_tables() method —
-    entity_identification_prompt/schema/attribute_info_dict are required
-    positionally by MeasurementLM.__init__ but never used by _clean_tables,
-    so inert placeholders are passed. clean_tables=False and
-    cleaned_ocr_output_dir=None are both correct here regardless of value:
-    fit() (the only place either is read) is never called — the worker
+    ``TableCleaner.output_dir`` is left unset: the worker
     (table_clean_worker.py) writes cleaned text to disk itself, atomically.
 
     table_clean_max_concurrent is intentionally NOT a Settings field:
-    _clean_tables hardcodes max_concurrent=2 in its own _call_batch call,
-    ignoring MeasurementLM.max_concurrent for this code path — a
+    ``TableCleaner.clean`` hardcodes max_concurrent=2 in its own _call_batch
+    call, ignoring the constructor's max_concurrent for this code path — a
     TABLE_CLEAN_MAX_CONCURRENT setting would silently do nothing.
     """
     if not settings.table_clean_model:
         raise RuntimeError("TABLE_CLEAN_MODEL must be configured to run table cleaning.")
 
-    meas_lm = MeasurementLM(
+    cleaner = TableCleaner(
         model_name=settings.table_clean_model,
-        entity_identification_prompt="unused: table-clean adapter only calls _clean_tables",
-        entity_identification_schema=_UnusedTableCleanEntitySchema,
-        attribute_info_dict={},
-        clean_tables=False,
-        cleaned_ocr_output_dir=None,
         sampling_params={
             "temperature": settings.table_clean_temperature,
             "top_p": settings.table_clean_top_p,
@@ -255,7 +236,7 @@ def build_table_clean_adapter(settings: "Settings") -> DirectTableCleanAdapter:
         api_base=settings.table_clean_base_url,
         api_key=settings.table_clean_api_key,
     )
-    return DirectTableCleanAdapter(meas_lm=meas_lm)
+    return DirectTableCleanAdapter(cleaner=cleaner)
 
 
 # ---------------------------------------------------------------------------
@@ -364,6 +345,29 @@ def _count_prompt_tokens(tokenizer: _Tokenizer, direct_extraction_prompt: str, c
     )
 
 
+#: Completion tokens scholarlm's direct-extraction call always requests
+#: (``max_tokens=32768`` hardcoded in ``MeasurementLM._extract_triples``,
+#: scholarlm/measurementlm.py). vLLM rejects a request whose prompt plus
+#: requested completion exceeds ``--max-model-len``, so the truncation
+#: backstop must leave this much of the context window free. Not tunable from
+#: here; tests/test_adapter.py asserts it still matches the installed
+#: scholarlm so a pin bump that changes it fails loudly.
+SCHOLARLM_EXTRACT_MAX_TOKENS = 32768
+
+
+#: ``response_format["json_schema"]["name"]`` of the per-document extraction
+#: call in scholarlm's ``MeasurementLM._extract_triples``; the other steps use
+#: ``standardize_response`` and ``parse_quantity_response``. Asserted against
+#: the installed scholarlm in tests/test_adapter.py.
+DIRECT_EXTRACTION_FORMAT_NAME = "direct_extraction_list"
+
+
+def _format_name(response_format: dict[str, Any] | None) -> str:
+    if response_format is None:
+        return "<no response_format>"
+    return str(response_format["json_schema"]["name"])
+
+
 def _truncate_context_to_budget(
     tokenizer: _Tokenizer,
     direct_extraction_prompt: str,
@@ -427,19 +431,60 @@ class DirectMeasurementAdapter:
         model_version: str,
         tokenizer: _Tokenizer,
         max_model_len: int,
+        reserved_completion_tokens: int,
         lat_field: str | None = None,
         lon_field: str | None = None,
     ) -> None:
+        if max_model_len <= reserved_completion_tokens:
+            raise ValueError(
+                f"max_model_len={max_model_len} leaves no room for a prompt after "
+                f"reserving reserved_completion_tokens={reserved_completion_tokens} "
+                f"for the completion."
+            )
         self.meas_lm = meas_lm
         self.schema_name = schema_name
         self.model_version = model_version
         self.tokenizer = tokenizer
         self.max_model_len = max_model_len
+        self.reserved_completion_tokens = reserved_completion_tokens
         self.lat_field = lat_field
         self.lon_field = lon_field
+        # scholarlm's _call_batch retries a response that is empty or fails
+        # its validator, and after the last retry hands back the bad response
+        # anyway; _extract_triples then substitutes an empty item list (a
+        # print, no exception), so a paper whose extraction call never
+        # produced a valid response is indistinguishable from one with
+        # nothing to extract. This wrapper re-applies _call_batch's own
+        # failure test to each final response and records which calls
+        # exhausted their retries, per step.
+        self.exhausted_calls: dict[str, set[int]] = {}
+        self._call_batch_original = meas_lm._call_batch
+        meas_lm._call_batch = self._recording_call_batch
         # Batch-local indices truncated by the backstop in the most recent
         # extract_batch() call — see MeasurementAdapter's docstring.
         self.truncated_docs: set[int] = set()
+
+    def _recording_call_batch(
+        self, message_sets: list[Any], *args: Any, **kwargs: Any
+    ) -> list[Any]:
+        results: list[Any] = self._call_batch_original(message_sets, *args, **kwargs)
+        assert len(results) == len(message_sets), (
+            f"_call_batch returned {len(results)} responses for {len(message_sets)} requests"
+        )
+        validator = kwargs.get("validator")
+        name = _format_name(kwargs.get("response_format"))
+        for i, resp in enumerate(results):
+            if isinstance(resp, ContextLengthExceededError):
+                continue  # tracked separately via context_length_exceeded_docs
+            exhausted = not resp
+            if not exhausted and validator is not None:
+                try:
+                    validator(resp)
+                except Exception:  # noqa: BLE001 - same failure test _call_batch applies; recorded, surfaced in extract_batch
+                    exhausted = True
+            if exhausted:
+                self.exhausted_calls.setdefault(name, set()).add(i)
+        return results
 
     def extract_batch(self, ocr_texts: list[str]) -> list[DocumentOutcome]:
         # MeasurementLM.fit() in extraction_mode="direct" runs two LLM calls
@@ -458,10 +503,11 @@ class DirectMeasurementAdapter:
             "needs the same prompt text the server will actually receive."
         )
 
+        prompt_token_limit = self.max_model_len - self.reserved_completion_tokens
         processed_texts: list[str] = []
         for i, text in enumerate(ocr_texts):
             truncated_text, was_truncated = _truncate_context_to_budget(
-                self.tokenizer, direct_extraction_prompt, text, self.max_model_len
+                self.tokenizer, direct_extraction_prompt, text, prompt_token_limit
             )
             if was_truncated:
                 self.truncated_docs.add(i)
@@ -470,10 +516,24 @@ class DirectMeasurementAdapter:
                     batch_index=i,
                     original_tokens=len(self.tokenizer.encode(text, add_special_tokens=False)),
                     max_model_len=self.max_model_len,
+                    prompt_token_limit=prompt_token_limit,
                 )
             processed_texts.append(truncated_text)
 
+        self.exhausted_calls = {}
         raw: list[dict[str, Any]] = self.meas_lm.fit(processed_texts)
+        extraction_exhausted = self.exhausted_calls.get(DIRECT_EXTRACTION_FORMAT_NAME, set())
+        for step, indices in self.exhausted_calls.items():
+            if step != DIRECT_EXTRACTION_FORMAT_NAME:
+                # Indices here are per-step request positions, not document
+                # ids. Standardize failures leave original units; parse
+                # failures leave the seven parsed keys absent (the warehouse
+                # skips and logs those as missing_parse).
+                log.warning(
+                    "extraction_followup_calls_exhausted_retries",
+                    step=step,
+                    count=len(indices),
+                )
 
         by_document: dict[int, list[dict[str, Any]]] = defaultdict(list)
         for record in raw:
@@ -502,6 +562,17 @@ class DirectMeasurementAdapter:
         results: list[DocumentOutcome] = []
         for i in range(len(ocr_texts)):
             records = by_document[i]
+            if i in extraction_exhausted:
+                assert not records, (
+                    f"document {i} has {len(records)} records although its extraction "
+                    f"call exhausted retries; batch positions no longer line up"
+                )
+                results.append(
+                    f"MeasurementLM extraction call for document {i} exhausted its "
+                    f"retries without a valid response (empty or failed validation); "
+                    f"zero records extracted."
+                )
+                continue
             if i in context_length_exceeded:
                 if not records:
                     results.append(
@@ -604,10 +675,11 @@ def build_measurement_adapter(settings: "Settings") -> DirectMeasurementAdapter:
         attribute_info_dict=ATTRIBUTE_INFO_DICT,
         measurement_event_schema=MeasurementEventSchema,
         extraction_mode="direct",
-        clean_tables=False,
         direct_extraction_schema=DirectExtractionSchema,
         direct_extraction_prompt=build_direct_extraction_prompt(settings.meas_lm_entity_identification_prompt),
         collect_attribute_terms=False,
+        parse_quantities_context=settings.meas_lm_parse_quantities_context,
+        standardize_context=settings.meas_lm_standardize_context,
         sampling_params={
             "temperature": settings.meas_lm_temperature,
             "top_p": settings.meas_lm_top_p,
@@ -635,6 +707,7 @@ def build_measurement_adapter(settings: "Settings") -> DirectMeasurementAdapter:
         ),
         tokenizer=tokenizer,
         max_model_len=settings.meas_lm_max_model_len,
+        reserved_completion_tokens=SCHOLARLM_EXTRACT_MAX_TOKENS,
         lat_field=settings.extraction_lat_field,
         lon_field=settings.extraction_lon_field,
     )
@@ -737,3 +810,322 @@ def build_judge(settings: "Settings") -> JudgeComponents:
         attribution_methods=attribution_methods,
         instructions_prompt=settings.judge_instructions_prompt,
     )
+
+
+# ---------------------------------------------------------------------------
+# Representation stage — term embeddings via scholarlm.RepresentationLM
+# ---------------------------------------------------------------------------
+
+def parse_layers(csv: str) -> list[int]:
+    """Parse REPR_LM_LAYERS ("0,32") into a sorted, duplicate-free int list; raises on junk."""
+    layers = [int(x) for x in csv.split(",") if x.strip()]
+    if not layers or len(set(layers)) != len(layers) or any(L < 0 for L in layers):
+        raise ValueError(f"invalid REPR_LM_LAYERS {csv!r}")
+    return sorted(layers)
+
+
+def parse_context_radius(value: str) -> int | None:
+    """Parse REPR_LM_CONTEXT_RADIUS: the literal ``none`` (whole document) or an int >= 0."""
+    if value.strip().lower() == "none":
+        return None
+    radius = int(value)
+    if radius < 0:
+        raise ValueError(f"invalid REPR_LM_CONTEXT_RADIUS {value!r}")
+    return radius
+
+
+@dataclass
+class ReprResult:
+    """Term-occurrence embeddings for ONE document, as parallel arrays.
+
+    ``representations`` maps layer index -> ``[n, hidden]`` array (float32 from
+    the real model), every layer with the same ``n`` rows in the same order as
+    the provenance arrays. ``n`` may be 0 — a paper that never mentions any
+    term is a legitimate result, not an error.
+
+    ``char_starts``/``char_ends``/``window_starts``/``window_ends`` index the
+    CLEANED text (``cleaned_sha256`` identifies it), not the file on disk.
+    ``token_indices``/``token_first_indices`` are relative to the forward pass's
+    window. ``n_truncated`` is always 0 for bidirectional models (overflow raises);
+    the worker treats nonzero as a failure.
+    """
+
+    representations: dict[int, Any]  # layer -> np.ndarray [n, hidden]
+    labels: Any  # np.ndarray[str] [n]
+    char_starts: Any  # np.ndarray[int64] [n]
+    char_ends: Any  # np.ndarray[int64] [n]
+    token_indices: Any  # np.ndarray[int64] [n], last pooled token, window-relative
+    token_first_indices: Any  # np.ndarray[int64] [n], first pooled token, window-relative
+    n_pooled_tokens: Any  # np.ndarray[int64] [n]
+    paragraph_indices: Any  # np.ndarray[int64] [n]
+    window_starts: Any  # np.ndarray[int64] [n]
+    window_ends: Any  # np.ndarray[int64] [n]
+    n_truncated: int
+    hidden_size: int
+    cleaned_sha256: str
+    reference_heading_found: bool | None  # None iff references are not removed
+    kept_fraction_after_references: float | None
+
+
+@dataclass(frozen=True)
+class SkipReason:
+    """Why a document cannot be run: ``kind`` is ``clean_error`` or ``overflow``."""
+
+    kind: str
+    detail: str
+
+
+def window_units(
+    cleaned: str, occurrences: list[tuple[str, int, int]], context_radius: int | None
+) -> list[tuple[tuple[int, int], list[tuple[str, int, int, int]]]]:
+    """Group occurrences into forward-pass units exactly as ``RepresentationLM.collect`` does.
+
+    Returns ``[((window_start, window_end), [(term, start, end, paragraph_index)])]``.
+    """
+    from scholarlm.representationlm import paragraph_of_span, split_paragraphs, window_span
+
+    paragraphs = split_paragraphs(cleaned)
+    assert paragraphs, "occurrences but no paragraphs"
+    occ_para = [(t, s, e, paragraph_of_span(paragraphs, s, e)) for t, s, e in occurrences]
+    if context_radius is None:
+        return [((0, len(cleaned)), occ_para)]
+    by_para: dict[int, list[tuple[str, int, int, int]]] = {}
+    for o in occ_para:
+        by_para.setdefault(o[3], []).append(o)
+    return [(window_span(paragraphs, pi, context_radius), occs) for pi, occs in sorted(by_para.items())]
+
+
+@runtime_checkable
+class ReprAdapter(Protocol):
+    """Collects embeddings of ``terms`` for one document at ``layers``."""
+
+    hidden_size: int
+    layers: list[int]
+
+    def collect(self, doc_id: str, text: str, terms: list[str]) -> ReprResult: ...
+
+    def skip_reason(self, doc_id: str, text: str, terms: list[str]) -> SkipReason | None:
+        """Why ``collect`` would raise for this document (cleaning error or over-length window), else None."""
+        ...
+
+
+class StubReprAdapter:
+    """Deterministic fake for tests. Cleans the text and matches terms on the
+    CLEANED text with scholarlm's own helpers (as RepresentationLM does), forms
+    the same paragraph windows, and emits tiny hand-checkable embeddings
+    (value = char_start/1000 + layer). "Tokens" are whitespace-separated words,
+    so ``max_tokens`` lets tests exercise the overflow predicate without a model."""
+
+    def __init__(
+        self,
+        hidden_size: int = 4,
+        layers: list[int] | None = None,
+        context_radius: int | None = None,
+        max_tokens: int | None = None,
+        remove_references: bool = False,
+    ) -> None:
+        from scholarlm.representationlm import CleaningConfig
+
+        self.hidden_size = hidden_size
+        self.layers = [0, 32] if layers is None else layers
+        self.context_radius = context_radius
+        self.max_tokens = max_tokens
+        self._cleaning = CleaningConfig(remove_references=remove_references)
+
+    def _clean(self, text: str) -> tuple[str, dict]:
+        from scholarlm.representationlm import clean_ocr_text
+
+        return clean_ocr_text(text, self._cleaning)
+
+    def skip_reason(self, doc_id: str, text: str, terms: list[str]) -> SkipReason | None:
+        from scholarlm.representationlm import find_key_term_occurrences
+
+        try:
+            cleaned, _ = self._clean(text)
+        except (AssertionError, ValueError) as e:
+            return SkipReason("clean_error", str(e))
+        occ = find_key_term_occurrences(cleaned, terms)
+        if not occ or self.max_tokens is None:
+            return None
+        for (a, b), _ in window_units(cleaned, occ, self.context_radius):
+            n = len(cleaned[a:b].split())
+            if n > self.max_tokens:
+                return SkipReason("overflow", f"window [{a}, {b}) has {n} tokens > {self.max_tokens}")
+        return None
+
+    def collect(self, doc_id: str, text: str, terms: list[str]) -> ReprResult:
+        import hashlib
+
+        import numpy as np
+        from scholarlm.representationlm import find_key_term_occurrences
+
+        cleaned, info = self._clean(text)
+        occ = find_key_term_occurrences(cleaned, terms)
+        n = len(occ)
+        starts = np.asarray([s for _, s, _ in occ], dtype=np.float32)
+        reps = {
+            L: np.repeat((starts / 1000.0 + L)[:, None], self.hidden_size, axis=1).astype(np.float32)
+            for L in self.layers
+        }
+        win: dict[tuple[int, int], tuple[int, int]] = {}
+        para_of: dict[tuple[int, int], int] = {}
+        if n:
+            for (a, b), occs in window_units(cleaned, occ, self.context_radius):
+                for _, s, e, pi in occs:
+                    win[(s, e)] = (a, b)
+                    para_of[(s, e)] = pi
+        return ReprResult(
+            representations=reps,
+            labels=np.asarray([t for t, _, _ in occ], dtype="U"),
+            char_starts=np.asarray([s for _, s, _ in occ], dtype=np.int64),
+            char_ends=np.asarray([e for _, _, e in occ], dtype=np.int64),
+            token_indices=np.arange(n, dtype=np.int64),
+            token_first_indices=np.arange(n, dtype=np.int64),
+            n_pooled_tokens=np.ones(n, dtype=np.int64),
+            paragraph_indices=np.asarray([para_of[(s, e)] for _, s, e in occ], dtype=np.int64),
+            window_starts=np.asarray([win[(s, e)][0] for _, s, e in occ], dtype=np.int64),
+            window_ends=np.asarray([win[(s, e)][1] for _, s, e in occ], dtype=np.int64),
+            n_truncated=0,
+            hidden_size=self.hidden_size,
+            cleaned_sha256=hashlib.sha256(cleaned.encode("utf-8")).hexdigest(),
+            reference_heading_found=info["reference_heading_found"],
+            kept_fraction_after_references=info["kept_fraction_after_references"],
+        )
+
+
+class DirectReprAdapter:
+    """Wraps ``scholarlm.RepresentationLM`` (needs scholarlm >= 95bde63: bidirectional
+    backend, cleaning, paragraph windows, mean pooling)."""
+
+    def __init__(self, model: Any) -> None:
+        self._model = model
+        self.hidden_size: int = model.hidden_size
+        self.layers: list[int] = list(model.layers)
+
+    def skip_reason(self, doc_id: str, text: str, terms: list[str]) -> SkipReason | None:
+        from scholarlm.representationlm import find_key_term_occurrences
+
+        try:
+            cleaned_docs, _ = self._model.prepare_documents({doc_id: text})
+        except (AssertionError, ValueError) as e:
+            return SkipReason("clean_error", str(e))
+        cleaned = cleaned_docs[doc_id]
+        occ = find_key_term_occurrences(cleaned, terms)
+        if not occ:
+            return None
+        limit = self._model.max_position_embeddings
+        for (a, b), _ in window_units(cleaned, occ, self._model.context_radius):
+            input_ids, _ = self._model._tokenize(cleaned[a:b])
+            if len(input_ids) > limit:
+                return SkipReason("overflow", f"window [{a}, {b}) has {len(input_ids)} tokens > {limit}")
+        return None
+
+    def collect(self, doc_id: str, text: str, terms: list[str]) -> ReprResult:
+        import numpy as np
+        from scholarlm.representationlm import find_key_term_occurrences
+
+        # RepresentationLM.collect() raises when NO term occurs in the CLEANED
+        # document ("nothing to collect"). For a single paper that is a legitimate
+        # zero-occurrence result, so detect it up front on the same cleaned text
+        # with the same matcher (a term only inside a table or the references
+        # would otherwise crash the run), rather than catching the RuntimeError.
+        cleaned_docs, infos = self._model.prepare_documents({doc_id: text})
+        info = infos[doc_id]
+        meta = {
+            "cleaned_sha256": info["cleaned_sha256"],
+            "reference_heading_found": info["reference_heading_found"],
+            "kept_fraction_after_references": info["kept_fraction_after_references"],
+        }
+        if not find_key_term_occurrences(cleaned_docs[doc_id], terms):
+            empty_i = np.asarray([], dtype=np.int64)
+            return ReprResult(
+                representations={L: np.zeros((0, self.hidden_size), dtype=np.float32) for L in self.layers},
+                labels=np.asarray([], dtype="U"),
+                char_starts=empty_i, char_ends=empty_i, token_indices=empty_i,
+                token_first_indices=empty_i, n_pooled_tokens=empty_i,
+                paragraph_indices=empty_i, window_starts=empty_i, window_ends=empty_i,
+                n_truncated=0, hidden_size=self.hidden_size, **meta,
+            )
+        out = self._model.collect({doc_id: text}, terms)
+        assert sorted(out["representations"]) == self.layers, (sorted(out["representations"]), self.layers)
+        assert self._model.doc_info[doc_id]["cleaned_sha256"] == meta["cleaned_sha256"]
+        return ReprResult(
+            representations=out["representations"],
+            labels=out["labels"],
+            char_starts=out["char_starts"],
+            char_ends=out["char_ends"],
+            token_indices=out["token_indices"],
+            token_first_indices=out["token_first_indices"],
+            n_pooled_tokens=out["n_pooled_tokens"],
+            paragraph_indices=out["paragraph_indices"],
+            window_starts=out["window_starts"],
+            window_ends=out["window_ends"],
+            n_truncated=int(self._model.n_truncated),
+            hidden_size=self.hidden_size,
+            **meta,
+        )
+
+
+def build_repr_adapter(settings: "Settings") -> DirectReprAdapter:
+    """Construct the production ReprAdapter from Settings.
+
+    Every RepresentationLM option is read from ``REPR_LM_*`` and a missing one is a
+    RuntimeError (no defaults). Refuses to run without CUDA when the device is a
+    CUDA device, and always passes ``overflow_policy="error"``: over-length input
+    must be excluded up front (``seed_repr``), never truncated.
+    """
+    import torch
+    from scholarlm.representationlm import CleaningConfig, RepresentationLM
+
+    s = settings
+    required = {
+        "REPR_LM_MODEL": s.repr_lm_model,
+        "REPR_LM_ARCHITECTURE": s.repr_lm_architecture,
+        "REPR_LM_POOLING": s.repr_lm_pooling,
+        "REPR_LM_CONTEXT_RADIUS": s.repr_lm_context_radius,
+        "REPR_LM_REMOVE_REFERENCES": s.repr_lm_remove_references,
+        "REPR_LM_REMOVE_TABLES": s.repr_lm_remove_tables,
+        "REPR_LM_REMOVE_PAGE_TAGS": s.repr_lm_remove_page_tags,
+    }
+    missing = [k for k, v in required.items() if v is None]
+    if missing:
+        raise RuntimeError(f"{', '.join(missing)} must be configured to run representation collection.")
+    if s.repr_lm_remove_references and s.repr_lm_min_kept_fraction is None:
+        raise RuntimeError("REPR_LM_MIN_KEPT_FRACTION must be set when REPR_LM_REMOVE_REFERENCES is true.")
+    if not s.repr_lm_remove_references and s.repr_lm_min_kept_fraction is not None:
+        raise RuntimeError("REPR_LM_MIN_KEPT_FRACTION is set but REPR_LM_REMOVE_REFERENCES is false.")
+
+    cleaning = CleaningConfig(
+        remove_references=bool(s.repr_lm_remove_references),
+        remove_tables=bool(s.repr_lm_remove_tables),
+        remove_page_tags=bool(s.repr_lm_remove_page_tags),
+        min_kept_fraction_after_references=s.repr_lm_min_kept_fraction,
+    )
+    common: dict[str, Any] = dict(
+        model_name=s.repr_lm_model,
+        architecture=s.repr_lm_architecture,
+        layers=parse_layers(s.repr_lm_layers),
+        pooling=s.repr_lm_pooling,
+        cleaning=cleaning,
+        context_radius=parse_context_radius(cast(str, s.repr_lm_context_radius)),
+        overflow_policy="error",
+    )
+    dtype = getattr(torch, s.repr_lm_dtype)
+    if s.repr_lm_architecture == "bidirectional":
+        if not s.repr_lm_device or not s.repr_lm_attn_implementation or not s.repr_lm_hf_cache_dir:
+            raise RuntimeError(
+                "bidirectional repr needs REPR_LM_DEVICE, REPR_LM_ATTN_IMPLEMENTATION and REPR_LM_HF_CACHE_DIR."
+            )
+        if s.repr_lm_device.startswith("cuda") and not torch.cuda.is_available():
+            raise RuntimeError("repr stage requires a CUDA GPU; torch.cuda.is_available() is False.")
+        common.update(
+            device=s.repr_lm_device,
+            hf_cache_dir=s.repr_lm_hf_cache_dir,
+            hf_kwargs={"torch_dtype": dtype, "attn_implementation": s.repr_lm_attn_implementation},
+        )
+    else:
+        if not torch.cuda.is_available():
+            raise RuntimeError("repr stage requires a CUDA GPU; torch.cuda.is_available() is False.")
+        common.update(nnsight_kwargs={"torch_dtype": dtype})
+    torch.manual_seed(s.repr_lm_seed)
+    return DirectReprAdapter(RepresentationLM(**common))

@@ -55,7 +55,10 @@ mkdir -p logs out
 # ---- Preflight: fail fast if the DB isn't reachable --------------------------
 python3 scripts/check_db.py
 
-if [ "$STAGE" != "judge" ]; then
+NEEDS_SERVER=1
+case "$STAGE" in judge|repr|repr_terms) NEEDS_SERVER=0 ;; esac
+
+if [ "$NEEDS_SERVER" = "1" ]; then
     # Pick a private port for this job's model server rather than using the
     # static <ROLE>_PORT from .env: two same-role experiments (e.g. two "ocr"
     # configs) submitted at once can land on the same host, and a shared static
@@ -68,6 +71,20 @@ if [ "$STAGE" != "judge" ]; then
     declare "${ROLE}_BASE_URL=http://localhost:${ROLE_PORT}/v1"
     export "${ROLE}_BASE_URL"
 
+    # Hand params.env to the server too (serve_model.sh re-sources .env, which
+    # would otherwise win over anything exported here). Written as quoted
+    # KEY=VALUE lines; an empty mapping gives an empty file.
+    PARAMS_ENV_FILE="$(mktemp "${TMPDIR:-/tmp}/params_env_${EXPERIMENT_ID}.XXXXXX")"
+    export PARAMS_ENV_FILE
+    python3 - "configs/${EXPERIMENT_ID}.yaml" "$PARAMS_ENV_FILE" <<'PYEOF'
+import shlex, sys, yaml
+config = yaml.safe_load(open(sys.argv[1]))
+env = config["params"].get("env") or {}
+with open(sys.argv[2], "w") as f:
+    for key, value in env.items():
+        f.write(f"{key}={shlex.quote(str(value))}\n")
+PYEOF
+
     # ---- Start the server in the background --------------------------------------
     # No gpu_id argument: standalone single-GPU job, so SGE's own
     # CUDA_VISIBLE_DEVICES assignment for the allocated GPU stands.
@@ -75,14 +92,14 @@ if [ "$STAGE" != "judge" ]; then
     ./serve_model.sh "$ROLE" &
     SERVER_PID=$!
 
-    trap 'echo "Stopping vLLM server (PID $SERVER_PID)..."; kill "$SERVER_PID" 2>/dev/null || true; wait "$SERVER_PID" 2>/dev/null || true' EXIT
+    trap 'rm -f "$PARAMS_ENV_FILE"; echo "Stopping vLLM server (PID $SERVER_PID)..."; kill "$SERVER_PID" 2>/dev/null || true; wait "$SERVER_PID" 2>/dev/null || true' EXIT
 
     ./wait_for_health.sh "$ROLE_PORT" "$SERVER_PID"
     cd "$REPO_DIR"
 else
     # judge: JudgementLM loads weights directly in-process via nnsight (see
     # adapter.build_judge) — no vLLM server, no port, nothing to health-check.
-    echo "STAGE=judge: no model server to start (JudgementLM loads in-process)."
+    echo "STAGE=$STAGE: no model server to start (model loads in-process via nnsight)."
 fi
 
 # ---- Run the experiment --------------------------------------------------------

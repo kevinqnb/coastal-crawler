@@ -41,7 +41,21 @@ from coastal_crawler.db import store, warehouse_reader
 from coastal_crawler.db.models import Paper
 from coastal_crawler.site.app import app
 from tests.test_build_warehouse import build_warehouse
-from tests.test_store import make_extraction_result, make_paper
+from tests.test_store import make_extraction_result as _make_extraction_result
+from tests.test_store import make_paper
+
+
+def make_extraction_result(**kwargs):  # type: ignore[no-untyped-def]
+    """test_store's helper, plus the model-parsed value fields the warehouse
+    now requires (a plain point value) — rows without them are skipped as
+    ``missing_parse`` by scripts/build_warehouse.py."""
+    data = kwargs["data"]
+    kwargs["data"] = {
+        "qualifiers": [], "point_value": data.get("value"), "lower": None, "upper": None,
+        "list_values": None, "tolerance": None, "standard_deviation": None,
+        **data,
+    }
+    return _make_extraction_result(**kwargs)
 
 
 def _test_settings(warehouse_path: Path) -> Settings:

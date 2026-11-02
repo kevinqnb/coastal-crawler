@@ -1,0 +1,33 @@
+id: 2026-10-20-extract-smoke-02
+project: coastal-crawler
+description: >
+  Plumbing-only twin of 2026-10-20-extract-smoke-01 on Llama-3.1-8B-Instruct
+  so it can run on a small GPU instead of waiting for an H200. Same stage,
+  batch_size=3, same checks (see -01's PREDICTION): extracted=3, failed=0,
+  all seven parsed keys on every extraction row, no
+  document_partially_standardized warning, missing_parse=0 after a
+  build_warehouse run. Says nothing about gpt-oss-120b's structured-output
+  behaviour or parse failure rate, and an 8B model's output quality is
+  irrelevant here -- -01 still has to pass before any full run.
+
+  CLEANUP REQUIRED afterwards: this writes real extractions rows (model_version
+  contains Llama-3.1-8B-Instruct) into the production DB. Run
+  `coastal-crawler reset-extractions` once its checks are done, before
+  anything else extracts.
+
+  Needs the params.env -> server fix and params.gpu_* overrides
+  (scripts/serve_model.sh, run_experiment_job.sh, submit.sh).
+seed: 342
+params:
+  stage: extract
+  batch_size: 3
+  gpu_memory: 32G
+  gpu_c: 8.0
+  env:
+    MEAS_LM_MODEL: meta-llama/Llama-3.1-8B-Instruct
+    # 32768 so the KV cache fits a 32GB card; longer papers are truncated by
+    # the backstop (fine for plumbing).
+    MEAS_LM_MAX_MODEL_LEN: 32768
+    # Explicitly blank so a quantization setting in .env meant for gpt-oss
+    # can't leak into an unquantized Llama.
+    MEAS_LM_QUANTIZATION: ""

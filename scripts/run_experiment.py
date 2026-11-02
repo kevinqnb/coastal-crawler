@@ -11,7 +11,7 @@ Usage:
     python scripts/run_experiment.py configs/<id>.yaml
 
 Config `params` (free-form per the contract, but this adapter reads):
-    stage:         "filter" | "ocr" | "table_clean" | "extract" | "judge"   (required)
+    stage:         "filter" | "ocr" | "table_clean" | "extract" | "judge" | "repr" | "repr_terms"   (required)
     batch_size:    int, passed straight through to the stage function.
                    Defaults to that stage's existing default (Settings'
                    FILTER_BATCH_SIZE for filter; 10 for ocr/table_clean/
@@ -40,6 +40,14 @@ Config `params` (free-form per the contract, but this adapter reads):
                    own <ROLE>_SEED (FILTER_SEED / DOC_LM_SEED /
                    TABLE_CLEAN_SEED / MEAS_LM_SEED / JUDGE_SEED) unless
                    `env` already sets it.
+
+    repr stage (RepresentationLM term embeddings; no vLLM server, model loads
+    in-process): ALL of terms_file (path under the repo, one term per line),
+    source_statuses (papers.status values to include), max_papers (int, or
+    null = all qualifying papers) and batch_size are required — no defaults.
+    The run's queue is seeded from the config id (idempotent), embeddings go
+    to REPR_DIR/<id>/, and artifacts/repr_output.json records where. Metrics:
+    repr_done / failed / zero_occurrence (papers with no term mention).
 
 Metrics shim: run_filter/run_ocr_worker/run_table_clean_worker/run_worker/
 run_judge_worker each already return a 3-tuple of counts (e.g.
@@ -72,12 +80,14 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 # stage -> (metric names for the 3-tuple each run_* function returns,
 #           <ROLE>_SEED env var to receive the config's top-level `seed`)
-STAGE_METRICS: dict[str, tuple[str, str, str]] = {
+STAGE_METRICS: dict[str, tuple[str, ...]] = {
     "filter": ("relevant", "irrelevant", "errors"),
     "ocr": ("ocr_done", "failed", "requeued"),
     "table_clean": ("table_clean_done", "failed", "requeued"),
     "extract": ("extracted", "failed", "requeued"),
     "judge": ("judged", "failed", "requeued"),
+    "repr": ("repr_done", "failed", "zero_occurrence", "skipped_overflow", "skipped_clean_error"),
+    "repr_terms": ("terms_embedded", "failed", "zero_occurrence"),
 }
 STAGE_SEED_ENV: dict[str, str] = {
     "filter": "FILTER_SEED",
@@ -85,6 +95,8 @@ STAGE_SEED_ENV: dict[str, str] = {
     "table_clean": "TABLE_CLEAN_SEED",
     "extract": "MEAS_LM_SEED",
     "judge": "JUDGE_SEED",
+    "repr": "REPR_LM_SEED",
+    "repr_terms": "REPR_LM_SEED",
 }
 
 
@@ -103,6 +115,11 @@ class _Tee:
         for s in self._streams:
             s.flush()
 
+    def isatty(self) -> bool:
+        # Libraries (e.g. transformers' load report) probe sys.stdout.isatty();
+        # the tee also feeds a log file, so it is never a terminal.
+        return False
+
 
 def _git(*args: str) -> str:
     return subprocess.run(
@@ -114,7 +131,17 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _run_stage(stage: str, params: dict[str, Any]) -> tuple[int, int, int]:
+def _model_snapshot(settings: Any) -> str | None:
+    """Name of the local HF snapshot directory (the revision hash) the model loads from; offline lookup."""
+    if settings.repr_lm_architecture != "bidirectional":
+        return None
+    from huggingface_hub import snapshot_download
+
+    path = snapshot_download(settings.repr_lm_model, cache_dir=settings.repr_lm_hf_cache_dir, local_files_only=True)
+    return Path(path).name
+
+
+def _run_stage(stage: str, params: dict[str, Any], run_id: str) -> tuple[int, ...]:
     """Call this stage's existing entry point. No pipeline logic lives here."""
     from coastal_crawler.config import get_settings
 
@@ -195,6 +222,88 @@ def _run_stage(stage: str, params: dict[str, Any]) -> tuple[int, int, int]:
             )
         return run_judge_worker(batch_size=batch_size, components=components)
 
+    if stage in ("repr", "repr_terms"):
+        import json as _json
+
+        from coastal_crawler.adapter import build_repr_adapter
+        from coastal_crawler.repr_worker import (
+            read_terms,
+            run_isolated_terms,
+            run_repr_worker,
+            seed_repr,
+            terms_hash,
+        )
+
+        # Unlike the other stages, every repr param is required (no defaults):
+        # the config alone must determine the run.
+        terms = read_terms(str(REPO_ROOT / params["terms_file"]))
+        assert settings.repr_lm_model
+        adapter = build_repr_adapter(settings)
+        out_dir = Path(settings.repr_dir) / run_id
+        artifacts = Path(os.environ["RUNS_ROOT"]) / run_id / "artifacts"
+        meta: dict[str, Any] = {
+            "run_id": run_id,
+            "repr_dir": str(out_dir.resolve()),
+            "model": settings.repr_lm_model,
+            "model_snapshot": _model_snapshot(settings),
+            "architecture": settings.repr_lm_architecture,
+            "pooling": settings.repr_lm_pooling,
+            "context_radius": settings.repr_lm_context_radius,
+            "attn_implementation": settings.repr_lm_attn_implementation,
+            "cleaning": {
+                "remove_references": settings.repr_lm_remove_references,
+                "remove_tables": settings.repr_lm_remove_tables,
+                "remove_page_tags": settings.repr_lm_remove_page_tags,
+                "min_kept_fraction": settings.repr_lm_min_kept_fraction,
+            },
+            "dtype": settings.repr_lm_dtype,
+            "store_dtype": settings.repr_lm_store_dtype,
+            "layers": adapter.layers,
+            "hidden_size": adapter.hidden_size,
+            "terms_file": params["terms_file"],
+            "terms_hash": terms_hash(terms),
+            "n_terms": len(terms),
+            "seed": settings.repr_lm_seed,
+        }
+        if stage == "repr_terms":
+            n = run_isolated_terms(adapter, terms, out_dir / "isolated_terms.npz", settings.repr_lm_store_dtype)
+            (artifacts / "repr_output.json").write_text(_json.dumps(meta, indent=2) + "\n")
+            return (n, 0, 0)
+
+        assert settings.repr_lm_text_dir
+        source_statuses = params["source_statuses"]
+        max_papers = params["max_papers"]  # null = all eligible papers
+        batch_size = params["batch_size"]
+        skip_manifest = artifacts / "repr_skipped.json"
+        # Idempotent: re-submitting the same config id resumes its queue.
+        seed_repr(
+            run_id, settings.repr_lm_model, terms, settings.repr_lm_text_dir, source_statuses, max_papers,
+            adapter=adapter,
+            skip_overflow=params["skip_overflow"],
+            skip_clean_errors=params["skip_clean_errors"],
+            skip_manifest=skip_manifest,
+        )
+        manifest = _json.loads(skip_manifest.read_text())
+        meta |= {
+            "text_dir": settings.repr_lm_text_dir,
+            "source_statuses": source_statuses,
+            "max_papers": max_papers,
+            "n_eligible": manifest["n_eligible"],
+            "n_skipped": manifest["n_skipped"],
+            "skip_manifest": str(skip_manifest),
+        }
+        (artifacts / "repr_output.json").write_text(_json.dumps(meta, indent=2) + "\n")
+        done, failed, zero = run_repr_worker(
+            run_id=run_id,
+            adapter=adapter,
+            terms=terms,
+            text_dir=settings.repr_lm_text_dir,
+            repr_dir=settings.repr_dir,
+            store_dtype=settings.repr_lm_store_dtype,
+            batch_size=batch_size,
+        )
+        return (done, failed, zero, manifest["n_skipped"]["overflow"], manifest["n_skipped"]["clean_error"])
+
     raise ValueError(f"params.stage must be one of {sorted(STAGE_METRICS)}, got {stage!r}")
 
 
@@ -244,7 +353,7 @@ def main() -> None:
         tee_out, tee_err = _Tee(sys.stdout, log_file), _Tee(sys.stderr, log_file)
         try:
             with redirect_stdout(tee_out), redirect_stderr(tee_err):
-                result = _run_stage(stage, params)
+                result = _run_stage(stage, params, run_id)
                 metrics = dict(zip(STAGE_METRICS[stage], result))
         except Exception:
             status = "failed"

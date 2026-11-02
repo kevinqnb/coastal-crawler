@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}Representations &mdash; coastal-crawler{% endblock %}
+{% block content %}
+
+<div class="section-header">
+  <h2 class="section-title">Term Representations</h2>
+</div>
+<hr class="section-divider">
+
+<p class="repr-note" id="repr-summary">Loading&hellip;</p>
+
+<div class="repr-controls">
+  <span class="repr-subtabs">
+    <button type="button" id="tab-pca" class="active">PCA</button><button type="button" id="tab-rel">Relative differences</button>
+  </span>
+  <label>Layer <select id="repr-layer"></select></label>
+  <label id="dim-wrap">View
+    <select id="repr-dim"><option value="2">2D</option><option value="3">3D</option></select>
+  </label>
+  <label id="group-wrap" hidden>Term group <select id="repr-group"></select></label>
+</div>
+
+<p class="repr-note" id="repr-explain"></p>
+
+<div class="repr-layout">
+  <div class="repr-plot" id="repr-plot"></div>
+  <div class="repr-legend" id="repr-legend"></div>
+</div>
+
+<div class="repr-detail" id="repr-detail">Click a point in the relative-differences plot to see its paper.</div>
+
+{% endblock %}
+{% block extra_scripts %}
+<script src="/static/vendor/plotly.min.js"></script>
+<script>window.REPR_DATA_BASE = "/representations/data/{{ analysis_id }}/";</script>
+<script src="/static/representations.js"></script>
+{% endblock %}

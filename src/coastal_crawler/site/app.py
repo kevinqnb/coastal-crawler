@@ -30,6 +30,7 @@ from fastapi.responses import JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from coastal_crawler.config import get_settings
 from coastal_crawler.db import store, warehouse_reader
 from coastal_crawler.db.engine import get_session
 from coastal_crawler.db.warehouse_reader import get_warehouse_connection
@@ -311,6 +312,33 @@ def search_view(request: Request, q: str = "") -> Response:
         "search.html",
         {"q": q, "rows": rows, "min_chars": _SEARCH_MIN_CHARS},
     )
+
+
+@app.get("/representations")
+def representations_view(request: Request) -> Response:
+    return templates.TemplateResponse(
+        request,
+        "representations.html",
+        {"analysis_id": get_settings().repr_site_analysis_id},
+    )
+
+
+_REPR_FILE_RE = re.compile(r"^(meta|main_layer_\d+|relative_layer_\d+)\.json$")
+_REPR_ID_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+
+
+@app.get("/representations/data/{analysis_id}/{filename}")
+def representations_data(analysis_id: str, filename: str) -> Response:
+    """Serve one precomputed plot JSON (scripts/build_repr_plots.py output)."""
+    if not _REPR_ID_RE.match(analysis_id) or not _REPR_FILE_RE.match(filename):
+        raise HTTPException(status_code=404, detail="Not found")
+    path = Path(get_settings().repr_site_dir) / analysis_id / filename
+    if not path.is_file():
+        raise HTTPException(
+            status_code=404,
+            detail=f"{path} missing - run scripts/build_repr_plots.py for this analysis",
+        )
+    return Response(content=path.read_bytes(), media_type="application/json")
 
 
 @app.get("/papers/{paper_id}")

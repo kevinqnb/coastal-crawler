@@ -2,8 +2,9 @@
 """One-shot rebuild of the DuckDB star-schema warehouse from Postgres.
 
 Reads `papers`/`extractions` from Postgres (the landing zone, left
-unchanged), resolves entities, parses value qualifiers, converts units, and
-writes a fresh `Settings.warehouse_path` DuckDB file — full replacement,
+unchanged), resolves entities, carries through the model-parsed value fields
+(`qualifiers`/`point_value`/`lower`/`upper`/`list_values`/`tolerance`/
+`standard_deviation`, from scholarlm's `_parse_quantities`), and writes a fresh `Settings.warehouse_path` DuckDB file — full replacement,
 not an incremental update (see the fact-grain decision in
 notes/coastal-crawler/builds/2026-08-12-warehouse-init-01.md). Standalone
 script, not wired into the experiment contract (params.stage) — see that
@@ -11,8 +12,8 @@ build note's "Out of scope".
 
 **Skip and log, not fail loud** — a deliberate, named exception to
 CLAUDE.md's fail-loud default (see the build note's done_when item 4): any
-row that can't be translated (unknown attribute, unparseable value,
-unconvertible units) is skipped and recorded in `<warehouse_path>.skip_report.jsonl`
+row that can't be translated (unknown attribute, null value, or no
+model parse because the parse call failed) is skipped and recorded in `<warehouse_path>.skip_report.jsonl`
 (one JSON object per skipped row: extraction_id, paper_id, reason, detail)
 rather than crashing the run. A summary count by reason is logged at the
 end.
@@ -37,13 +38,13 @@ from sqlalchemy import select
 from coastal_crawler.config import get_settings
 from coastal_crawler.db.engine import get_session
 from coastal_crawler.db.models import Attribution, Extraction, Paper
-from coastal_crawler.measurement_schema import ATTRIBUTE_INFO_DICT, convert_to_canonical
+from coastal_crawler.measurement_schema import ATTRIBUTE_INFO_DICT
 from coastal_crawler.warehouse import (
     SCHEMA_DDL,
     dedupe_exact_fact_rows,
     hash_prompt,
+    extract_parsed_quantity,
     majority_value,
-    parse_qualifier,
     resolve_entities,
 )
 
@@ -218,28 +219,6 @@ def main() -> None:
             event_dim_rows.append((event_id, key[0], key[1], key[2]))
         return event_key_to_id[key]
 
-    # ---------------------------------------------------------- qualifier_dim
-    # Dedupe by the *converted* (canonical-unit) tuple — see build note:
-    # bounds must be stored in canonical units, same as quantity_canonical.
-    qualifier_key_to_id: dict[tuple[Any, ...], int] = {}
-    qualifier_dim_rows = []
-
-    def _qualifier_id_for(
-        region: str,
-        confidence_min: float | None,
-        confidence_max: float | None,
-        range_min: float | None,
-        range_max: float | None,
-        lte: float | None,
-        gt: float | None,
-    ) -> int:
-        key = (region, confidence_min, confidence_max, range_min, range_max, lte, gt)
-        if key not in qualifier_key_to_id:
-            qualifier_id = len(qualifier_key_to_id) + 1
-            qualifier_key_to_id[key] = qualifier_id
-            qualifier_dim_rows.append((qualifier_id, *key))
-        return qualifier_key_to_id[key]
-
     # ---------------------------------------------------------- extractions_fact
     candidate_rows: list[dict[str, Any]] = []
     for r in extraction_rows:
@@ -254,32 +233,16 @@ def main() -> None:
             continue
 
         raw_value = data.get("value")
-        qualifier = parse_qualifier(raw_value)
-        if qualifier is None:
-            _skip(extraction_id, paper_id, "unparseable_value", f"value={raw_value!r}")
+        if raw_value is None:
+            _skip(extraction_id, paper_id, "null_value", "value is null")
+            continue
+
+        parsed = extract_parsed_quantity(data)
+        if parsed is None:
+            _skip(extraction_id, paper_id, "missing_parse", f"value={raw_value!r}")
             continue
 
         raw_units = data.get("units")
-        conversion = convert_to_canonical(attribute, raw_units)
-        if conversion is None:
-            _skip(extraction_id, paper_id, "unknown_unit", f"attribute={attribute!r} units={raw_units!r}")
-            continue
-        canonical_units, factor = conversion
-
-        def _scale(v: float | None) -> float | None:
-            return v * factor if v is not None else None
-
-        quantity_canonical = _scale(qualifier.quantity)
-        confidence_min = _scale(qualifier.confidence_min)
-        confidence_max = _scale(qualifier.confidence_max)
-        range_min = _scale(qualifier.range_min)
-        range_max = _scale(qualifier.range_max)
-        lte = _scale(qualifier.less_than_or_equal)
-        gt = _scale(qualifier.greater_than)
-
-        qualifier_id = _qualifier_id_for(
-            qualifier.confidence_region, confidence_min, confidence_max, range_min, range_max, lte, gt
-        )
         event_id = _event_id_for(data)
         entity_id = row_to_entity[extraction_id].entity_id
         model_id = model_id_by_version[r["model_version"]]
@@ -293,9 +256,13 @@ def main() -> None:
             "attribute": attribute,
             "quantity_raw": raw_value,
             "units_raw": raw_units,
-            "quantity_canonical": quantity_canonical,
-            "units_canonical": canonical_units,
-            "qualifier_id": qualifier_id,
+            "qualifiers": parsed.qualifiers,
+            "point_value": parsed.point_value,
+            "lower": parsed.lower,
+            "upper": parsed.upper,
+            "list_values": parsed.list_values,
+            "tolerance": parsed.tolerance,
+            "standard_deviation": parsed.standard_deviation,
             "page_number": r["page_number"],
             "confidence": r["confidence"],
             "probe_score": r["probe_score"],
@@ -325,9 +292,13 @@ def main() -> None:
             row["attribute"],
             row["quantity_raw"],
             row["units_raw"],
-            row["quantity_canonical"],
-            row["units_canonical"],
-            row["qualifier_id"],
+            row["qualifiers"],
+            row["point_value"],
+            row["lower"],
+            row["upper"],
+            row["list_values"],
+            row["tolerance"],
+            row["standard_deviation"],
             row["page_number"],
             row["confidence"],
             row["probe_score"],
@@ -357,7 +328,7 @@ def main() -> None:
     def _insert_many(con: duckdb.DuckDBPyConnection, sql: str, rows: list[tuple[Any, ...]]) -> None:
         # duckdb's executemany() rejects an empty parameter list outright —
         # every one of these can legitimately be empty (e.g. zero surviving
-        # fact rows means zero events/qualifiers too).
+        # fact rows means zero events too).
         if rows:
             con.executemany(sql, rows)
 
@@ -374,11 +345,8 @@ def main() -> None:
         )
         _insert_many(con, "INSERT INTO event_dim VALUES (?, ?, ?, ?)", event_dim_rows)
         _insert_many(
-            con, "INSERT INTO qualifier_dim VALUES (?, ?, ?, ?, ?, ?, ?, ?)", qualifier_dim_rows
-        )
-        _insert_many(
             con,
-            "INSERT INTO extractions_fact VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO extractions_fact VALUES (" + ", ".join("?" * 19) + ")",
             fact_rows,
         )
         _insert_many(

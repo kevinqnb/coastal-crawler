@@ -13,144 +13,51 @@ import pytest
 from coastal_crawler.measurement_schema import CANONICAL_UNITS, convert_to_canonical
 from coastal_crawler.warehouse import (
     dedupe_exact_fact_rows,
+    extract_parsed_quantity,
     majority_value,
-    parse_qualifier,
     resolve_entities,
 )
 
 
-class TestParseQualifierExact:
-    def test_plain_number(self) -> None:
-        q = parse_qualifier("26.52")
+_ALL_PARSED = {
+    "qualifiers": ["IsMean"], "point_value": 1.5, "lower": "1", "upper": 2,
+    "list_values": None, "tolerance": "± 0.5", "standard_deviation": None,
+}
+
+
+class TestExtractParsedQuantity:
+    def test_no_parsed_fields_returns_none(self) -> None:
+        assert extract_parsed_quantity({"attribute": "salinity", "value": "5"}) is None
+
+    def test_all_fields_carried_through_as_text(self) -> None:
+        q = extract_parsed_quantity({**_ALL_PARSED, "list_values": ["a", 2]})
         assert q is not None
-        assert q.confidence_region == "exact"
-        assert q.quantity == 26.52
+        assert q.qualifiers == ["IsMean"]
+        assert (q.point_value, q.lower, q.upper) == ("1.5", "1", "2")
+        assert q.list_values == ["a", "2"]
+        assert q.tolerance == "± 0.5"
+        assert q.standard_deviation is None
 
-    def test_trailing_footnote_asterisk_stripped(self) -> None:
-        q = parse_qualifier("4.5*")
+    def test_empty_qualifiers_and_zero_are_not_dropped(self) -> None:
+        q = extract_parsed_quantity({**_ALL_PARSED, "qualifiers": [], "point_value": 0})
         assert q is not None
-        assert q.confidence_region == "exact"
-        assert q.quantity == 4.5
+        assert q.qualifiers == []
+        assert q.point_value == "0"
 
-    def test_comma_thousands_separator(self) -> None:
-        q = parse_qualifier("1,801")
-        assert q is not None
-        assert q.quantity == 1801.0
+    @pytest.mark.parametrize("missing", sorted(_ALL_PARSED))
+    def test_partial_fields_raise(self, missing: str) -> None:
+        data = {k: v for k, v in _ALL_PARSED.items() if k != missing}
+        with pytest.raises(ValueError, match="partial parsed-quantity fields"):
+            extract_parsed_quantity(data)
 
-    def test_trailing_percent_stripped(self) -> None:
-        q = parse_qualifier("2.9%")
-        assert q is not None
-        assert q.confidence_region == "exact"
-        assert q.quantity == 2.9
-
-    def test_scientific_notation_e(self) -> None:
-        q = parse_qualifier("1.79E+09")
-        assert q is not None
-        assert q.quantity == pytest.approx(1.79e9)
-
-    def test_scientific_notation_unicode_superscript(self) -> None:
-        q = parse_qualifier("9.7×10⁻⁴")
-        assert q is not None
-        assert q.quantity == pytest.approx(9.7e-4)
-
-    def test_negative_number(self) -> None:
-        q = parse_qualifier("-0.5")
-        assert q is not None
-        assert q.confidence_region == "exact"
-        assert q.quantity == -0.5
-
-
-class TestParseQualifierRange:
-    def test_dash_range(self) -> None:
-        q = parse_qualifier("22–27")
-        assert q is not None
-        assert q.confidence_region == "range"
-        assert q.quantity is None
-        assert q.range_min == 22.0
-        assert q.range_max == 27.0
-
-    def test_ascii_hyphen_range(self) -> None:
-        q = parse_qualifier("0.3-318")
-        assert q is not None
-        assert q.range_min == 0.3
-        assert q.range_max == 318.0
-
-    def test_to_word_range(self) -> None:
-        q = parse_qualifier("10.2 to 20.8")
-        assert q is not None
-        assert q.confidence_region == "range"
-        assert q.range_min == 10.2
-        assert q.range_max == 20.8
-
-    def test_parenthetical_range(self) -> None:
-        q = parse_qualifier("(27.9–33.6)")
-        assert q is not None
-        assert q.range_min == 27.9
-        assert q.range_max == 33.6
-
-    def test_range_bounds_always_ascending_regardless_of_source_order(self) -> None:
-        q = parse_qualifier("33.9–33.6")
-        assert q is not None
-        assert q.range_min == 33.6
-        assert q.range_max == 33.9
-
-    def test_percent_suffixed_range(self) -> None:
-        q = parse_qualifier("84–110%")
-        assert q is not None
-        assert q.confidence_region == "range"
-        assert q.range_min == 84.0
-        assert q.range_max == 110.0
-
-
-class TestParseQualifierPlusMinus:
-    def test_plus_minus_symbol(self) -> None:
-        q = parse_qualifier("10.8±0.5")
-        assert q is not None
-        assert q.confidence_region == "plus_minus"
-        assert q.quantity == 10.8
-        assert q.confidence_min == pytest.approx(10.3)
-        assert q.confidence_max == pytest.approx(11.3)
-
-    def test_zero_margin_plus_minus(self) -> None:
-        q = parse_qualifier("5.5±5.5")
-        assert q is not None
-        assert q.confidence_min == pytest.approx(0.0)
-        assert q.confidence_max == pytest.approx(11.0)
-
-
-class TestParseQualifierThresholds:
-    def test_less_than(self) -> None:
-        q = parse_qualifier("<0.2")
-        assert q is not None
-        assert q.confidence_region == "less_than_or_equal"
-        assert q.quantity is None
-        assert q.less_than_or_equal == 0.2
-
-    def test_less_than_or_equal_symbol(self) -> None:
-        q = parse_qualifier("≤0.05")
-        assert q is not None
-        assert q.confidence_region == "less_than_or_equal"
-        assert q.less_than_or_equal == 0.05
-
-    def test_greater_than(self) -> None:
-        q = parse_qualifier(">33.7")
-        assert q is not None
-        assert q.confidence_region == "greater_than"
-        assert q.quantity is None
-        assert q.greater_than == 33.7
-
-
-class TestParseQualifierUnparseable:
     @pytest.mark.parametrize(
-        "raw",
-        ["ND", "NA", "—", "–", "", "  ", "~0.11", "nearly 30", "tidal marsh",
-         "5.0(3.2)", "<0.03 to 3.67", "Below detection–0.1", "303 (?)"],
+        "override",
+        [{"qualifiers": "IsMean"}, {"qualifiers": [1]}, {"list_values": "a"},
+         {"list_values": [None]}, {"point_value": [1]}, {"lower": True}],
     )
-    def test_unparseable_values_return_none(self, raw: str) -> None:
-        assert parse_qualifier(raw) is None
-
-    def test_none_input_returns_none(self) -> None:
-        assert parse_qualifier(None) is None
+    def test_wrong_types_raise(self, override: dict) -> None:
+        with pytest.raises(TypeError):
+            extract_parsed_quantity({**_ALL_PARSED, **override})
 
 
 class TestMajorityValue:
@@ -310,9 +217,13 @@ def _fact_row(extraction_id: int, **overrides: object) -> dict:
         "attribute": "salinity",
         "quantity_raw": "28.4",
         "units_raw": "psu",
-        "quantity_canonical": 28.4,
-        "units_canonical": "psu",
-        "qualifier_id": 1,
+        "qualifiers": ["IsMean"],
+        "point_value": "28.4",
+        "lower": None,
+        "upper": None,
+        "list_values": ["1", "2"],
+        "tolerance": None,
+        "standard_deviation": None,
         "page_number": 0,
         "confidence": None,
     }
@@ -326,6 +237,13 @@ class TestDedupeExactFactRows:
         kept, dropped = dedupe_exact_fact_rows(rows)
         assert [r["extraction_id"] for r in kept] == [11]
         assert [r["extraction_id"] for r in dropped] == [10]
+
+    def test_rows_differing_only_by_a_parsed_field_are_not_duplicates(self) -> None:
+        rows = [_fact_row(10, qualifiers=["IsMean"]), _fact_row(11, qualifiers=["IsMedian"]),
+                _fact_row(12, list_values=None)]
+        kept, dropped = dedupe_exact_fact_rows(rows)
+        assert {r["extraction_id"] for r in kept} == {10, 11, 12}
+        assert dropped == []
 
     def test_rows_differing_only_by_entity_id_are_not_duplicates(self) -> None:
         rows = [_fact_row(10, entity_id=1), _fact_row(11, entity_id=2)]

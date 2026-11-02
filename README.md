@@ -199,18 +199,15 @@ results site
    extractions_fact --+--  entity_dim     the measured site / entity
                       |
                       +--  event_dim      the measurement occasion
-                      |
-                      +--  qualifier_dim  value shape (range, <=, CI); optional
 ```
 
 | Table | Grain | Representative columns |
 |---|---|---|
-| `extractions_fact` | one measurement | `fact_id` PK, `source_extraction_id`, the five dimension FKs, `attribute`, `quantity_raw`/`units_raw`, `quantity_canonical`/`units_canonical`, `page_number`, `confidence` |
+| `extractions_fact` | one measurement | `fact_id` PK, `source_extraction_id`, the five dimension FKs, `attribute`, `quantity_raw`/`units_raw` (as extracted, no unit conversion), the model-parsed value fields `qualifiers`/`point_value`/`lower`/`upper`/`list_values`/`tolerance`/`standard_deviation` (stored as returned; numbers as text), `page_number`, `confidence`, `probe_score` |
 | `paper_dim` | one source paper | `doi`, `title`, `authors`, `publication_date`, `publisher`, `discovered_from` |
 | `model_dim` | one (model, role, prompt) | `model_name`, `role`, `prompt_version`, `seed`, `temperature` |
 | `entity_dim` | one measured site / entity | `name`, `latitude`, `longitude`, `ecosystem_type`, `resolution_method` |
 | `event_dim` | one measurement occasion | `date_measured`, `sub_location`, `additional_details` |
-| `qualifier_dim` | one value shape | `confidence_region`, `confidence_min`/`max`, `range_min`/`max`, `less_than_or_equal`, `greater_than` |
 
 `source_extraction_id` traces each fact row back to Postgres's `extractions.id`. Rebuilds are full replacements (`CREATE OR REPLACE TABLE`), not incremental — see `notes/coastal-crawler/builds/2026-08-12-warehouse-init-01.md` for the design rationale (fact grain, dimension resolution, what got cut). Full column lists live in `src/coastal_crawler/warehouse.py` (`SCHEMA_DDL`).
 

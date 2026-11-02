@@ -57,6 +57,23 @@ config = yaml.safe_load(open(sys.argv[1]))
 print(config.get('params', {}).get('gpu_type', '') or '')
 " "$CONFIG_PATH")"
 
+# Optional per-run overrides of the stage profile below (blank = profile value):
+# params.gpu_memory (e.g. "32G"), params.gpu_c (e.g. 8.0), params.h_rt
+# (e.g. "2:00:00"). For smoke runs on a smaller model than the stage's
+# production one (see 2026-10-20-extract-smoke-02); they are not validated
+# against the model, so pair them with the right params.env.
+_param() {
+    "$REPO_DIR/.venv/bin/python" -c "
+import sys, yaml
+config = yaml.safe_load(open(sys.argv[1]))
+v = config.get('params', {}).get(sys.argv[2])
+print('' if v is None else v)
+" "$CONFIG_PATH" "$1"
+}
+OVR_GPU_MEMORY="$(_param gpu_memory)"
+OVR_GPU_C="$(_param gpu_c)"
+OVR_H_RT="$(_param h_rt)"
+
 # GPU profile per stage — copied from submit_filter_job.sh / submit_ocr_job.sh
 # / submit_extract_job.sh's #$ directives. judge has no legacy submit_*_job.sh
 # precedent (new stage, no vLLM server — see run_experiment_job.sh's
@@ -77,17 +94,30 @@ print(config.get('params', {}).get('gpu_type', '') or '')
 # faster (cluster courtesy) before treating this as settled.
 # H_RT=48:00:00 is an unvalidated placeholder — no walltime precedent exists
 # for this workload; revise once a real table-clean run's throughput is known.
+# repr (RepresentationLM, no vLLM server — in-process nnsight like judge) has no
+# legacy precedent. GPU_MEMORY=32G follows scholarlm's own Llama-3.1-8B
+# representation_lm config (an 8B bf16 model is ~16GB plus activations for
+# ~20K-token papers); GPU_C=8.0 is the floor for bf16. H_RT=24:00:00 was chosen
+# by the user with wide margin: the smoke/tiny runs (7 papers) measured ~4-6 s per
+# paper after ~20-25 s of model load, i.e. roughly 4-5.5 h for the 3,075-paper
+# corpus. The stage is resumable (pending rows stay queued; see
+# requeue-repr-processing), so a too-short limit would not lose finished work.
 case "$STAGE" in
     filter)      ROLE=FILTER;      H_RT=2:00:00;  GPU_MEMORY=8G;  GPU_C=7.0 ;;
     ocr)         ROLE=DOC_LM;      H_RT=72:00:00; GPU_MEMORY=24G; GPU_C=7.0 ;;
     table_clean) ROLE=TABLE_CLEAN; H_RT=48:00:00; GPU_MEMORY=80G; GPU_C=8.0 ;;
     extract)     ROLE=MEAS_LM;     H_RT=24:00:00; GPU_MEMORY=80G; GPU_C=9.0 ;;
     judge)       ROLE=JUDGE;       H_RT=24:00:00; GPU_MEMORY=80G; GPU_C=9.0 ;;
+    repr|repr_terms) ROLE=REPR_LM;     H_RT=24:00:00; GPU_MEMORY=32G; GPU_C=8.0 ;;
     *)
-        echo "Error: configs/${ID}.yaml params.stage must be filter, ocr, table_clean, extract, or judge (got '$STAGE')." >&2
+        echo "Error: configs/${ID}.yaml params.stage must be filter, ocr, table_clean, extract, judge, repr, or repr_terms (got '$STAGE')." >&2
         exit 1
         ;;
 esac
+
+[ -n "$OVR_GPU_MEMORY" ] && GPU_MEMORY="$OVR_GPU_MEMORY"
+[ -n "$OVR_GPU_C" ] && GPU_C="$OVR_GPU_C"
+[ -n "$OVR_H_RT" ] && H_RT="$OVR_H_RT"
 
 mkdir -p "$REPO_DIR/out"
 

@@ -1,0 +1,24 @@
+id: 2026-10-20-extract-smoke-01
+project: coastal-crawler
+description: >
+  Rung-2 smoke for extraction after the scholarlm pin bump (acl26 e187c2f)
+  and the extractions reset: direct-mode MeasurementLM.fit() now also runs
+  _parse_quantities, and the warehouse expects its seven fields on every
+  record. Plumbing, not results. batch_size=3 is one-shot (no idle_timeout):
+  it claims at most 3 table_clean_done papers and exits.
+
+  PREDICTION (recorded before the run): metrics extracted=3, failed=0; every
+  extraction row's data has all seven keys (qualifiers, point_value, lower,
+  upper, list_values, tolerance, standard_deviation), with qualifiers a list;
+  log.txt has no document_partially_standardized warning; a build_warehouse
+  run over these rows reports missing_parse=0. A paper with zero rows is
+  allowed (not a failure) but must be checked by hand.
+
+  MEAS_LM_MAX_MODEL_LEN inherits .env (81920).
+seed: 342
+params:
+  stage: extract
+  batch_size: 3
+  # gpt-oss-120b's MARLIN mxfp4 MoE kernel fails on cards newer than the
+  # cc-9.0 H200 — see 2026-09-08-extract-full-split-03.yaml.
+  gpu_type: H200

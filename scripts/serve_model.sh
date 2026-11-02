@@ -74,6 +74,22 @@ else
     echo "Warning: .env not found at $ENV_FILE — relying on environment variables." >&2
 fi
 
+# Per-run overrides (configs/<id>.yaml params.env), layered over .env. Set only
+# by scripts/run_experiment_job.sh, which writes the file; without this the
+# client (run_experiment.py applies params.env itself) and this server could
+# disagree on <ROLE>_MODEL etc. because .env is re-sourced above. An unset
+# PARAMS_ENV_FILE means "no overrides"; a set one that is missing is an error.
+if [ -n "${PARAMS_ENV_FILE:-}" ]; then
+    if [ ! -f "$PARAMS_ENV_FILE" ]; then
+        echo "Error: PARAMS_ENV_FILE=$PARAMS_ENV_FILE does not exist." >&2
+        exit 1
+    fi
+    set -a
+    # shellcheck source=/dev/null
+    source "$PARAMS_ENV_FILE"
+    set +a
+fi
+
 # ---- GPU pinning --------------------------------------------------------
 if [ -n "$GPU_ID" ]; then
     export CUDA_VISIBLE_DEVICES="$GPU_ID"

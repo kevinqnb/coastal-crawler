@@ -1,0 +1,42 @@
+id: 2026-10-20-extract-tiny-03
+project: coastal-crawler
+description: >
+  Rung-3 tiny end-to-end for extraction with model-parsed fields, run on
+  google/gemma-4-E4B-it instead of gpt-oss-120b because H200s are hard to get
+  today. Replaces 2026-10-20-extract-tiny-02 (Llama-3.1-8B), which was killed
+  after ~1h on suspicion of retry loops (unconfirmed; no output yet).
+  Rung 2 passed on Llama (2026-10-20-extract-smoke-03). batch_size=10 is
+  one-shot (no idle_timeout): claims at most 10 table_clean_done papers, exits.
+  This validates plumbing and the parsed-field path at 10x the smoke's scale;
+  it says nothing about gpt-oss-120b's parse failure rate or output quality.
+
+  PREDICTION (recorded before the run): metrics extracted=10, failed=0,
+  requeued=0; every new extractions row's data has all seven parsed keys
+  (qualifiers, point_value, lower, upper, list_values, tolerance,
+  standard_deviation) with qualifiers a list; log.txt has no
+  document_partially_standardized and no document_truncated_for_extraction
+  lines (qualifier/field consistency warnings are logged-only and allowed);
+  at least 6 of the 10 papers yield >=1 measurement (small model; one of three
+  Llama smoke papers yielded 0); a build_warehouse run over the new rows reports
+  missing_parse=0, orphaned_paper=0 and duplicate_fact_row=0; the job's
+  out/*_out.txt shows no more than one "Retrying" round per batch and the run
+  finishes well inside 2 hours. If any of this misses, stop; do not scale up.
+
+  CLEANUP REQUIRED afterwards: writes real extractions rows (model_version
+  contains gemma-4-E4B-it) into the production DB, alongside the
+  smoke-03 Llama rows. Run `coastal-crawler reset-extractions` before the real
+  extraction.
+seed: 342
+params:
+  stage: extract
+  batch_size: 10
+  gpu_memory: 32G
+  gpu_c: 8.0
+  env:
+    MEAS_LM_MODEL: google/gemma-4-E4B-it
+    # Matches production; scholarlm always requests max_tokens=32768, so
+    # 32768 would leave no room for a prompt (see smoke-02 -> smoke-03).
+    MEAS_LM_MAX_MODEL_LEN: 81920
+    # Explicitly blank so a quantization setting in .env meant for gpt-oss
+    # can't leak into an unquantized Llama.
+    MEAS_LM_QUANTIZATION: ""

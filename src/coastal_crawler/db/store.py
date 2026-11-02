@@ -25,6 +25,7 @@ from coastal_crawler.db.models import (
     Extraction,
     Paper,
     PaperOcrContext,
+    PaperRepresentation,
     Vote,
 )
 
@@ -591,12 +592,16 @@ def reset_extractions(session: Session) -> tuple[int, int, int, int]:
     return attributions_deleted, votes_deleted, extractions_deleted, papers_reset
 
 
-def reset_pipeline(session: Session) -> tuple[int, int, int, int, int]:
+def reset_pipeline(session: Session) -> tuple[int, int, int, int, int, int]:
     """Wipe extraction + table-clean + OCR-stage DB state, back to 'relevant'.
 
     Deletes, in FK-safe order, every row in ``attributions``/``votes``/
     ``extractions`` (mirrors ``reset_extractions``), plus every row in
-    ``paper_ocr_context`` — the cached full-OCR-text copy used by the judge
+    ``paper_ocr_context`` and every row in ``paper_representations`` (the
+    ``repr`` stage's queue rows; consistent with also deleting extractions —
+    both are derived from text that is about to be regenerated. The embedding
+    shards under REPR_DIR are NOT deleted, so they become orphaned until
+    removed by hand) — ``paper_ocr_context`` is the cached full-OCR-text copy used by the judge
     stage and the site's snippet lookup, which would otherwise silently keep
     serving text for a corpus no longer on disk once OCR_DIR is deleted.
 
@@ -613,12 +618,14 @@ def reset_pipeline(session: Session) -> tuple[int, int, int, int, int]:
 
     Returns:
         (attributions_deleted, votes_deleted, extractions_deleted,
-         paper_ocr_context_deleted, papers_reset).
+         paper_ocr_context_deleted, paper_representations_deleted,
+         papers_reset).
     """
     attributions_deleted = session.execute(delete(Attribution)).rowcount
     votes_deleted = session.execute(delete(Vote)).rowcount
     extractions_deleted = session.execute(delete(Extraction)).rowcount
     paper_ocr_context_deleted = session.execute(delete(PaperOcrContext)).rowcount
+    paper_representations_deleted = session.execute(delete(PaperRepresentation)).rowcount
     papers_reset = session.execute(
         update(Paper)
         .where(
@@ -643,6 +650,7 @@ def reset_pipeline(session: Session) -> tuple[int, int, int, int, int]:
         votes_deleted,
         extractions_deleted,
         paper_ocr_context_deleted,
+        paper_representations_deleted,
         papers_reset,
     )
 
@@ -1014,3 +1022,118 @@ def insert_attribution(
     session.add(attribution)
     session.flush()
     return attribution
+
+
+# ---------------------------------------------------------------------------
+# Representation stage (``paper_representations`` queue)
+# ---------------------------------------------------------------------------
+
+def list_paper_ids_with_status(statuses: list[str], session: Session) -> list[int]:
+    """IDs of papers whose ``status`` is in *statuses*, sorted ascending."""
+    return sorted(session.scalars(select(Paper.id).where(Paper.status.in_(statuses))).all())
+
+
+def seed_repr_queue(
+    run_id: str,
+    model_name: str,
+    terms_hash: str,
+    paper_ids: list[int],
+    session: Session,
+) -> int:
+    """Insert ``pending`` rows for (paper, run_id); idempotent via the unique key.
+
+    Returns the number of rows actually inserted (0 on a re-seed of the same
+    run). Caller asserts against its own expected count.
+    """
+    if not paper_ids:
+        return 0
+    stmt = (
+        pg_insert(PaperRepresentation)
+        .values(
+            [
+                {
+                    "paper_id": pid,
+                    "run_id": run_id,
+                    "status": "pending",
+                    "model_name": model_name,
+                    "terms_hash": terms_hash,
+                }
+                for pid in paper_ids
+            ]
+        )
+        .on_conflict_do_nothing(constraint="uq_paper_representations_paper_run")
+    )
+    return session.execute(stmt).rowcount
+
+
+def claim_batch_for_repr(run_id: str, batch_size: int, session: Session) -> list[PaperRepresentation]:
+    """Atomically claim up to *batch_size* ``pending`` rows of *run_id*.
+
+    ``FOR UPDATE SKIP LOCKED`` — same pattern as ``claim_batch_for_table_clean``,
+    so several repr jobs can share one run. ``papers.status`` is not touched.
+    """
+    stmt = (
+        select(PaperRepresentation)
+        .where(PaperRepresentation.run_id == run_id, PaperRepresentation.status == "pending")
+        .order_by(PaperRepresentation.paper_id)
+        .with_for_update(skip_locked=True)
+        .limit(batch_size)
+    )
+    rows = list(session.scalars(stmt).all())
+    now = datetime.now(timezone.utc)
+    for row in rows:
+        row.status = "processing"
+        row.claimed_at = now
+    session.flush()
+    return rows
+
+
+def mark_repr_done(row_id: int, n_occurrences: int, shard_path: str, session: Session) -> None:
+    session.execute(
+        update(PaperRepresentation)
+        .where(PaperRepresentation.id == row_id)
+        .values(
+            status="done",
+            n_occurrences=n_occurrences,
+            shard_path=shard_path,
+            error=None,
+            finished_at=datetime.now(timezone.utc),
+        )
+    )
+
+
+def mark_repr_failed(row_id: int, error: str, session: Session) -> None:
+    session.execute(
+        update(PaperRepresentation)
+        .where(PaperRepresentation.id == row_id)
+        .values(status="failed", error=error, finished_at=datetime.now(timezone.utc))
+    )
+
+
+def requeue_repr(run_id: str, from_status: str, session: Session) -> int:
+    """Reset *run_id*'s rows in ``processing`` or ``failed`` back to ``pending``."""
+    assert from_status in ("processing", "failed"), from_status
+    result = session.execute(
+        update(PaperRepresentation)
+        .where(PaperRepresentation.run_id == run_id, PaperRepresentation.status == from_status)
+        .values(status="pending", error=None, claimed_at=None, finished_at=None)
+    )
+    return result.rowcount
+
+
+def repr_status_counts(run_id: str, session: Session) -> dict[str, int]:
+    rows = session.execute(
+        select(PaperRepresentation.status, func.count())
+        .where(PaperRepresentation.run_id == run_id)
+        .group_by(PaperRepresentation.status)
+    ).all()
+    return {status: n for status, n in rows}
+
+
+def delete_repr_for_papers(paper_ids: list[int], session: Session) -> int:
+    """Drop representation rows for papers whose source text is being regenerated."""
+    if not paper_ids:
+        return 0
+    return session.execute(
+        delete(PaperRepresentation).where(PaperRepresentation.paper_id.in_(paper_ids))
+    ).rowcount

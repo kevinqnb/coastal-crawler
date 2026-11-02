@@ -19,99 +19,81 @@ from difflib import SequenceMatcher
 from typing import Any
 
 # ---------------------------------------------------------------------------
-# Qualifier / value parsing (extractions.data->>'value' -> qualifier_dim row)
+# Parsed quantity — scholarlm's MeasurementLM._parse_quantities() output,
+# carried through from extractions.data (no re-parsing here)
 # ---------------------------------------------------------------------------
+
+PARSED_QUANTITY_FIELDS: tuple[str, ...] = (
+    "qualifiers", "point_value", "lower", "upper",
+    "list_values", "tolerance", "standard_deviation",
+)
+"""The seven keys `_parse_quantities()` adds to every record it parses. A
+record whose parse call failed has none of them (scholarlm logs and keeps
+the record unparsed) — see `extract_parsed_quantity`."""
 
 
 @dataclass(frozen=True)
-class ParsedQualifier:
-    """One row's parsed `value` shape. `quantity` is the single
-    representative raw number for shapes that have one ('exact': the
-    number itself; 'plus_minus': the center) — None for shapes with no
-    single point value ('range', 'less_than_or_equal', 'greater_than').
-    All numbers here are in the *raw*, pre-unit-conversion scale — the
-    caller applies convert_to_canonical()'s factor uniformly to whichever
-    of these fields are set.
+class ParsedQuantity:
+    """One extraction row's model-parsed value, as returned by the model.
+
+    point_value/lower/upper/tolerance/standard_deviation are stored as text
+    exactly as returned (``str()`` of a bare JSON number): the model may emit
+    a number or a string for the first three, and tolerance/standard_deviation
+    are freeform ("95% CI: 5-9"). No unit conversion is applied anywhere.
     """
 
-    confidence_region: str  # 'exact' | 'range' | 'plus_minus' | 'less_than_or_equal' | 'greater_than'
-    quantity: float | None
-    range_min: float | None = None
-    range_max: float | None = None
-    confidence_min: float | None = None
-    confidence_max: float | None = None
-    less_than_or_equal: float | None = None
-    greater_than: float | None = None
+    qualifiers: list[str]
+    point_value: str | None
+    lower: str | None
+    upper: str | None
+    list_values: list[str] | None
+    tolerance: str | None
+    standard_deviation: str | None
 
 
-_SUPERSCRIPT_TABLE = str.maketrans({
-    "⁰": "0", "¹": "1", "²": "2", "³": "3", "⁴": "4", "⁵": "5",
-    "⁶": "6", "⁷": "7", "⁸": "8", "⁹": "9", "⁻": "-", "−": "-", "‑": "-",
-})
-
-_NUM = r"-?\d+(?:\.\d+)?"
-_RANGE_DASH_RE = re.compile(rf"^\(?\s*({_NUM})\s*[-–—‑]\s*({_NUM})\s*\)?%?$")
-_RANGE_TO_RE = re.compile(rf"^\s*({_NUM})\s*to\s*({_NUM})\s*$", re.IGNORECASE)
-_PLUS_MINUS_RE = re.compile(rf"^\s*({_NUM})\s*(?:±|\+/-|\+-)\s*({_NUM})\s*%?$")
-_LTE_RE = re.compile(rf"^\s*(?:<=|≤)\s*({_NUM})\s*%?$")
-_LT_RE = re.compile(rf"^\s*<\s*({_NUM})\s*%?$")
-_GTE_RE = re.compile(rf"^\s*(?:>=|≥)\s*({_NUM})\s*%?$")
-_GT_RE = re.compile(rf"^\s*>\s*({_NUM})\s*%?$")
-_SCI_E_RE = re.compile(rf"^\s*({_NUM})\s*[eE]\s*([+-]?\d+)\s*$")
-_SCI_MULT_RE = re.compile(rf"^\s*({_NUM})\s*[×x]\s*10\^?(-?\d+)\s*$")
-_PLAIN_NUMBER_RE = re.compile(rf"^\s*({_NUM})\s*\*?%?\s*$")
+def _as_text(field: str, v: Any) -> str | None:
+    if v is None:
+        return None
+    if isinstance(v, bool) or not isinstance(v, (str, int, float)):
+        raise TypeError(f"parsed field {field!r} must be str/number/None, got {type(v).__name__}: {v!r}")
+    return str(v)
 
 
-def parse_qualifier(raw_value: str | None) -> ParsedQualifier | None:
-    """Parse a raw `extractions.data->>'value'` string into a qualifier
-    shape, or None if unparseable (caller skips and logs the row). See the
-    build note's qualifier_dim section for the full shape catalogue this
-    was derived from (live-data value-string distribution).
+def extract_parsed_quantity(data: dict[str, Any]) -> ParsedQuantity | None:
+    """Read the model-parsed value fields from an `extractions.data` dict.
 
-    Comma thousands separators and Unicode super/subscript exponents are
-    normalized before matching; a trailing footnote `*` and an incidental
-    `%` are tolerated (stripped) inside an otherwise-numeric match — this
-    function only judges numeric *shape*, not unit validity. Whether a raw
-    `%` reading is actually meaningful for the attribute in question is a
-    units question, decided separately by convert_to_canonical().
+    Returns None if none of the seven fields are present (the parse call
+    failed for this record — the caller skips and logs). Raises if only some
+    are present or a field has the wrong type: that is a corrupt row, not a
+    failed parse.
     """
-    if raw_value is None:
+    present = [f for f in PARSED_QUANTITY_FIELDS if f in data]
+    if not present:
         return None
-    s = raw_value.strip()
-    if not s:
-        return None
-    s = s.replace(",", "")
-    s = s.translate(_SUPERSCRIPT_TABLE)
+    if len(present) != len(PARSED_QUANTITY_FIELDS):
+        missing = sorted(set(PARSED_QUANTITY_FIELDS) - set(present))
+        raise ValueError(f"partial parsed-quantity fields in extractions.data: missing {missing}")
 
-    m = _RANGE_DASH_RE.match(s) or _RANGE_TO_RE.match(s)
-    if m:
-        lo, hi = float(m.group(1)), float(m.group(2))
-        return ParsedQualifier("range", None, range_min=min(lo, hi), range_max=max(lo, hi))
+    qualifiers = data["qualifiers"]
+    if not isinstance(qualifiers, list) or not all(isinstance(q, str) for q in qualifiers):
+        raise TypeError(f"parsed field 'qualifiers' must be list[str], got {qualifiers!r}")
+    list_values = data["list_values"]
+    if list_values is not None:
+        if not isinstance(list_values, list):
+            raise TypeError(f"parsed field 'list_values' must be list or None, got {list_values!r}")
+        list_values = [_as_text("list_values", v) for v in list_values]
+        if any(v is None for v in list_values):
+            raise TypeError(f"parsed field 'list_values' contains null: {data['list_values']!r}")
 
-    m = _PLUS_MINUS_RE.match(s)
-    if m:
-        center, margin = float(m.group(1)), float(m.group(2))
-        return ParsedQualifier(
-            "plus_minus", center, confidence_min=center - margin, confidence_max=center + margin
-        )
-
-    m = _LTE_RE.match(s) or _LT_RE.match(s)
-    if m:
-        return ParsedQualifier("less_than_or_equal", None, less_than_or_equal=float(m.group(1)))
-
-    m = _GTE_RE.match(s) or _GT_RE.match(s)
-    if m:
-        return ParsedQualifier("greater_than", None, greater_than=float(m.group(1)))
-
-    m = _SCI_E_RE.match(s) or _SCI_MULT_RE.match(s)
-    if m:
-        return ParsedQualifier("exact", float(m.group(1)) * (10 ** int(m.group(2))))
-
-    m = _PLAIN_NUMBER_RE.match(s)
-    if m:
-        return ParsedQualifier("exact", float(m.group(1)))
-
-    return None
+    return ParsedQuantity(
+        qualifiers=list(qualifiers),
+        point_value=_as_text("point_value", data["point_value"]),
+        lower=_as_text("lower", data["lower"]),
+        upper=_as_text("upper", data["upper"]),
+        list_values=list_values,
+        tolerance=_as_text("tolerance", data["tolerance"]),
+        standard_deviation=_as_text("standard_deviation", data["standard_deviation"]),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -283,9 +265,15 @@ majority_ecosystem_type = majority_value
 
 _FACT_DEDUP_KEY_FIELDS = (
     "paper_id", "model_id", "entity_id", "event_id", "attribute",
-    "quantity_raw", "units_raw", "quantity_canonical", "units_canonical",
-    "qualifier_id", "page_number", "confidence",
+    "quantity_raw", "units_raw", "qualifiers", "point_value", "lower", "upper",
+    "list_values", "tolerance", "standard_deviation", "page_number", "confidence",
 )
+"""Every fact column except `fact_id`/`source_extraction_id`/`probe_score`.
+`qualifiers`/`list_values` are lists (unhashable) — keyed as tuples."""
+
+
+def _dedup_key(row: dict[str, Any]) -> tuple[Any, ...]:
+    return tuple(tuple(v) if isinstance(v, list) else v for v in (row[f] for f in _FACT_DEDUP_KEY_FIELDS))
 
 
 def dedupe_exact_fact_rows(
@@ -305,7 +293,7 @@ def dedupe_exact_fact_rows(
     """
     best_by_key: dict[tuple[Any, ...], dict[str, Any]] = {}
     for row in rows:
-        key = tuple(row[f] for f in _FACT_DEDUP_KEY_FIELDS)
+        key = _dedup_key(row)
         current = best_by_key.get(key)
         if current is None or row["extraction_id"] > current["extraction_id"]:
             best_by_key[key] = row
@@ -373,18 +361,6 @@ SCHEMA_DDL: list[str] = [
     )
     """,
     """
-    CREATE OR REPLACE TABLE qualifier_dim (
-        qualifier_id INTEGER PRIMARY KEY,
-        confidence_region VARCHAR NOT NULL,
-        confidence_min DOUBLE,
-        confidence_max DOUBLE,
-        range_min DOUBLE,
-        range_max DOUBLE,
-        less_than_or_equal DOUBLE,
-        greater_than DOUBLE
-    )
-    """,
-    """
     CREATE OR REPLACE TABLE extractions_fact (
         fact_id INTEGER PRIMARY KEY,
         source_extraction_id INTEGER NOT NULL,
@@ -395,9 +371,13 @@ SCHEMA_DDL: list[str] = [
         attribute VARCHAR NOT NULL,
         quantity_raw VARCHAR,
         units_raw VARCHAR,
-        quantity_canonical DOUBLE,
-        units_canonical VARCHAR,
-        qualifier_id INTEGER REFERENCES qualifier_dim (qualifier_id),
+        qualifiers VARCHAR[] NOT NULL,
+        point_value VARCHAR,
+        lower VARCHAR,
+        upper VARCHAR,
+        list_values VARCHAR[],
+        tolerance VARCHAR,
+        standard_deviation VARCHAR,
         page_number INTEGER,
         confidence DOUBLE,
         probe_score DOUBLE
@@ -424,8 +404,8 @@ cross-rebuild accumulation — see the build note).
 `attributions` — no dedup/skip logic (unlike `extractions_fact`, nothing
 here can fail to parse) — keyed by `source_extraction_id` (Postgres
 `extractions.id`), not `extractions_fact.fact_id`, since an attribution row
-can exist for an extraction that `extractions_fact` skipped (unparseable
-value, unknown attribute/unit); such rows are simply unreachable from the
+can exist for an extraction that `extractions_fact` skipped (missing
+model parse, unknown attribute); such rows are simply unreachable from the
 site, which only ever looks up attributions for ids it already has a fact
 row for. `token_indices` (JudgementLM prompt-token positions) is
 deliberately not carried over — display only needs `tokens`/`scores` in

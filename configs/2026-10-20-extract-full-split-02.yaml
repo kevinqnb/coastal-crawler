@@ -1,0 +1,40 @@
+id: 2026-10-20-extract-full-split-02
+project: coastal-crawler
+description: >
+  Full-corpus extraction with model-parsed fields, job 2 of 5. Target: all
+  3075 table_clean_done papers (after the 2026-10-20 blanket
+  reset-extractions, which cleared every smoke/tiny row; 0 extractions at
+  submit time). batch_size=640 per job, 5 jobs: 5 x 640 = 3200 >= 3075, so
+  coverage is guaranteed whichever job claims first (claim_batch uses FOR
+  UPDATE SKIP LOCKED) and no job takes more than about a fifth. No
+  idle_timeout: single one-shot claim. Rung 3 passed on
+  2026-10-20-extract-tiny-05 (gpt-oss-120b; misses accepted: 7/10 papers with
+  measurements, 3 retry rounds, 4 duplicate fact rows; missing_parse=0).
+
+  Settings that differ from .env, pinned here because params.env now reaches
+  the vLLM server: MEAS_LM_MAX_MODEL_LEN=81920 (prompt budget 49152 after
+  the 32768-token completion reserve), parse and standardize in value_only
+  mode (as in the tiny runs).
+
+  Walltime: h_rt 48 h, not the 24 h extract profile. The tiny-05 rate was ~30
+  papers/h (10 papers, 1188 s), because scholarlm's extraction call is serial
+  and each retry regenerates a whole response; 640 papers at that rate is
+  ~21 h, too close to 24 h. A job killed at the limit strands its claimed
+  papers in status processing (rescue: requeue-processing; the CLI hangs, call
+  coastal_crawler.worker.requeue_processing() directly). A paper whose
+  extraction call exhausts its retries is marked failed (not extracted with 0
+  rows) -- expect a few; requeue-failed retries them.
+
+  After all 5 finish: reset nothing; run scripts/build_warehouse.py.
+seed: 342
+params:
+  stage: extract
+  batch_size: 640
+  h_rt: "48:00:00"
+  # gpt-oss-120b's MARLIN mxfp4 MoE kernel fails on cards newer than the
+  # cc-9.0 H200 -- see 2026-09-08-extract-full-split-03.yaml.
+  gpu_type: H200
+  env:
+    MEAS_LM_MAX_MODEL_LEN: 81920
+    MEAS_LM_PARSE_QUANTITIES_CONTEXT: value_only
+    MEAS_LM_STANDARDIZE_CONTEXT: value_only

@@ -18,6 +18,8 @@ from coastal_crawler.adapter import (
     DirectOCRAdapter,
     DirectTableCleanAdapter,
     _count_prompt_tokens,
+    DIRECT_EXTRACTION_FORMAT_NAME,
+    SCHOLARLM_EXTRACT_MAX_TOKENS,
     _truncate_context_to_budget,
     build_measurement_adapter,
     build_ocr_adapter,
@@ -49,7 +51,9 @@ _FAKE_SETTINGS = SimpleNamespace(
     meas_lm_base_url="http://localhost:8084/v1",
     meas_lm_api_key="EMPTY",
     meas_lm_max_concurrent=4,
-    meas_lm_max_model_len=32768,
+    meas_lm_max_model_len=81920,
+    meas_lm_parse_quantities_context="value_only",
+    meas_lm_standardize_context="value_only",
     meas_lm_entity_identification_prompt="Identify coastal sites.",
     meas_lm_temperature=0.90,
     meas_lm_top_p=0.95,
@@ -188,17 +192,16 @@ class TestBuildTableCleanAdapterGuards:
 
 
 class TestBuildTableCleanAdapterConstruction:
-    def test_constructs_meas_lm_with_settings(self, mocker: Any) -> None:
-        meas_lm_cls = mocker.patch("coastal_crawler.adapter.MeasurementLM")
+    def test_constructs_table_cleaner_with_settings(self, mocker: Any) -> None:
+        cleaner_cls = mocker.patch("coastal_crawler.adapter.TableCleaner")
 
         build_table_clean_adapter(_fake_settings())
 
-        kwargs = meas_lm_cls.call_args.kwargs
+        kwargs = cleaner_cls.call_args.kwargs
         assert kwargs["model_name"] == "test-table-clean-model"
         assert kwargs["api_base"] == "http://localhost:8085/v1"
         assert kwargs["api_key"] == "EMPTY"
-        assert kwargs["clean_tables"] is False
-        assert kwargs["cleaned_ocr_output_dir"] is None
+        assert "output_dir" not in kwargs  # the worker writes cleaned text itself
         assert kwargs["sampling_params"] == {
             "temperature": 0.0,
             "top_p": 0.95,
@@ -208,47 +211,43 @@ class TestBuildTableCleanAdapterConstruction:
         }
 
     def test_returns_direct_table_clean_adapter(self, mocker: Any) -> None:
-        meas_lm_sentinel = mocker.MagicMock()
-        mocker.patch("coastal_crawler.adapter.MeasurementLM", return_value=meas_lm_sentinel)
+        cleaner_sentinel = mocker.MagicMock()
+        mocker.patch("coastal_crawler.adapter.TableCleaner", return_value=cleaner_sentinel)
 
         adapter = build_table_clean_adapter(_fake_settings())
 
         assert isinstance(adapter, DirectTableCleanAdapter)
-        assert adapter.meas_lm is meas_lm_sentinel
+        assert adapter.cleaner is cleaner_sentinel
 
 
 class TestDirectTableCleanAdapterCleanTablesBatch:
-    def test_calls_clean_tables_directly_not_fit(self) -> None:
-        """The whole point of this adapter is to call _clean_tables()
-        without running fit()'s full extraction pipeline."""
-        meas_lm = MagicMock()
-        meas_lm.context_length_exceeded_docs = set()
-        meas_lm._clean_tables.return_value = ["cleaned 0", "cleaned 1"]
-        adapter = DirectTableCleanAdapter(meas_lm=meas_lm)
+    def test_calls_clean(self) -> None:
+        cleaner = MagicMock()
+        cleaner.context_length_exceeded_docs = set()
+        cleaner.clean.return_value = ["cleaned 0", "cleaned 1"]
+        adapter = DirectTableCleanAdapter(cleaner=cleaner)
 
         result = adapter.clean_tables_batch(["doc 0", "doc 1"], ["/scratch/0", "/scratch/1"])
 
-        meas_lm._clean_tables.assert_called_once_with(["doc 0", "doc 1"], ["/scratch/0", "/scratch/1"])
-        meas_lm.fit.assert_not_called()
+        cleaner.clean.assert_called_once_with(["doc 0", "doc 1"], ["/scratch/0", "/scratch/1"])
         assert result == ["cleaned 0", "cleaned 1"]
 
     def test_resets_context_length_exceeded_docs_before_call(self) -> None:
-        """fit() resets this at the start of each call; since _clean_tables
-        is called directly (never fit()), the adapter must reset it itself
-        or a failure from a previous batch would leak into this one."""
-        meas_lm = MagicMock()
-        meas_lm.context_length_exceeded_docs = {0, 1}
-        meas_lm._clean_tables.return_value = ["cleaned"]
-        adapter = DirectTableCleanAdapter(meas_lm=meas_lm)
+        """TableCleaner only adds to this set, so the adapter must reset it
+        itself or a failure from a previous batch would leak into this one."""
+        cleaner = MagicMock()
+        cleaner.context_length_exceeded_docs = {0, 1}
+        cleaner.clean.return_value = ["cleaned"]
+        adapter = DirectTableCleanAdapter(cleaner=cleaner)
 
         adapter.clean_tables_batch(["doc"], ["/scratch/0"])
 
-        assert meas_lm.context_length_exceeded_docs == set()
+        assert cleaner.context_length_exceeded_docs == set()
 
     def test_context_length_exceeded_docs_property_reads_through(self) -> None:
-        meas_lm = MagicMock()
-        meas_lm.context_length_exceeded_docs = {2}
-        adapter = DirectTableCleanAdapter(meas_lm=meas_lm)
+        cleaner = MagicMock()
+        cleaner.context_length_exceeded_docs = {2}
+        adapter = DirectTableCleanAdapter(cleaner=cleaner)
         assert adapter.context_length_exceeded_docs == {2}
 
 
@@ -309,10 +308,11 @@ class TestBuildMeasurementAdapterConstruction:
             attribute_info_dict=ATTRIBUTE_INFO_DICT,
             measurement_event_schema=MeasurementEventSchema,
             extraction_mode="direct",
-            clean_tables=False,
             direct_extraction_schema=DirectExtractionSchema,
             direct_extraction_prompt=build_direct_extraction_prompt("Identify coastal sites."),
             collect_attribute_terms=False,
+            parse_quantities_context="value_only",
+            standardize_context="value_only",
             sampling_params={
                 "temperature": 0.90,
                 "top_p": 0.95,
@@ -326,7 +326,7 @@ class TestBuildMeasurementAdapterConstruction:
         )
 
     def test_returns_direct_measurement_adapter_with_schema_and_version(self, mocker: Any) -> None:
-        meas_lm_sentinel = mocker.sentinel.meas_lm
+        meas_lm_sentinel = MagicMock(name="meas_lm")
         mocker.patch("coastal_crawler.adapter.MeasurementLM", return_value=meas_lm_sentinel)
 
         adapter = build_measurement_adapter(_fake_settings())
@@ -337,7 +337,8 @@ class TestBuildMeasurementAdapterConstruction:
         assert adapter.model_version == "doc_lm=test-ocr-model+meas_lm=test-extraction-model"
         assert adapter.lat_field is None
         assert adapter.lon_field is None
-        assert adapter.max_model_len == 32768
+        assert adapter.max_model_len == 81920
+        assert adapter.reserved_completion_tokens == SCHOLARLM_EXTRACT_MAX_TOKENS
         assert isinstance(adapter.tokenizer, _FakeTokenizer)
 
     def test_loads_tokenizer_for_configured_model(self, _patch_tokenizer: Any) -> None:
@@ -378,6 +379,7 @@ class TestDirectMeasurementAdapterExtractBatch:
         # unless a test overrides it.
         kwargs.setdefault("tokenizer", _FakeTokenizer())
         kwargs.setdefault("max_model_len", 100_000)
+        kwargs.setdefault("reserved_completion_tokens", 0)
         meas_lm = kwargs.pop("meas_lm", None) or MagicMock()
         return DirectMeasurementAdapter(
             meas_lm=meas_lm,
@@ -566,13 +568,16 @@ def _meas_lm(fit_return: Any, *, context_length_exceeded: Any = (), prompt: Any 
 
 
 class TestDirectMeasurementAdapterTruncation:
-    def _adapter(self, meas_lm: Any, max_model_len: int) -> DirectMeasurementAdapter:
+    def _adapter(
+        self, meas_lm: Any, max_model_len: int, reserved_completion_tokens: int = 0
+    ) -> DirectMeasurementAdapter:
         return DirectMeasurementAdapter(
             meas_lm=meas_lm,
             schema_name="coastal_measurement_v1",
             model_version="v1",
             tokenizer=_FakeTokenizer(),
             max_model_len=max_model_len,
+            reserved_completion_tokens=reserved_completion_tokens,
         )
 
     def test_under_budget_doc_not_marked_and_passed_verbatim(self) -> None:
@@ -595,6 +600,35 @@ class TestDirectMeasurementAdapterTruncation:
         assert adapter.truncated_docs == {0}
         sent = meas_lm.fit.call_args[0][0][0]
         assert len(sent.split()) < 300
+
+    def test_completion_reserve_shrinks_prompt_limit(self) -> None:
+        # A doc that fits max_model_len on its own must still be truncated
+        # once the completion reserve is subtracted from the window.
+        overhead = _count_prompt_tokens(_FakeTokenizer(), _PROMPT, "")
+        doc = " ".join(f"w{i}" for i in range(50))
+        fits = _meas_lm([])
+        self._adapter(fits, max_model_len=overhead + 100).extract_batch([doc])
+        assert fits.fit.call_args[0][0] == [doc]
+
+        reserved = _meas_lm([])
+        adapter = self._adapter(
+            reserved, max_model_len=overhead + 100, reserved_completion_tokens=80
+        )
+        adapter.extract_batch([doc])
+        assert adapter.truncated_docs == {0}
+        assert len(reserved.fit.call_args[0][0][0].split()) <= 20
+
+    def test_rejects_window_not_larger_than_reserve(self) -> None:
+        with pytest.raises(ValueError, match="leaves no room for a prompt"):
+            self._adapter(_meas_lm([]), max_model_len=100, reserved_completion_tokens=100)
+
+    def test_reserve_matches_installed_scholarlm(self) -> None:
+        import inspect
+
+        import scholarlm.measurementlm as m
+
+        src = inspect.getsource(m.MeasurementLM._extract_triples)
+        assert f"max_tokens={SCHOLARLM_EXTRACT_MAX_TOKENS}," in src
 
     def test_truncated_docs_reset_between_calls(self) -> None:
         overhead = _count_prompt_tokens(_FakeTokenizer(), _PROMPT, "")
@@ -634,3 +668,127 @@ class TestDirectMeasurementAdapterTruncation:
 
         with pytest.raises(AssertionError, match="direct_extraction_prompt is None"):
             adapter.extract_batch(["doc text"])
+
+
+class _CallBatchLM:
+    """Stand-in MeasurementLM whose fit() issues one extraction _call_batch
+    (and optionally one standardize _call_batch) through the real attribute
+    the adapter wraps, with canned responses."""
+
+    def __init__(self, extraction: list[Any], standardize: list[Any] | None = None) -> None:
+        self.direct_extraction_prompt = _PROMPT
+        self.context_length_exceeded_docs: set[int] = set()
+        self._extraction = extraction
+        self._standardize = standardize
+
+    def _call_batch(self, message_sets: list[Any], **kwargs: Any) -> list[Any]:
+        name = kwargs["response_format"]["json_schema"]["name"]
+        return self._extraction if name == DIRECT_EXTRACTION_FORMAT_NAME else self._standardize  # type: ignore[return-value]
+
+    def fit(self, texts: list[str]) -> list[dict[str, Any]]:
+        fmt = lambda n: {"type": "json_schema", "json_schema": {"name": n}}  # noqa: E731
+        validator = lambda r: None if r.startswith("{") else (_ for _ in ()).throw(ValueError(r))  # noqa: E731
+        self._call_batch(
+            [None] * len(texts), response_format=fmt(DIRECT_EXTRACTION_FORMAT_NAME), validator=validator
+        )
+        if self._standardize is not None:
+            self._call_batch(
+                [None] * len(self._standardize), response_format=fmt("standardize_response"), validator=validator
+            )
+        return [
+            {"document_id": i, "value": 1.0, "units": "m", "attribute": "depth"}
+            for i in range(len(texts))
+            if i not in self._failed_docs()
+        ]
+
+    def _failed_docs(self) -> set[int]:
+        return {i for i, r in enumerate(self._extraction) if not r or not r.startswith("{")}
+
+
+class TestExhaustedRetryDetection:
+    def _adapter(self, lm: Any) -> DirectMeasurementAdapter:
+        return DirectMeasurementAdapter(
+            meas_lm=lm,
+            schema_name="coastal_measurement_v1",
+            model_version="v1",
+            tokenizer=_FakeTokenizer(),
+            max_model_len=100_000,
+            reserved_completion_tokens=0,
+        )
+
+    def test_empty_or_invalid_extraction_response_fails_the_document(self) -> None:
+        lm = _CallBatchLM(extraction=['{"items": []}', "", "not json"])
+        adapter = self._adapter(lm)
+
+        results = adapter.extract_batch(["a", "b", "c"])
+
+        assert not isinstance(results[0], str)
+        assert isinstance(results[1], str) and "exhausted its retries" in results[1]
+        assert isinstance(results[2], str) and "exhausted its retries" in results[2]
+        assert adapter.exhausted_calls == {DIRECT_EXTRACTION_FORMAT_NAME: {1, 2}}
+
+    def test_valid_empty_item_list_is_not_a_failure(self) -> None:
+        lm = _CallBatchLM(extraction=['{"items": []}'])
+        lm.fit = lambda texts: []  # type: ignore[method-assign]
+        adapter = self._adapter(lm)
+
+        results = adapter.extract_batch(["a"])
+
+        assert results == [[]]
+        assert adapter.exhausted_calls == {}
+
+    def test_followup_step_failures_are_recorded_not_failing_the_paper(self) -> None:
+        lm = _CallBatchLM(extraction=['{"items": []}'], standardize=[""])
+        adapter = self._adapter(lm)
+
+        results = adapter.extract_batch(["a"])
+
+        assert not isinstance(results[0], str)
+        assert adapter.exhausted_calls == {"standardize_response": {0}}
+
+    def test_exhausted_state_resets_between_batches(self) -> None:
+        lm = _CallBatchLM(extraction=[""])
+        adapter = self._adapter(lm)
+        adapter.extract_batch(["a"])
+        lm._extraction = ['{"items": []}']
+
+        adapter.extract_batch(["a"])
+
+        assert adapter.exhausted_calls == {}
+
+    def test_format_name_matches_installed_scholarlm(self) -> None:
+        import inspect
+
+        import scholarlm.measurementlm as m
+
+        src = inspect.getsource(m.MeasurementLM._extract_triples)
+        assert f'"name": "{DIRECT_EXTRACTION_FORMAT_NAME}"' in src
+
+
+class TestMeasLmContextSettings:
+    def test_defaults_to_scholarlm_full_mode(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from coastal_crawler.config import Settings
+
+        monkeypatch.delenv("MEAS_LM_PARSE_QUANTITIES_CONTEXT", raising=False)
+        monkeypatch.delenv("MEAS_LM_STANDARDIZE_CONTEXT", raising=False)
+        s = Settings(_env_file=None)
+        assert s.meas_lm_parse_quantities_context == "full"
+        assert s.meas_lm_standardize_context == "full"
+
+    def test_env_selects_value_only(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from coastal_crawler.config import Settings
+
+        monkeypatch.setenv("MEAS_LM_PARSE_QUANTITIES_CONTEXT", "value_only")
+        monkeypatch.setenv("MEAS_LM_STANDARDIZE_CONTEXT", "value_only")
+        s = Settings(_env_file=None)
+        assert s.meas_lm_parse_quantities_context == "value_only"
+        assert s.meas_lm_standardize_context == "value_only"
+
+    def test_rejects_unknown_mode(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from pydantic import ValidationError
+
+        from coastal_crawler.config import Settings
+
+        monkeypatch.setenv("MEAS_LM_STANDARDIZE_CONTEXT", "values_only")
+        with pytest.raises(ValidationError):
+            Settings(_env_file=None)

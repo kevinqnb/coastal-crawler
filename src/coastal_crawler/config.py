@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from functools import lru_cache
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import Field, field_validator
 from pydantic_settings import (
@@ -234,6 +234,23 @@ class Settings(BaseSettings):
     meas_lm_max_concurrent: int = Field(
         default=4,
         description="Maximum concurrent extraction API calls the client sends at once (client-side concurrency, not a vLLM server flag). Was hardcoded to 1.",
+    )
+    meas_lm_parse_quantities_context: Literal["full", "value_only"] = Field(
+        default="full",
+        description=(
+            "scholarlm.MeasurementLM parse_quantities_context: what _parse_quantities() shows "
+            "the model. 'full' (scholarlm's default) = source text + entity/attribute "
+            "description + units + value; 'value_only' = the extracted value string alone."
+        ),
+    )
+    meas_lm_standardize_context: Literal["full", "value_only"] = Field(
+        default="full",
+        description=(
+            "scholarlm.MeasurementLM standardize_context: what _standardize() shows the model. "
+            "'full' (scholarlm's default) = source text + entity/attribute description + "
+            "terminology + available units + value/units; 'value_only' = available units + "
+            "extracted value/units only."
+        ),
     )
     meas_lm_temperature: float = Field(
         default=0.90,
@@ -531,6 +548,99 @@ class Settings(BaseSettings):
         ),
     )
 
+    # ------------------------------------------------------------- Representations
+    repr_lm_model: str | None = Field(
+        default=None,
+        description=(
+            "HuggingFace model id for scholarlm.RepresentationLM (must be a base, "
+            "non-instruct model, e.g. meta-llama/Llama-3.1-8B). Loaded locally "
+            "via nnsight in the repr process — there is no vLLM server for this "
+            "role, so REPR_LM_* has no port/TP/SIF settings."
+        ),
+    )
+    repr_lm_dtype: str = Field(
+        default="bfloat16",
+        description="torch dtype name passed to RepresentationLM's nnsight_kwargs as torch_dtype.",
+    )
+    repr_lm_seed: int = Field(
+        default=0,
+        description="Passed to torch.manual_seed before model load; forward passes are otherwise deterministic.",
+    )
+    repr_lm_layers: str = Field(
+        default="32",
+        description=(
+            "Comma-separated layer indices RepresentationLM collects in one pass "
+            "(scholarlm >= 604bb0d): 0 = token embeddings (context-independent "
+            "baseline), 1..n-1 = post-block residual, n (32 for Llama-3.1-8B) = "
+            "post-final-norm. Row norms are not comparable between layer 32 and "
+            "the rest."
+        ),
+    )
+    repr_lm_store_dtype: Literal["float16", "float32"] = Field(
+        default="float32",
+        description=(
+            "On-disk dtype of the stored embeddings. RepresentationLM returns "
+            "float32; the cast to this dtype is explicit and finiteness-checked "
+            "in repr_worker.py."
+        ),
+    )
+    repr_lm_batch_size: int = Field(
+        default=8,
+        description="Papers claimed per claim_batch_for_repr transaction. Papers are run through RepresentationLM one at a time within a batch.",
+    )
+    repr_lm_text_dir: str | None = Field(
+        default=None,
+        description=(
+            "Directory of {paper_id}.txt files to collect representations from. "
+            "Must be set explicitly (e.g. data/table_clean or data/ocr) — "
+            "never inferred from table_clean_dir/ocr_dir."
+        ),
+    )
+    repr_lm_architecture: Literal["causal", "bidirectional"] | None = Field(
+        default=None,
+        description="RepresentationLM backend: causal (nnterp, e.g. Llama) or bidirectional (HF AutoModel, e.g. ModernBERT). Required; never inferred from the model name.",
+    )
+    repr_lm_pooling: Literal["mean", "last"] | None = Field(
+        default=None,
+        description="How the token states of one term match are combined: mean over all tokens in the match, or the last token only. Required.",
+    )
+    repr_lm_context_radius: str | None = Field(
+        default=None,
+        description="Paragraphs on each side of a match's paragraph fed to the model (int >= 0), or the literal 'none' for the whole cleaned document. Required.",
+    )
+    repr_lm_device: str | None = Field(
+        default=None,
+        description="Torch device for the bidirectional backend, e.g. cuda:0. Required for bidirectional; the causal backend picks its own.",
+    )
+    repr_lm_attn_implementation: str | None = Field(
+        default=None,
+        description="HF attn_implementation for the bidirectional backend (e.g. sdpa), pinned so the numbers do not depend on which attention libraries happen to be installed.",
+    )
+    repr_lm_hf_cache_dir: str | None = Field(
+        default=None,
+        description="HF cache directory for the bidirectional backend (this cluster's weights live in HF_HOME itself, not HF_HOME/hub).",
+    )
+    repr_lm_remove_references: bool | None = Field(
+        default=None, description="Cut the references section before collecting (CleaningConfig.remove_references). Required."
+    )
+    repr_lm_remove_tables: bool | None = Field(
+        default=None, description="Remove <table> blocks before collecting (CleaningConfig.remove_tables). Required."
+    )
+    repr_lm_remove_page_tags: bool | None = Field(
+        default=None, description="Remove <page> tags before collecting (CleaningConfig.remove_page_tags). Required."
+    )
+    repr_lm_min_kept_fraction: float | None = Field(
+        default=None,
+        description="Guard in (0, 1]: a reference cut keeping less than this fraction of the text raises. Must be set iff REPR_LM_REMOVE_REFERENCES is true.",
+    )
+    repr_dir: str = Field(
+        default="data/representations",
+        description=(
+            "Root directory for representation outputs: REPR_DIR/<run_id>/"
+            "shards/{paper_id}.npz plus REPR_DIR/<run_id>/index.parquet."
+        ),
+    )
+
     # ------------------------------------------------------------- OCR
     ocr_dir: str = Field(
         default="data/ocr",
@@ -579,6 +689,19 @@ class Settings(BaseSettings):
             "warehouse file. Rebuilt atomically (written to a temp path, then "
             "renamed into place) on every run."
         ),
+    )
+
+    # ------------------------------------------------- Representations tab
+    repr_site_dir: str = Field(
+        default="data/repr_site",
+        description=(
+            "Directory of plot JSON for the site's Representations tab, written by "
+            "scripts/build_repr_plots.py as REPR_SITE_DIR/<analysis id>/*.json."
+        ),
+    )
+    repr_site_analysis_id: str = Field(
+        default="modernbert-01",
+        description="Which configs/repr-analysis/<id>.yaml build the Representations tab serves.",
     )
 
     # ------------------------------------------------------- Wiley TDM
@@ -634,6 +757,8 @@ class Settings(BaseSettings):
         "table_clean_max_model_len",
         "table_clean_quantization",
         "table_clean_sif_path",
+        "repr_lm_model",
+        "repr_lm_text_dir",
         mode="before",
     )
     @classmethod
