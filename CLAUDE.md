@@ -156,6 +156,33 @@ Requeue commands (each skips as many upstream stages as it safely can, given wha
 - **Contract:** `params.stage: repr` requires `terms_file`, `source_statuses`, `max_papers` (null = all eligible), `batch_size`, `skip_overflow`, `skip_clean_errors`; metrics are `repr_done`/`failed`/`zero_occurrence`/`skipped_overflow`/`skipped_clean_error`. `params.stage: repr_terms` embeds each term ALONE (no papers, no DB) into `REPR_DIR/<id>/isolated_terms.npz`; it needs only `terms_file` and the same `REPR_LM_*` env. Papers with no term mention are `done` with an empty shard; truncation, non-finite values, wrong shapes, or a missing text file mark the row `failed`.
 - **Requeue/reset:** `requeue-repr-processing` / `requeue-repr-failed` (`--run-id`). `reset-pipeline` deletes all `paper_representations` rows (shards on disk are left, orphaned); `requeue-ocr` leaves them, like extractions.
 
+## Warehouse (DuckDB star schema) — derived, downstream of Postgres
+
+Postgres is the operational store (queue + landing zone); the **results site reads only the DuckDB warehouse** at `Settings.warehouse_path` (`data/warehouse.duckdb`). It is derived data: `scripts/build_warehouse.py` reads `papers`/`extractions`/`attributions` from Postgres (left unchanged) and writes a fresh file. It is a **full rebuild, not incremental** — `CREATE OR REPLACE TABLE` in one transaction, written to a temp path and atomically renamed into place. Nothing in the pipeline reads it, and no worker writes to it. It is a standalone script, not part of the experiment contract (`params.stage`). Run: `uv run scripts/build_warehouse.py`. Design rationale: `notes/coastal-crawler/builds/2026-08-12-warehouse-init-01.md`.
+
+**Any number that comes from the site is only as fresh as the last rebuild.** After re-extracting, re-running table-clean, or resetting the DBs, rebuild before trusting the warehouse.
+
+Schema (`SCHEMA_DDL` in `warehouse.py`):
+
+| Table | Grain | Notes |
+|---|---|---|
+| `extractions_fact` | one measurement | `source_extraction_id` → Postgres `extractions.id`; FKs to the four dims below (`paper_id`, `extraction_model_id`, `entity_id`, `event_id`); `attribute`, `quantity_raw`, `units_raw`; model-parsed `qualifiers`/`point_value`/`lower`/`upper`/`list_values`/`tolerance`/`standard_deviation` (stored as returned, numbers as text); `page_number`, `confidence`, `probe_score` |
+| `paper_dim` | source paper | DOI, title, authors, date, publisher, source IDs |
+| `model_dim` | (model, role, prompt) | `prompt_version` is a 12-char hash of the prompt text (`hash_prompt`) |
+| `entity_dim` | measured site/entity | lat/lon, name, `ecosystem_type`, `resolution_method` (`coordinate`/`name`/`unresolved`) |
+| `event_dim` | measurement occasion | date, sub-location, details |
+| `attribution_fact` | (extraction, method) | passthrough of Postgres `attributions`, keyed by `source_extraction_id` (not `fact_id`); may reference extractions with no fact row |
+
+Things that bite:
+
+- **The build skips and logs instead of failing loud** — a deliberate, named exception to the fail-loud rules above. Rows with an unknown attribute, null value, or no model parse (`missing_parse`: the parse call failed) are dropped and recorded in `<warehouse_path>.skip_report.jsonl` (`extraction_id`, `paper_id`, `reason`, `detail`), with a per-reason count logged at the end. **Read the skip report and compare fact-row count to `extractions` count before using the warehouse.** Partially present or mistyped parse fields do raise.
+- `dedupe_exact_fact_rows` removes exact-duplicate fact rows at build time, so fact count < extraction count even with no skips.
+- **No unit conversion** anywhere; values are carried exactly as the model returned them. The old regex parser and `qualifier_dim` are gone (commit `0acb3f1`).
+- Entity resolution clusters coordinate-bearing points by haversine distance (`LOCATION_DISTANCE_THRESHOLD_KM`), then fuzzy-matches coordinate-less names (`LOCATION_NAME_SIMILARITY_THRESHOLD`). It replaced the dropped Postgres `locations` table.
+- `model_dim.temperature` is a constant hardcoded in `build_warehouse.py` (`_EXTRACTION_LM_DEFAULT_TEMPERATURE`), not read from config or the run — it can go stale silently.
+- The site (`db/warehouse_reader.py`) opens a **read-only connection per request** so an atomic swap of a rebuilt file is picked up; don't hold connections open.
+- `warehouse.py` is pure transforms (no DB I/O) and is unit-tested on hand-built fixtures (`tests/test_warehouse.py`, `tests/test_build_warehouse.py`). Changes to its dedup/resolution/skip logic change what the site reports — treat them with the same care as scoring code.
+
 ## Key source files
 
 | File | Role |
@@ -173,7 +200,10 @@ Requeue commands (each skips as many upstream stages as it safely can, given wha
 | `src/coastal_crawler/measurement_schema.py` | Domain-specific `EntitySchema`, `MeasurementEventSchema`, `ATTRIBUTE_INFO_DICT`, `DirectExtractionSchema`, and `build_direct_extraction_prompt()` — feeds `scholarlm.MeasurementLM`'s direct-extraction call — placeholder, fill in before running extraction for real. |
 | `src/coastal_crawler/repr_worker.py` | `run_repr_worker()` / `seed_repr()` / `build_index()` — the representation stage (see its section above); adapter trio `ReprAdapter`/`StubReprAdapter`/`DirectReprAdapter`/`build_repr_adapter()` lives in `adapter.py`. |
 | `src/coastal_crawler/db/models.py` | SQLAlchemy ORM: `Paper`, `Extraction`, `PaperOcrContext`, `PaperRepresentation`, `Vote`, `Attribution`, `CrawlState`. |
-| `src/coastal_crawler/db/store.py` | All SQL — every DB operation lives here; callers own commit/rollback. |
+| `src/coastal_crawler/db/store.py` | All Postgres SQL — every operational DB operation lives here; callers own commit/rollback. |
+| `src/coastal_crawler/warehouse.py` | Pure transform logic + `SCHEMA_DDL` for the DuckDB star-schema warehouse (see its section above). |
+| `scripts/build_warehouse.py` | One-shot Postgres → DuckDB full rebuild; writes the skip report. |
+| `src/coastal_crawler/db/warehouse_reader.py` | Read-only DuckDB queries used by the results site. |
 | `src/coastal_crawler/db/engine.py` | `get_session()` context manager. |
 | `src/coastal_crawler/cli.py` | Typer CLI: `discover`, `filter`, `ocr`, `table-clean`, `extract`, `status`, `requeue-failed`, `requeue-processing`, `requeue-ocr-processing`, `requeue-ocr-failed`, `requeue-ocr`, `requeue-table-clean-processing`, `requeue-table-clean-failed`, `requeue-irrelevant`, `reset-extractions`, `reset-pipeline`. |
 | `alembic/versions/` | One migration file per schema change. |
