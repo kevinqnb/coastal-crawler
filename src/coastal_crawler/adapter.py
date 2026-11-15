@@ -14,7 +14,7 @@ from __future__ import annotations
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Protocol, cast, runtime_checkable
+from typing import TYPE_CHECKING, Any, Callable, Protocol, cast, runtime_checkable
 
 import structlog
 from pydantic import BaseModel
@@ -318,12 +318,12 @@ def _direct_extraction_prompt(direct_extraction_prompt: str, context: str) -> st
     )
 
 
-def _count_prompt_tokens(tokenizer: _Tokenizer, direct_extraction_prompt: str, context: str) -> int:
-    """Token count of the full chat-templated prompt scholarlm sends to the
-    server for this (direct_extraction_prompt, context) pair. Uses
-    apply_chat_template (not a plain encode()) so the count includes
+def _count_rendered_tokens(tokenizer: _Tokenizer, prompt: str) -> int:
+    """Token count of ``prompt`` sent as a single user-role chat message.
+
+    Uses apply_chat_template (not a plain encode()) so the count includes
     whatever role-wrapping tokens the server's own chat template adds —
-    scholarlm sends this same content as a single user-role message via
+    scholarlm sends every prompt as a single user-role message via
     ``chat.completions.create`` — avoiding the need for a guessed safety
     margin to cover that overhead.
 
@@ -334,7 +334,6 @@ def _count_prompt_tokens(tokenizer: _Tokenizer, direct_extraction_prompt: str, c
     every prompt to "2 tokens" and disabling the truncation backstop
     entirely. ``return_dict=False`` returns the plain ``list[int]`` this
     count needs."""
-    prompt = _direct_extraction_prompt(direct_extraction_prompt, context)
     return len(
         tokenizer.apply_chat_template(
             [{"role": "user", "content": prompt}],
@@ -343,6 +342,12 @@ def _count_prompt_tokens(tokenizer: _Tokenizer, direct_extraction_prompt: str, c
             return_dict=False,
         )
     )
+
+
+def _count_prompt_tokens(tokenizer: _Tokenizer, direct_extraction_prompt: str, context: str) -> int:
+    """Token count of the full chat-templated prompt scholarlm's direct-extraction
+    call sends to the server for this (direct_extraction_prompt, context) pair."""
+    return _count_rendered_tokens(tokenizer, _direct_extraction_prompt(direct_extraction_prompt, context))
 
 
 #: Completion tokens scholarlm's direct-extraction call always requests
@@ -368,14 +373,15 @@ def _format_name(response_format: dict[str, Any] | None) -> str:
     return str(response_format["json_schema"]["name"])
 
 
-def _truncate_context_to_budget(
+def _truncate_rendered_context(
     tokenizer: _Tokenizer,
-    direct_extraction_prompt: str,
+    render: Callable[[str], str],
     context: str,
     max_model_len: int,
 ) -> tuple[str, bool]:
-    """Truncate `context` so the full prompt (template + context) fits within
-    max_model_len tokens, if it doesn't already.
+    """Truncate `context` so ``render(context)`` (the full prompt scholarlm
+    sends, template + context) fits within max_model_len tokens, if it
+    doesn't already.
 
     Returns (possibly-truncated context, was_truncated).
 
@@ -386,10 +392,10 @@ def _truncate_context_to_budget(
     blindly (CLAUDE.md: fail loud, don't quietly ship a still-too-long
     prompt).
     """
-    if _count_prompt_tokens(tokenizer, direct_extraction_prompt, context) <= max_model_len:
+    if _count_rendered_tokens(tokenizer, render(context)) <= max_model_len:
         return context, False
 
-    overhead_tokens = _count_prompt_tokens(tokenizer, direct_extraction_prompt, "")
+    overhead_tokens = _count_rendered_tokens(tokenizer, render(""))
     budget = max_model_len - overhead_tokens
     if budget <= 0:
         raise ValueError(
@@ -403,7 +409,7 @@ def _truncate_context_to_budget(
 
     for _ in range(5):
         truncated_context = tokenizer.decode(truncated_ids, skip_special_tokens=True)
-        total = _count_prompt_tokens(tokenizer, direct_extraction_prompt, truncated_context)
+        total = _count_rendered_tokens(tokenizer, render(truncated_context))
         if total <= max_model_len:
             return truncated_context, True
         overshoot = total - max_model_len
@@ -412,6 +418,162 @@ def _truncate_context_to_budget(
     raise RuntimeError(
         f"Could not truncate document context to fit meas_lm_max_model_len="
         f"{max_model_len} after 5 attempts (last total={total} tokens)."
+    )
+
+
+def _truncate_context_to_budget(
+    tokenizer: _Tokenizer,
+    direct_extraction_prompt: str,
+    context: str,
+    max_model_len: int,
+) -> tuple[str, bool]:
+    """``_truncate_rendered_context`` for the direct-extraction prompt."""
+    return _truncate_rendered_context(
+        tokenizer, lambda c: _direct_extraction_prompt(direct_extraction_prompt, c), context, max_model_len
+    )
+
+
+def _note_exhausted_calls(
+    results: list[Any], kwargs: dict[str, Any], exhausted_calls: dict[str, set[int]]
+) -> None:
+    """Re-apply scholarlm ``_call_batch``'s own failure test to each final
+    response and record, per ``response_format`` name, the request positions
+    whose retries were exhausted (empty response, or one that fails the
+    call's validator). ContextLengthExceededError responses are skipped —
+    tracked separately via ``context_length_exceeded_docs``."""
+    validator = kwargs.get("validator")
+    name = _format_name(kwargs.get("response_format"))
+    for i, resp in enumerate(results):
+        if isinstance(resp, ContextLengthExceededError):
+            continue
+        exhausted = not resp
+        if not exhausted and validator is not None:
+            try:
+                validator(resp)
+            except Exception:  # noqa: BLE001 - same failure test _call_batch applies; recorded, surfaced in extract_batch
+                exhausted = True
+        if exhausted:
+            exhausted_calls.setdefault(name, set()).add(i)
+
+
+def _outcomes_from_records(
+    *,
+    raw: list[dict[str, Any]],
+    n_docs: int,
+    exhausted_calls: dict[str, set[int]],
+    gating_step: str,
+    context_length_exceeded: set[int],
+    truncated_docs: set[int],
+    to_result: Callable[[dict[str, Any]], ExtractionResult],
+) -> list[DocumentOutcome]:
+    """Regroup ``MeasurementLM.fit()``'s FLAT record list into one
+    ``DocumentOutcome`` per input document (same order/length as the inputs).
+
+    ``gating_step`` is the ``response_format`` name of the one call whose
+    request index IS the document index (direct: the per-document extraction
+    call; pipeline: entity identification). A document whose gating call
+    exhausted its retries becomes a str failure rather than a clean "found
+    nothing". Exhausted calls in any other step have per-step request
+    positions, not document ids, so they can only be counted and logged —
+    they are never silently attributed to a document.
+
+    context_length_exceeded_docs is populated from several places in
+    scholarlm's fit(): a document that produced zero records (a true total
+    failure) and a document whose records survive with a step skipped
+    (e.g. un-standardized original value/units). Only the first case is
+    converted to a str failure — the second keeps its partial results
+    (discarding them would throw away real data) but gets a loud warning,
+    since an un-standardized value/units pair reaching the output is its own
+    quietly-wrong-number risk. See
+    notes/coastal-crawler/builds/2026-08-20-extraction-hardening-01.md.
+    """
+    for step, indices in exhausted_calls.items():
+        if step != gating_step:
+            # Indices here are per-step request positions, not document ids.
+            log.warning("extraction_followup_calls_exhausted_retries", step=step, count=len(indices))
+    gating_exhausted = exhausted_calls.get(gating_step, set())
+
+    by_document: dict[int, list[dict[str, Any]]] = defaultdict(list)
+    for record in raw:
+        by_document[record["document_id"]].append(record)
+
+    out_of_range = set(by_document) - set(range(n_docs))
+    if out_of_range:
+        raise ValueError(
+            f"meas_lm.fit() returned document_id values outside range(len(ocr_texts))={n_docs}: "
+            f"{out_of_range}. This means document_id is not the expected 0-indexed position into "
+            f"ocr_texts, and every downstream regrouping is silently wrong."
+        )
+
+    results: list[DocumentOutcome] = []
+    for i in range(n_docs):
+        records = by_document[i]
+        if i in gating_exhausted:
+            assert not records, (
+                f"document {i} has {len(records)} records although its extraction "
+                f"call exhausted retries; batch positions no longer line up"
+            )
+            results.append(
+                f"MeasurementLM extraction call for document {i} exhausted its "
+                f"retries without a valid response (empty or failed validation); "
+                f"zero records extracted."
+            )
+            continue
+        if i in context_length_exceeded:
+            if not records:
+                results.append(
+                    f"MeasurementLM context-length-exceeded for document {i} "
+                    f"(truncated_by_backstop={i in truncated_docs}); zero "
+                    f"records extracted."
+                )
+                continue
+            log.warning("document_partially_standardized", batch_index=i, records=len(records))
+        results.append([to_result(record) for record in records])
+    return results
+
+
+def _record_to_result(
+    record: dict[str, Any],
+    schema_name: str,
+    model_version: str,
+    lat_field: str | None,
+    lon_field: str | None,
+) -> ExtractionResult:
+    # _deduplicate() wraps these fields in single-element lists
+    # (provenance aggregation across duplicates) — direct mode's
+    # per-item-unique entity_id means every dedup group is a singleton,
+    # so unwrap back to a scalar to keep this shape stable for callers.
+    # Pipeline mode runs the same _deduplicate, so a group there can hold
+    # several (page, table, row, column) provenance entries; the first is
+    # kept here, as in direct mode.
+    def _unwrap(field: str) -> Any:
+        values = record.get(field)
+        return values[0] if isinstance(values, list) else values
+
+    provenance = {
+        "page_number": _unwrap("page_number"),
+        "table_number": _unwrap("table_number"),
+        "row_index": _unwrap("row_index"),
+        "column_index": _unwrap("column_index"),
+        "source": _unwrap("source"),
+    }
+    # `context` (the full OCR'd document text) is dropped here, not
+    # persisted per-record — worker.py writes it once per paper via
+    # store.upsert_paper_ocr_context instead, from the same ocr_texts
+    # string this record's `context` was merged in from. Storing it on
+    # every measurement record (previously in both `data` and
+    # `provenance`) meant a paper with N measurements stored its ~55KB
+    # OCR text N*2 times — see migration c2d3e4f5a6b7.
+    data = {k: v for k, v in record.items() if k != "context"}
+    return ExtractionResult(
+        schema_name=schema_name,
+        model_version=model_version,
+        data=data,
+        # STUB: wire in a real confidence score if ExtractionLM exposes one.
+        confidence=None,
+        provenance=provenance,
+        latitude=record.get(lat_field) if lat_field else None,
+        longitude=record.get(lon_field) if lon_field else None,
     )
 
 
@@ -458,6 +620,7 @@ class DirectMeasurementAdapter:
         # failure test to each final response and records which calls
         # exhausted their retries, per step.
         self.exhausted_calls: dict[str, set[int]] = {}
+        self.step_seconds: dict[str, float] = {}
         self._call_batch_original = meas_lm._call_batch
         meas_lm._call_batch = self._recording_call_batch
         # Batch-local indices truncated by the backstop in the most recent
@@ -471,19 +634,7 @@ class DirectMeasurementAdapter:
         assert len(results) == len(message_sets), (
             f"_call_batch returned {len(results)} responses for {len(message_sets)} requests"
         )
-        validator = kwargs.get("validator")
-        name = _format_name(kwargs.get("response_format"))
-        for i, resp in enumerate(results):
-            if isinstance(resp, ContextLengthExceededError):
-                continue  # tracked separately via context_length_exceeded_docs
-            exhausted = not resp
-            if not exhausted and validator is not None:
-                try:
-                    validator(resp)
-                except Exception:  # noqa: BLE001 - same failure test _call_batch applies; recorded, surfaced in extract_batch
-                    exhausted = True
-            if exhausted:
-                self.exhausted_calls.setdefault(name, set()).add(i)
+        _note_exhausted_calls(results, kwargs, self.exhausted_calls)
         return results
 
     def extract_batch(self, ocr_texts: list[str]) -> list[DocumentOutcome]:
@@ -522,106 +673,157 @@ class DirectMeasurementAdapter:
 
         self.exhausted_calls = {}
         raw: list[dict[str, Any]] = self.meas_lm.fit(processed_texts)
-        extraction_exhausted = self.exhausted_calls.get(DIRECT_EXTRACTION_FORMAT_NAME, set())
-        for step, indices in self.exhausted_calls.items():
-            if step != DIRECT_EXTRACTION_FORMAT_NAME:
-                # Indices here are per-step request positions, not document
-                # ids. Standardize failures leave original units; parse
-                # failures leave the seven parsed keys absent (the warehouse
-                # skips and logs those as missing_parse).
-                log.warning(
-                    "extraction_followup_calls_exhausted_retries",
-                    step=step,
-                    count=len(indices),
-                )
-
-        by_document: dict[int, list[dict[str, Any]]] = defaultdict(list)
-        for record in raw:
-            by_document[record["document_id"]].append(record)
-
-        out_of_range = set(by_document) - set(range(len(ocr_texts)))
-        if out_of_range:
-            raise ValueError(
-                f"meas_lm.fit() returned document_id values outside range(len(ocr_texts))={len(ocr_texts)}: "
-                f"{out_of_range}. This means document_id is not the expected 0-indexed position into "
-                f"ocr_texts, and every downstream regrouping is silently wrong."
-            )
-
-        # context_length_exceeded_docs is populated from two different
-        # places in scholarlm's fit(): a document that produced zero
-        # records (a true total failure, from _extract_triples) and a
-        # document whose records survive with un-standardized original
-        # value/units (from _standardize, which starts from a copy of the
-        # raw data and just skips the update on failure). Only the first
-        # case is converted to a str failure here — the second keeps its
-        # partial results (discarding them would throw away real data) but
-        # gets a loud warning, since an un-standardized value/units pair
-        # reaching the warehouse is its own quietly-wrong-number risk. See
-        # notes/coastal-crawler/builds/2026-08-20-extraction-hardening-01.md.
-        context_length_exceeded = self.meas_lm.context_length_exceeded_docs
-        results: list[DocumentOutcome] = []
-        for i in range(len(ocr_texts)):
-            records = by_document[i]
-            if i in extraction_exhausted:
-                assert not records, (
-                    f"document {i} has {len(records)} records although its extraction "
-                    f"call exhausted retries; batch positions no longer line up"
-                )
-                results.append(
-                    f"MeasurementLM extraction call for document {i} exhausted its "
-                    f"retries without a valid response (empty or failed validation); "
-                    f"zero records extracted."
-                )
-                continue
-            if i in context_length_exceeded:
-                if not records:
-                    results.append(
-                        f"MeasurementLM context-length-exceeded for document {i} "
-                        f"(truncated_by_backstop={i in self.truncated_docs}); zero "
-                        f"records extracted."
-                    )
-                    continue
-                log.warning(
-                    "document_partially_standardized",
-                    batch_index=i,
-                    records=len(records),
-                )
-            results.append([self._to_result(record) for record in records])
-        return results
+        # Direct mode records no per-step timing (a single call); keep the
+        # attribute so the sample stage can read it from either adapter.
+        self.step_seconds = dict(self.meas_lm.step_seconds)
+        return _outcomes_from_records(
+            raw=raw,
+            n_docs=len(ocr_texts),
+            exhausted_calls=self.exhausted_calls,
+            gating_step=DIRECT_EXTRACTION_FORMAT_NAME,
+            context_length_exceeded=self.meas_lm.context_length_exceeded_docs,
+            truncated_docs=self.truncated_docs,
+            to_result=self._to_result,
+        )
 
     def _to_result(self, record: dict[str, Any]) -> ExtractionResult:
-        # _deduplicate() wraps these fields in single-element lists
-        # (provenance aggregation across duplicates) — direct mode's
-        # per-item-unique entity_id means every dedup group is a singleton,
-        # so unwrap back to a scalar to keep this shape stable for callers.
-        def _unwrap(field: str) -> Any:
-            values = record.get(field)
-            return values[0] if isinstance(values, list) else values
+        return _record_to_result(record, self.schema_name, self.model_version, self.lat_field, self.lon_field)
 
-        provenance = {
-            "page_number": _unwrap("page_number"),
-            "table_number": _unwrap("table_number"),
-            "row_index": _unwrap("row_index"),
-            "column_index": _unwrap("column_index"),
-            "source": _unwrap("source"),
-        }
-        # `context` (the full OCR'd document text) is dropped here, not
-        # persisted per-record — worker.py writes it once per paper via
-        # store.upsert_paper_ocr_context instead, from the same ocr_texts
-        # string this record's `context` was merged in from. Storing it on
-        # every measurement record (previously in both `data` and
-        # `provenance`) meant a paper with N measurements stored its ~55KB
-        # OCR text N*2 times — see migration c2d3e4f5a6b7.
-        data = {k: v for k, v in record.items() if k != "context"}
-        return ExtractionResult(
-            schema_name=self.schema_name,
-            model_version=self.model_version,
-            data=data,
-            # STUB: wire in a real confidence score if ExtractionLM exposes one.
-            confidence=None,
-            provenance=provenance,
-            latitude=record.get(self.lat_field) if self.lat_field else None,
-            longitude=record.get(self.lon_field) if self.lon_field else None,
+
+#: ``response_format["json_schema"]["name"]`` of the per-document entity
+#: identification call in scholarlm's ``MeasurementLM._extract_entities`` — the
+#: one pipeline-mode call whose request index IS the document index. Asserted
+#: against the installed scholarlm in tests/test_adapter.py.
+IDENTIFICATION_FORMAT_NAME = "identification_list"
+
+#: ``max_tokens`` default of ``MeasurementLM._extract_entities`` (fit() calls it
+#: without an argument). Asserted against the installed scholarlm in
+#: tests/test_adapter.py so a pin bump that changes it fails loudly.
+SCHOLARLM_ENTITY_MAX_TOKENS = 8192
+
+_ENTITY_QUERY = (
+    "Scan the full context and identify all distinct entities of the described type. "
+    "Return one item per entity, populating all fields using only information "
+    "explicitly stated in the text. Do not infer or fabricate any field values."
+)
+
+
+def _entity_identification_prompt(entity_identification_prompt: str, context: str) -> str:
+    """Reconstruct the exact prompt string scholarlm's
+    ``MeasurementLM._extract_entities`` sends per document (pass 1, full
+    context). Duplicated from scholarlm's own f-string assembly rather than
+    imported, so — like ``_direct_extraction_prompt`` — it is a silently-
+    driftable coupling; tests/test_adapter.py asserts the template text still
+    appears in the installed scholarlm's source.
+
+    The entity step is the only pipeline step that sends the whole document;
+    every later step sends one page (plus a short query), so this is the only
+    prompt the truncation backstop has to budget."""
+    return (
+        f"## INSTRUCTIONS:\n{entity_identification_prompt}\n\n"
+        f"## CONTEXT:\n{context}\n\n## QUERY:\n{_ENTITY_QUERY}"
+    )
+
+
+class PipelineMeasurementAdapter:
+    """Calls scholarlm's MeasurementLM in ``extraction_mode="pipeline"`` (the
+    full step-by-step pipeline: entities → entity provenance → attributes →
+    attribute provenance → events → text values → table values → standardize
+    → parse quantities → deduplicate) and converts raw dicts to
+    ExtractionResult.
+
+    Shares the regroup / failure-surfacing logic with DirectMeasurementAdapter
+    (``_outcomes_from_records``); the differences are the truncation prompt
+    (entity identification) and which call gates a per-document failure
+    (``identification_list``). ``step_seconds`` is copied from
+    ``meas_lm.step_seconds`` after each batch for the per-step timing report.
+
+    Exhausted retries in any step OTHER than entity identification cannot be
+    attributed to a document (their request positions are per-page / per-pair),
+    so they are only recorded in ``exhausted_calls`` and logged — callers must
+    surface ``exhausted_calls`` themselves (extract_sample.py writes it out).
+    """
+
+    def __init__(
+        self,
+        meas_lm: MeasurementLM,
+        schema_name: str,
+        model_version: str,
+        tokenizer: _Tokenizer,
+        max_model_len: int,
+        reserved_completion_tokens: int,
+        lat_field: str | None = None,
+        lon_field: str | None = None,
+    ) -> None:
+        if max_model_len <= reserved_completion_tokens:
+            raise ValueError(
+                f"max_model_len={max_model_len} leaves no room for a prompt after "
+                f"reserving reserved_completion_tokens={reserved_completion_tokens} "
+                f"for the completion."
+            )
+        self.meas_lm = meas_lm
+        self.schema_name = schema_name
+        self.model_version = model_version
+        self.tokenizer = tokenizer
+        self.max_model_len = max_model_len
+        self.reserved_completion_tokens = reserved_completion_tokens
+        self.lat_field = lat_field
+        self.lon_field = lon_field
+        self.exhausted_calls: dict[str, set[int]] = {}
+        self.step_seconds: dict[str, float] = {}
+        self.truncated_docs: set[int] = set()
+        self._call_batch_original = meas_lm._call_batch
+        meas_lm._call_batch = self._recording_call_batch
+
+    def _recording_call_batch(
+        self, message_sets: list[Any], *args: Any, **kwargs: Any
+    ) -> list[Any]:
+        results: list[Any] = self._call_batch_original(message_sets, *args, **kwargs)
+        assert len(results) == len(message_sets), (
+            f"_call_batch returned {len(results)} responses for {len(message_sets)} requests"
+        )
+        _note_exhausted_calls(results, kwargs, self.exhausted_calls)
+        return results
+
+    def extract_batch(self, ocr_texts: list[str]) -> list[DocumentOutcome]:
+        self.truncated_docs = set()
+        entity_prompt = self.meas_lm.entity_identification_prompt
+        assert entity_prompt, "meas_lm.entity_identification_prompt is empty"
+        assert self.meas_lm.extraction_mode == "pipeline", self.meas_lm.extraction_mode
+
+        prompt_token_limit = self.max_model_len - self.reserved_completion_tokens
+        processed_texts: list[str] = []
+        for i, text in enumerate(ocr_texts):
+            truncated_text, was_truncated = _truncate_rendered_context(
+                self.tokenizer,
+                lambda c: _entity_identification_prompt(entity_prompt, c),
+                text,
+                prompt_token_limit,
+            )
+            if was_truncated:
+                self.truncated_docs.add(i)
+                log.warning(
+                    "document_truncated_for_extraction",
+                    batch_index=i,
+                    original_tokens=len(self.tokenizer.encode(text, add_special_tokens=False)),
+                    max_model_len=self.max_model_len,
+                    prompt_token_limit=prompt_token_limit,
+                )
+            processed_texts.append(truncated_text)
+
+        self.exhausted_calls = {}
+        raw: list[dict[str, Any]] = self.meas_lm.fit(processed_texts)
+        self.step_seconds = dict(self.meas_lm.step_seconds)
+        return _outcomes_from_records(
+            raw=raw,
+            n_docs=len(ocr_texts),
+            exhausted_calls=self.exhausted_calls,
+            gating_step=IDENTIFICATION_FORMAT_NAME,
+            context_length_exceeded=self.meas_lm.context_length_exceeded_docs,
+            truncated_docs=self.truncated_docs,
+            to_result=lambda r: _record_to_result(
+                r, self.schema_name, self.model_version, self.lat_field, self.lon_field
+            ),
         )
 
 
@@ -708,6 +910,84 @@ def build_measurement_adapter(settings: "Settings") -> DirectMeasurementAdapter:
         tokenizer=tokenizer,
         max_model_len=settings.meas_lm_max_model_len,
         reserved_completion_tokens=SCHOLARLM_EXTRACT_MAX_TOKENS,
+        lat_field=settings.extraction_lat_field,
+        lon_field=settings.extraction_lon_field,
+    )
+
+
+def build_pipeline_measurement_adapter(
+    settings: "Settings", collect_attribute_terms: bool
+) -> PipelineMeasurementAdapter:
+    """Construct a PipelineMeasurementAdapter (scholarlm's full step-by-step
+    extraction) from Settings — same model, sampling params, endpoint and
+    concurrency as ``build_measurement_adapter``, so a pipeline-vs-direct
+    comparison varies only the extraction mode.
+
+    ``collect_attribute_terms`` has no default: scholarlm's own default is
+    True, the production direct run used False, and which one a comparison
+    wants is the caller's explicit decision.
+
+    ``measurement_event_prompt`` is passed (scholarlm interpolates it into the
+    event-resolution prompt; None would put the literal text "None" there).
+    ``direct_extraction_*`` are deliberately not passed.
+    """
+    missing = [
+        name
+        for name, val in (
+            ("MEAS_LM_MODEL", settings.meas_lm_model),
+            ("MEAS_LM_ENTITY_IDENTIFICATION_PROMPT", settings.meas_lm_entity_identification_prompt),
+            ("MEAS_LM_MAX_MODEL_LEN", settings.meas_lm_max_model_len),
+        )
+        if not val
+    ]
+    if missing:
+        raise RuntimeError(f"{', '.join(missing)} must be configured to run extraction.")
+    assert settings.meas_lm_model is not None
+    assert settings.meas_lm_entity_identification_prompt is not None
+    assert settings.meas_lm_max_model_len is not None
+
+    from transformers import AutoTokenizer
+
+    from coastal_crawler.measurement_schema import (
+        ATTRIBUTE_INFO_DICT,
+        MEASUREMENT_EVENT_PROMPT,
+        EntitySchema,
+        MeasurementEventSchema,
+    )
+
+    meas_lm = MeasurementLM(
+        model_name=settings.meas_lm_model,
+        entity_identification_prompt=settings.meas_lm_entity_identification_prompt,
+        entity_identification_schema=EntitySchema,
+        attribute_info_dict=ATTRIBUTE_INFO_DICT,
+        measurement_event_schema=MeasurementEventSchema,
+        measurement_event_prompt=MEASUREMENT_EVENT_PROMPT,
+        extraction_mode="pipeline",
+        collect_attribute_terms=collect_attribute_terms,
+        parse_quantities_context=settings.meas_lm_parse_quantities_context,
+        standardize_context=settings.meas_lm_standardize_context,
+        sampling_params={
+            "temperature": settings.meas_lm_temperature,
+            "top_p": settings.meas_lm_top_p,
+            "top_k": settings.meas_lm_top_k,
+            "repetition_penalty": settings.meas_lm_repetition_penalty,
+            "enable_thinking": settings.meas_lm_enable_thinking,
+        },
+        api_base=settings.meas_lm_base_url,
+        api_key=settings.meas_lm_api_key,
+        max_concurrent=settings.meas_lm_max_concurrent,
+    )
+    tokenizer = cast("_Tokenizer", AutoTokenizer.from_pretrained(settings.meas_lm_model))
+    return PipelineMeasurementAdapter(
+        meas_lm=meas_lm,
+        schema_name=settings.extraction_schema_name,
+        model_version=(
+            settings.extraction_model_version
+            or f"doc_lm={settings.doc_lm_model}+meas_lm={settings.meas_lm_model}+mode=pipeline"
+        ),
+        tokenizer=tokenizer,
+        max_model_len=settings.meas_lm_max_model_len,
+        reserved_completion_tokens=SCHOLARLM_ENTITY_MAX_TOKENS,
         lat_field=settings.extraction_lat_field,
         lon_field=settings.extraction_lon_field,
     )

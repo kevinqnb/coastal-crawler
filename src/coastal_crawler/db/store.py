@@ -742,6 +742,13 @@ def get_paper_ocr_context(session: Session, paper_id: int) -> str | None:
     )
 
 
+def get_paper_statuses(session: Session, paper_ids: list[int]) -> dict[int, str]:
+    """Read-only: ``{paper_id: status}`` for the given ids. Ids with no row are
+    absent from the result (callers assert on the key set)."""
+    rows = session.execute(select(Paper.id, Paper.status).where(Paper.id.in_(paper_ids))).all()
+    return {pid: status for pid, status in rows}
+
+
 # ---------------------------------------------------------------------------
 # Crawl state / watermarks
 # ---------------------------------------------------------------------------

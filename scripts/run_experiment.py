@@ -11,7 +11,7 @@ Usage:
     python scripts/run_experiment.py configs/<id>.yaml
 
 Config `params` (free-form per the contract, but this adapter reads):
-    stage:         "filter" | "ocr" | "table_clean" | "extract" | "judge" | "repr" | "repr_terms"   (required)
+    stage:         "filter" | "ocr" | "table_clean" | "extract" | "extract_sample" | "judge" | "repr" | "repr_terms"   (required)
     batch_size:    int, passed straight through to the stage function.
                    Defaults to that stage's existing default (Settings'
                    FILTER_BATCH_SIZE for filter; 10 for ocr/table_clean/
@@ -49,6 +49,15 @@ Config `params` (free-form per the contract, but this adapter reads):
     to REPR_DIR/<id>/, and artifacts/repr_output.json records where. Metrics:
     repr_done / failed / zero_occurrence (papers with no term mention).
 
+    extract_sample stage (extraction over an explicit paper list, results to
+    FILES ONLY — zero DB writes; see extract_sample.py): ALL of
+    extraction_mode ("direct" | "pipeline"), paper_ids_file (a configs/lists
+    CSV with a paper_id column), output_dir (results go to
+    <output_dir>/<id>/, which must not already exist), chunk_size and
+    collect_attribute_terms (bool) are required — no defaults. The model,
+    sampling params and endpoint come from the same MEAS_LM_* settings as
+    `extract`. Metrics: papers / records / failed / followup_calls_exhausted.
+
 Metrics shim: run_filter/run_ocr_worker/run_table_clean_worker/run_worker/
 run_judge_worker each already return a 3-tuple of counts (e.g.
 relevant/irrelevant/errors). That tuple is written to metrics.json verbatim
@@ -85,6 +94,7 @@ STAGE_METRICS: dict[str, tuple[str, ...]] = {
     "ocr": ("ocr_done", "failed", "requeued"),
     "table_clean": ("table_clean_done", "failed", "requeued"),
     "extract": ("extracted", "failed", "requeued"),
+    "extract_sample": ("papers", "records", "failed", "followup_calls_exhausted"),
     "judge": ("judged", "failed", "requeued"),
     "repr": ("repr_done", "failed", "zero_occurrence", "skipped_overflow", "skipped_clean_error"),
     "repr_terms": ("terms_embedded", "failed", "zero_occurrence"),
@@ -94,6 +104,7 @@ STAGE_SEED_ENV: dict[str, str] = {
     "ocr": "DOC_LM_SEED",
     "table_clean": "TABLE_CLEAN_SEED",
     "extract": "MEAS_LM_SEED",
+    "extract_sample": "MEAS_LM_SEED",
     "judge": "JUDGE_SEED",
     "repr": "REPR_LM_SEED",
     "repr_terms": "REPR_LM_SEED",
@@ -205,6 +216,33 @@ def _run_stage(stage: str, params: dict[str, Any], run_id: str) -> tuple[int, ..
                 idle_timeout=idle_timeout,
             )
         return run_worker(batch_size=batch_size, adapter=adapter, chunk_size=chunk_size, table_clean_dir=table_clean_dir)
+
+    if stage == "extract_sample":
+        from coastal_crawler.adapter import build_measurement_adapter, build_pipeline_measurement_adapter
+        from coastal_crawler.extract_sample import SampleAdapter, read_paper_ids, run_extract_sample
+
+        # Every param is required: a missing key is a KeyError, not a default.
+        mode = params["extraction_mode"]
+        collect_attribute_terms = params["collect_attribute_terms"]
+        assert isinstance(collect_attribute_terms, bool), collect_attribute_terms
+        sample_adapter: SampleAdapter
+        if mode == "pipeline":
+            sample_adapter = build_pipeline_measurement_adapter(settings, collect_attribute_terms)
+        elif mode == "direct":
+            # build_measurement_adapter hardcodes collect_attribute_terms=False
+            # (the production direct run); refuse a config that asks otherwise.
+            assert collect_attribute_terms is False, "direct mode is built with collect_attribute_terms=False"
+            sample_adapter = build_measurement_adapter(settings)
+        else:
+            raise ValueError(f"params.extraction_mode must be 'direct' or 'pipeline', got {mode!r}")
+        return run_extract_sample(
+            run_id=run_id,
+            paper_ids=read_paper_ids(REPO_ROOT / params["paper_ids_file"]),
+            text_dir=Path(settings.table_clean_dir),
+            output_dir=REPO_ROOT / params["output_dir"],
+            adapter=sample_adapter,
+            chunk_size=params["chunk_size"],
+        )
 
     if stage == "judge":
         from coastal_crawler.adapter import build_judge

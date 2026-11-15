@@ -678,6 +678,7 @@ class _CallBatchLM:
     def __init__(self, extraction: list[Any], standardize: list[Any] | None = None) -> None:
         self.direct_extraction_prompt = _PROMPT
         self.context_length_exceeded_docs: set[int] = set()
+        self.step_seconds: dict[str, float] = {}
         self._extraction = extraction
         self._standardize = standardize
 
