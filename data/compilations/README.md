@@ -86,64 +86,35 @@ Conventions that hold for every compilation:
 
 ### coastal-carbon-library (Coastal Carbon Network Data Library v1.7.0)
 
-Source: Smithsonian Coastal Carbon Network, DOI 10.25573/serc.21565671. Tidal-wetland
-soil carbon profiles: 16,715 cores, 117,518 depth intervals, ~550 studies (US 38%
-of cores, then South Africa, UK, Indonesia, Australia). Habitat is mostly marsh
-(8,746) and mangrove (5,801), with seagrass (1,294) and small numbers of others.
-No shellfish reefs; tidal flat appears only as `mudflat` (60 cores). No in-situ water
-column data (no water depth, temperature, salinity or O2) and no geomorphic setting.
+Smithsonian Coastal Carbon Network, DOI 10.25573/serc.21565671. Tidal-wetland soil
+carbon profiles: 16,715 cores, 117,518 depth intervals, ~550 studies; mostly marsh
+and mangrove, some seagrass. No in-situ water data and no geomorphic setting.
 
-**Facts extracted (in scope):** `dry_bulk_density` (g/cm3), `fraction_organic_matter`
-and `fraction_carbon` (dimensionless), 217,099 facts in the current build. Units are
-read from `CCN_database_structure.html` and asserted. **Out of scope for now:**
-radiometric and dating columns (Cs-137, Pb-210, Ra-226, Pb-214, Bi-214, Be-7, C-14,
-delta-13C, ages, markers), accretion rates, compaction.
+**Facts:** `dry_bulk_density` (g/cm3), `fraction_organic_matter` and `fraction_carbon`
+(dimensionless): 217,099 facts. Radiometric/dating columns, accretion and compaction
+are out of scope for now.
 
-Nuances:
+Things to know:
 
-- **`fraction_carbon` is not one quantity.** It is *organic* carbon for some studies and
-  *total* carbon for others, and *modeled* from loss on ignition (Craft or local
-  regression) for some. Use `method_dim.carbon_type`,
-  `carbon_measured_or_modeled`, `conversion_applied`. 46% of carbon facts have
-  unknown type (flag `carbon_type_unknown`).
-- **Method coverage is partial.** Only 69% of facts have a matched methods row
-  (322 studies have none; 561 facts sit on a duplicated method id whose rows
-  conflict, and none is chosen). Technique is NULL for the rest.
-- **Flags used:** `negative_value`, `fraction_gt_1`, `dbd_gt_max` (bulk density above
-  `--max-dry-bulk-density`, 3.0 in the current build), `depth_missing`,
-  `depth_inverted`, `duplicate_source_row` (flags the later copy only),
-  `carbon_type_unknown`. Observed ranges include bulk density -81 to 11.3 and
-  organic matter up to 1.59, so unflagged filtering is unsafe.
-- **Excluded: 185 depth rows (277 measurements, 0.13%).** Their (study, site, core)
-  key matches no core, so there are no coordinates or labels. Mostly key typos
-  (Osland_2016 `Lake_pontchartrain` vs `Lake_Pontchartrain`, Noe_2016 `Bulter_Island`).
-  Suggested matches are in `skip_report.jsonl` but deliberately **not applied**.
-- **Site-level label fallback.** `sites.csv` repeats some site ids (e.g. one row per
-  habitat). Core labels are used first; a site value is used only when every site row
-  for that (study, site) is non-null and identical. `salinity_class_level`,
-  `vegetation_class_level`, `tidal_position_level` say which was used (core 5,050 /
-  site 83 for salinity). Salinity classes are CCN's own (estuarine, saline,
-  mesohaline, ...), not Venice classes.
-- **`tidal_position` is CCN `inundation_class`** (low/mid/high/back/levee/...) and
-  `low`/`high` also appear on mangrove cores. `marsh_zone` is filled only when
-  habitat is marsh and the value is low/mid/high. `vegetated_or_bare` is derived
-  from `vegetation_class` (`unvegetated` -> bare; emergent, forested, scrub shrub,
-  seagrass and mixed -> vegetated; `mudflat` -> NULL). Habitat and vegetation class
-  disagree for some cores (e.g. marsh cores labelled forested); both raw values are kept.
-- **Time:** year is 85% filled, month 42%; day is not carried.
-- **Elevation** is 17% filled, with datum (mostly NAVD88) and method as reported.
-- **Statistics:** CCN reports single values; `sd`, `se`, `n` are NULL.
-- **Method `params`** carries drying/combustion temperature, time and sample size etc.
-  Reported ranges such as `"1-5"` stay strings.
-- **Provenance:** `reference_dim` = CCN `study_id`; a study can have several citations
-  (dataset, source article, synthesis source). No primary DOI is chosen; use
-  `citation_dim.publication_type`. The compilation's own DOI is in `source_dim`.
-- Small data-quality items handled as-is: 3 cores with no coordinates (location kept
-  with NULL lat/lon), 3 exact-duplicate citation rows collapsed, `species` and
-  `impacts` rows for cores not in `cores.csv` ignored (1,073 and 37 keys).
-- A CCN raw-file read uses only the literal `NA` and empty string as missing, and
-  parses numbers with Python `float()` (not `pd.to_numeric`, which is off by 1 ULP
-  on 17-digit strings).
+- **`fraction_carbon` mixes quantities:** organic vs total carbon, measured vs modeled
+  from loss on ignition. Check `method_dim.carbon_type`, `carbon_measured_or_modeled`,
+  `conversion_applied`; 46% of carbon facts have unknown type (`carbon_type_unknown`).
+- **Method info is partial:** only 69% of facts have a matched methods row. The rest
+  have NULL technique fields (see `method_status`).
+- **Filter on `flags` before analysis:** values include bulk density from -81 to 11.3
+  and organic matter above 1. Flags: `negative_value`, `fraction_gt_1`, `dbd_gt_max`
+  (`--max-dry-bulk-density`, 3.0), `depth_missing`, `depth_inverted`,
+  `duplicate_source_row`, `carbon_type_unknown`.
+- **185 depth rows (277 measurements) excluded:** their (study, site, core) matches no
+  core, mostly key typos (e.g. Osland_2016 site-name case). Suggested matches are in
+  `skip_report.jsonl` and deliberately not applied.
+- **Labels are CCN's own, not Venice classes.** Salinity/vegetation/tidal position use
+  the core value, falling back to the site value only when unambiguous
+  (`*_level` columns say which). `tidal_position` is CCN `inundation_class`;
+  `marsh_zone` and `vegetated_or_bare` are derived by the rules in `extract.py`.
+- **Sparse context:** month is 42% filled, elevation 17%. `sd`, `se`, `n` are NULL.
+- **Provenance:** `reference_dim` = CCN `study_id`; studies can have several citations
+  (see `citation_dim.publication_type`).
 
 ## Adding a compilation
 
