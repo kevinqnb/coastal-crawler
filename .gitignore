@@ -231,7 +231,12 @@ out/*
 !out/.gitkeep
 
 # Pre-downloaded PDF cache (scripts/wiley_download.py)
-/data/
+/data/*
+!/data/compilations/
+/data/compilations/*
+!/data/compilations/*/
+/data/compilations/*/*
+!/data/compilations/*/extract.py
 
 # Personal cluster config and job launchers (site-specific paths/accounts)
 scripts/cluster.local.sh
