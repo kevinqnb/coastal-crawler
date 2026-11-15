@@ -234,6 +234,7 @@ out/*
 /data/*
 !/data/compilations/
 /data/compilations/*
+!/data/compilations/README.md
 !/data/compilations/*/
 /data/compilations/*/*
 !/data/compilations/*/extract.py
