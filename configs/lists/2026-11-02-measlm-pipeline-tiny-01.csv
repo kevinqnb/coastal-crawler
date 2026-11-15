@@ -1,0 +1,6 @@
+# subset of 2026-11-02-measlm-pipeline-sample-01 chosen for a predictable tiny run: 3942 (5 direct records: ammonium, salinity), 7240 (9: co2_flux, pco2, salinity), 8866 (1: dissolved_oxygen), 10963 (0 direct records)
+paper_id
+3942
+7240
+8866
+10963

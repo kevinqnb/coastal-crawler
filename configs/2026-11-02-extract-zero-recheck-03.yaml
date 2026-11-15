@@ -1,0 +1,32 @@
+id: 2026-11-02-extract-zero-recheck-03
+project: coastal-crawler
+description: >
+  Same 30 papers as -01/-02 but deterministic-leaning decoding:
+  MEAS_LM_TEMPERATURE=0.0 and MEAS_LM_MAX_CONCURRENT=1 (everything else as
+  -01). Tests whether the instability is removable. Changes TWO things at once
+  (temperature and concurrency) on purpose; if it works, a later run can split
+  them.
+
+  PREDICTION (recorded before the run): fewer failures than -01/-02 (<=1 of
+  30) and, for the 10 controls, counts closer to the original 10-20 counts
+  than -01/-02 were (median abs log-ratio smaller). Zero-group: <=6 of 20 return
+  records. NOT predicted: that this run is reproducible -- that needs a second
+  identical run (-04), which should only be submitted if this one looks sane.
+  Expect a longer wall time (concurrency 1; -01 took 1h54m at 12).
+
+  PAPER LIST / MECHANISM / PREREQUISITE: identical to
+  2026-11-02-extract-zero-recheck-01 (configs/lists/2026-11-02-extract-zero-recheck-01.csv;
+  set exactly those 30 papers to table_clean_done while the queue is empty, one
+  run at a time). Rows from this run are the extractions with created_at inside
+  this run's start/finish window in run.json.
+seed: 342
+params:
+  stage: extract
+  batch_size: 30
+  gpu_type: H200
+  env:
+    MEAS_LM_MAX_MODEL_LEN: 81920
+    MEAS_LM_PARSE_QUANTITIES_CONTEXT: value_only
+    MEAS_LM_STANDARDIZE_CONTEXT: value_only
+    MEAS_LM_TEMPERATURE: 0.0
+    MEAS_LM_MAX_CONCURRENT: 1

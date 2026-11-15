@@ -1,0 +1,37 @@
+id: 2026-11-02-extract-direct-100-02
+project: coastal-crawler
+description: >
+  Rerun of 2026-11-02-extract-direct-100-01, deleted by the user (qdel) while
+  running so the pipeline run could go first; held behind the pipeline job.
+  Rung-4 timing + comparison run: the production direct extraction
+  (extraction_mode=direct, one call per paper) with openai/gpt-oss-120b on a seeded random sample of 100 of the
+  2,769 `extracted` papers (configs/lists/2026-11-02-measlm-pipeline-sample-01.csv,
+  seed 342; 42 of the 100 have zero production records). File-only
+  (extract_sample stage): no DB writes, results under
+  data/measlm_pipeline_sample/<id>/. chunk_size=24 and the sampling temperature
+  (MEAS_LM_TEMPERATURE, Settings default 0.90, not overridden here) match the
+  production runs (.env EXTRACTION_CHUNK_SIZE=24; 2026-10-20-extract-full-split-*).
+  Sampling is NOT reproducible at temperature 0.90 even with a fixed seed
+  (2026-11-02-extract-direct-tiny-02 vs -03: identical config, different
+  records), so compare modes by distribution, not per-paper agreement. Baseline
+  for 2026-11-02-extract-pipeline-100-02 (same papers, same harness). Submit only on the user's go-ahead.
+  Report with: python scripts/sample_report.py --run-dir
+  data/measlm_pipeline_sample/<id> --db-model-version
+  'doc_lm=allenai/olmOCR-2-7B-1025+meas_lm=openai/gpt-oss-120b'
+  --corpus-papers 2769
+seed: 342
+params:
+  stage: extract_sample
+  extraction_mode: direct
+  collect_attribute_terms: false
+  paper_ids_file: configs/lists/2026-11-02-measlm-pipeline-sample-01.csv
+  output_dir: data/measlm_pipeline_sample
+  chunk_size: 24
+  h_rt: "24:00:00"
+  # gpt-oss-120b's MARLIN mxfp4 MoE kernel fails on cards newer than the
+  # cc-9.0 H200 -- see 2026-09-08-extract-full-split-03.yaml.
+  gpu_type: H200
+  env:
+    MEAS_LM_MAX_MODEL_LEN: 81920
+    MEAS_LM_PARSE_QUANTITIES_CONTEXT: value_only
+    MEAS_LM_STANDARDIZE_CONTEXT: value_only

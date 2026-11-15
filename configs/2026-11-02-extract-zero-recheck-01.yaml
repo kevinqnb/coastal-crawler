@@ -1,0 +1,52 @@
+id: 2026-11-02-extract-zero-recheck-01
+project: coastal-crawler
+description: >
+  Known-answer check on the 1,117 papers that finished 2026-10-20 extraction as
+  `extracted` with zero records. Question: are those zeros genuine (valid empty
+  list from the model) or lossy (MeasurementLM._acall returns "" on API error)?
+  Full-corpus numbers (2026-11-02 DB): 1,117/2,799 extracted papers have no
+  extractions rows; the zero rate is flat at 38-44% per day and independent of
+  length, so no batch/time/length mechanism was found. Only 7 of 1,117 zero
+  papers (0.6%) vs 62 of 1,682 non-zero (3.7%) contain >=3 explicit
+  salinity/chlorophyll/turbidity value-with-unit statements.
+
+  PAPER LIST: configs/lists/2026-11-02-extract-zero-recheck-01.csv -- 30
+  papers: 20 "zero" (zero-record, 5k-150k chars so not near-empty or
+  truncation-risk, >=3 explicit value+unit hits over salinity/chlorophyll/
+  turbidity/DO/nitrate regexes, random.seed(342)) and 10 "control" (non-zero
+  in the original run, same filters). Papers are chosen by regex, not by what
+  the model should find, so a "zero" paper may still legitimately be empty.
+
+  MECHANISM: run_worker has no paper-id targeting; claim_batch takes any
+  table_clean_done paper. As of 2026-11-02 the DB has 0 table_clean_done papers,
+  so with batch_size=30 setting exactly these 30 to table_clean_done claims
+  exactly them. PREREQUISITE (DB write, needs your OK; do it immediately before
+  submit):
+    UPDATE papers SET status='table_clean_done', extracted_at=NULL
+      WHERE id IN (<csv ids>) AND status='extracted';   -- expect 30 rows
+  Check first: SELECT count(*) FROM papers WHERE status='table_clean_done' = 0.
+  New rows ADD to extractions (rows accumulate); same model_version string, so
+  tell them apart by created_at >= this run's start.
+
+  LIMITATION: no raw-response logging exists, so a second zero cannot by itself
+  separate "model returned a valid empty list" from "API error swallowed". For
+  that, after the run read log.txt/out for retry and truncation lines per
+  paper, and hand-read the zero-returning papers' text for reported values.
+
+  PREDICTIONS (recorded before the run): metrics extracted=30, failed=0.
+  Control: >=8 of 10 reproduce >=1 record (seed determinism; exact record
+  counts match the original within a few records -- exact equality is not
+  expected because gpt-oss-120b batching is not bit-deterministic). Zero group:
+  if zeros are genuine, >=16 of 20 return 0 again; if lossy, a large share
+  (>=8 of 20) return records. Between those is ambiguous -- stop and read the
+  papers. If controls do NOT reproduce, stop: extraction is not stable enough
+  to interpret anything.
+seed: 342
+params:
+  stage: extract
+  batch_size: 30
+  gpu_type: H200
+  env:
+    MEAS_LM_MAX_MODEL_LEN: 81920
+    MEAS_LM_PARSE_QUANTITIES_CONTEXT: value_only
+    MEAS_LM_STANDARDIZE_CONTEXT: value_only

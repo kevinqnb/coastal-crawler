@@ -1,0 +1,42 @@
+id: 2026-11-02-extract-pipeline-tiny-01
+project: coastal-crawler
+description: >
+  Rung-3 tiny end-to-end for scholarlm's step-by-step ("pipeline")
+  extraction with openai/gpt-oss-120b, via the file-only extract_sample stage
+  (zero DB writes; results under data/measlm_pipeline_sample/<id>/). 4 papers
+  from the 100-paper sample (configs/lists/2026-11-02-measlm-pipeline-tiny-01.csv):
+  3942 (5 direct records: ammonium, salinity), 7240 (9: co2_flux, pco2,
+  salinity), 8866 (1: dissolved_oxygen), 10963 (0 direct records). chunk_size=1
+  (one paper per fit() call: per-paper step times, and any exhausted follow-up
+  call is attributable to its paper; the direct control uses chunk_size=4). collect_attribute_terms=false to match the production direct run.
+  Serving env mirrors the production full runs (MEAS_LM_MAX_MODEL_LEN 81920,
+  value_only parse/standardize).
+
+  PREDICTION (recorded before the run): status success; metrics papers=4,
+  failed=0; every paper has an `error: null` line in records.jsonl; the
+  pipeline recovers at least one record for each of 3942, 7240 and 8866,
+  including the salinity attribute on 3942 and 7240 (known answer: the direct
+  run found salinity there) and dissolved_oxygen on 8866; 10963 is not
+  predicted (direct found nothing; pipeline may legitimately also find
+  nothing); timing.jsonl has 4 lines (one per paper, each with its own seconds) and all of entities/entity_prov/attributes/
+  attribute_prov/events/values_text/values_tables/final in step_seconds;
+  no document_truncated_for_extraction line; followup_calls_exhausted <= 2;
+  before/after `SELECT status,count(*) FROM papers GROUP BY 1` and
+  `SELECT model_version,count(*) FROM extractions GROUP BY 1` are identical.
+  If any of this misses, stop; do not scale up.
+seed: 342
+params:
+  stage: extract_sample
+  extraction_mode: pipeline
+  collect_attribute_terms: false
+  paper_ids_file: configs/lists/2026-11-02-measlm-pipeline-tiny-01.csv
+  output_dir: data/measlm_pipeline_sample
+  chunk_size: 1
+  h_rt: "6:00:00"
+  # gpt-oss-120b's MARLIN mxfp4 MoE kernel fails on cards newer than the
+  # cc-9.0 H200 -- see 2026-09-08-extract-full-split-03.yaml.
+  gpu_type: H200
+  env:
+    MEAS_LM_MAX_MODEL_LEN: 81920
+    MEAS_LM_PARSE_QUANTITIES_CONTEXT: value_only
+    MEAS_LM_STANDARDIZE_CONTEXT: value_only

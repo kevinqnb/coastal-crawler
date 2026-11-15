@@ -1,0 +1,28 @@
+id: 2026-11-02-extract-zero-recheck-02
+project: coastal-crawler
+description: >
+  Repeat of 2026-11-02-extract-zero-recheck-01 with IDENTICAL settings
+  (T=0.9, top_p 0.95, top_k 64, max_concurrent 12, seed 342) on the same 30
+  papers. Measures run-to-run noise of the current extraction setup.
+
+  PREDICTION (recorded before the run): the sampling setup is stochastic, so
+  per-paper record counts will differ from run -01 for most papers. Expect
+  >=5 of the 20 zero-group papers to differ in zero/non-zero status between
+  -01 and -02, and >=5 of the 10 controls to differ in count by more than
+  50%. If counts instead match -01 closely, the variance is NOT sampling and
+  my explanation (T=0.9 + batching) is wrong; stop and investigate.
+
+  PAPER LIST / MECHANISM / PREREQUISITE: identical to
+  2026-11-02-extract-zero-recheck-01 (configs/lists/2026-11-02-extract-zero-recheck-01.csv;
+  set exactly those 30 papers to table_clean_done while the queue is empty, one
+  run at a time). Rows from this run are the extractions with created_at inside
+  this run's start/finish window in run.json.
+seed: 342
+params:
+  stage: extract
+  batch_size: 30
+  gpu_type: H200
+  env:
+    MEAS_LM_MAX_MODEL_LEN: 81920
+    MEAS_LM_PARSE_QUANTITIES_CONTEXT: value_only
+    MEAS_LM_STANDARDIZE_CONTEXT: value_only

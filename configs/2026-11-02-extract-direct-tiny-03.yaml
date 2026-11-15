@@ -1,0 +1,31 @@
+id: 2026-11-02-extract-direct-tiny-03
+project: coastal-crawler
+description: >
+  Seed-determinism rerun of -02 (identical config; only id differs). -02 was a rerun of -01 at chunk_size 1 (the first
+  control gave 1/6/7/0 records vs production 5/9/1/0 at chunk_size 4; this
+  tests whether chunking/batching explains the gap). Sanity control for 2026-11-02-extract-pipeline-tiny-01: the SAME 4 papers
+  through the SAME extract_sample harness, but with the production direct
+  adapter. Purpose: confirm the harness reproduces production before any
+  pipeline-vs-direct difference is attributed to the extraction mode.
+
+  PREDICTION (recorded before the run): status success; papers=4, failed=0;
+  per-paper record counts close to the production rows (3942: 5, 7240: 9,
+  8866: 1, 10963: 0) and the (attribute, value, units) triples largely
+  identical (scripts/sample_report.py). A large gap means non-determinism or
+  input drift in the harness and must be explained before interpreting the
+  pipeline run. Reading the gap: exact equality is NOT guaranteed (sampling
+  temperature in MEAS_LM_TEMPERATURE), so report the observed overlap.
+seed: 342
+params:
+  stage: extract_sample
+  extraction_mode: direct
+  collect_attribute_terms: false
+  paper_ids_file: configs/lists/2026-11-02-measlm-pipeline-tiny-01.csv
+  output_dir: data/measlm_pipeline_sample
+  chunk_size: 1
+  h_rt: "6:00:00"
+  gpu_type: H200
+  env:
+    MEAS_LM_MAX_MODEL_LEN: 81920
+    MEAS_LM_PARSE_QUANTITIES_CONTEXT: value_only
+    MEAS_LM_STANDARDIZE_CONTEXT: value_only
