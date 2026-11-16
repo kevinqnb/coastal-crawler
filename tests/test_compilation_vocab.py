@@ -94,3 +94,85 @@ def test_label_map_rejects_bad_rows(tmp_path):
     p.write_text("source_key,raw_column,raw_label,mapped_column,mapped_label\ns,salinity_class,a,habitat,Coral reef\n")
     with pytest.raises(v.VocabError, match="cannot feed"):
         v.load_label_maps(p)
+
+
+# ---------------------------------------------------------------- J1 and Water column
+
+
+def test_j1_known_answer():
+    assert v.MEASUREMENT_TYPES["J1"] == ("Joined fields", "chemical", "state")
+    assert v.STANDARD_SUBFIELDS["J1"] == frozenset({
+        "nitrate", "nitrite", "ammonium", "phosphate", "silicate", "nitrate_nitrite", "din",
+        "ph", "dissolved_oxygen", "chlorophyll_a"})
+    assert len(v.MEASUREMENT_TYPES) == 22
+
+
+def test_c3_extension_subfields_known_answer():
+    new = {("C3", "nitrite_flux"), ("C3", "nitrate_flux"), ("C4", "total_n2_production"),
+           ("C1", "soil_carbon_density"), ("C1", "total_inorganic_carbon")}
+    assert new <= set(v.EXTENSION_SUBFIELDS)
+    assert all(v.EXTENSION_SUBFIELDS[k] for k in new)  # each has a written reason
+    for t, s in new:
+        assert s in v.type_subfields(t)
+    v.check_attribute_decls()  # no extension duplicates a standard subfield
+
+
+def _j1_decl(subfield: str) -> v.AttrDecl:
+    return v.AttrDecl("J1", frozenset({subfield}), frozenset({"uM"}))
+
+
+def test_j1_attribute_accepted_with_legal_subfield(monkeypatch):
+    monkeypatch.setitem(v.ATTRIBUTES, "water_nitrate", _j1_decl("nitrate"))
+    v.check_attribute_decls()
+    v.check_facts(_fact(attribute="water_nitrate", measurement_type="J1", subfield="nitrate",
+                        units_raw="uM"))
+
+
+def test_j1_attribute_rejects_other_types_subfield(monkeypatch):
+    monkeypatch.setitem(v.ATTRIBUTES, "water_x", _j1_decl("ammonium_flux"))  # a C3 subfield
+    with pytest.raises(v.VocabError, match="ammonium_flux"):
+        v.check_attribute_decls()
+
+
+def test_j1_fact_with_wrong_subfield_or_type_raises(monkeypatch):
+    monkeypatch.setitem(v.ATTRIBUTES, "water_nitrate", _j1_decl("nitrate"))
+    with pytest.raises(v.VocabError, match="subfields"):
+        v.check_facts(_fact(attribute="water_nitrate", measurement_type="J1",
+                            subfield="ammonium", units_raw="uM"))
+    with pytest.raises(v.VocabError, match="measurement_type"):
+        v.check_facts(_fact(attribute="water_nitrate", measurement_type="C2",
+                            subfield="nitrate", units_raw="uM"))
+
+
+def _wc_map(tmp_path):
+    p = tmp_path / "m.csv"
+    p.write_text("source_key,raw_column,raw_label,mapped_column,mapped_label\n"
+                 "s,habitat_type,water column,habitat,Water column\n"
+                 "s,habitat_type,marsh,habitat,Tidal marsh\n")
+    return v.load_label_maps(p)
+
+
+def test_water_column_label_derives_null_bottom_type(tmp_path):
+    d = v.derive_location_labels(_loc(habitat_type=["water column", "marsh"],
+                                      salinity_class=[None, None], geomorphic_setting=[None, None],
+                                      modification_status=[[], []]), "s", _wc_map(tmp_path))
+    assert d["habitat"].tolist() == ["Water column", "Tidal marsh"]
+    assert pd.isna(d["bottom_type"].iloc[0]) and d["bottom_type"].iloc[1] == "soft"
+    assert v.HABITATS["Water column"] is None
+    assert sum(b is None for b in v.HABITATS.values()) == 1  # Water column is the only one
+
+
+def _labels(habitat, bottom) -> pd.DataFrame:
+    return pd.DataFrame(dict(habitat=[habitat], bottom_type=[bottom], setting=[None],
+                             salinity_zone=[None], modification_class=[[]]))
+
+
+def test_null_bottom_type_accepted_for_water_column_only():
+    v.check_location_labels(_labels("Water column", None))  # accepted
+    with pytest.raises(v.VocabError, match="bottom_type"):
+        v.check_location_labels(_labels("Water column", "soft"))
+    with pytest.raises(v.VocabError, match="bottom_type"):
+        v.check_location_labels(_labels("Tidal marsh", None))
+    with pytest.raises(v.VocabError, match="bottom_type"):
+        v.check_location_labels(_labels(None, "soft"))
+    v.check_location_labels(_labels(None, None))  # no habitat, no bottom type (unchanged)

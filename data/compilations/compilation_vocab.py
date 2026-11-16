@@ -52,6 +52,9 @@ MEASUREMENT_TYPES: dict[str, tuple[str, str, str]] = {
     "B9": ("Pelagic respiration and net community production", "biological", "rate"),
     "B10": ("Macrofauna", "biological", "state"),
     "P1": ("Light attenuation", "physical", "state"),
+    # Water-medium in-situ values reported beside a rate (INTEGRATION_PLAN 1.2). Kept here so
+    # they can be set beside, or replaced by, the joined WOD/GLODAP layers later.
+    "J1": ("Joined fields", "chemical", "state"),
 }
 OTHER = "other"
 
@@ -96,6 +99,8 @@ STANDARD_SUBFIELDS: dict[str, frozenset[str]] = {
     "B10": frozenset({"total_density", "total_biomass", "species_richness", "sieve_mesh_size"}),
     "P1": frozenset({"kd", "secchi_depth", "turbidity", "euphotic_depth",
                      "suspended_particulate_matter"}),
+    "J1": frozenset({"nitrate", "nitrite", "ammonium", "phosphate", "silicate",
+                     "nitrate_nitrite", "din", "ph", "dissolved_oxygen", "chlorophyll_a"}),
 }
 
 # Subfields beyond the standard ones: (type, subfield) -> reason.
@@ -107,6 +112,11 @@ EXTENSION_SUBFIELDS: dict[tuple[str, str], str] = {
     ("B6", "total_npp"): "Foster total production (above + below, may be derived upstream)",
     ("B6", "shoot_production"): "Foster per-shoot-compartment production",
     ("B6", "leaf_production"): "Foster leaf production",
+    ("C3", "nitrite_flux"): "Boynton and Ray report nitrite flux separately; standard C3 has nitrate+nitrite only",
+    ("C3", "nitrate_flux"): "Boynton and Ray report nitrate flux separately; standard C3 has nitrate+nitrite only",
+    ("C4", "total_n2_production"): "Chang total N2 production (denitrification + anammox, column P14); not one of the standard C4 processes",
+    ("C1", "soil_carbon_density"): "USGS wetlands soil carbon density (g/cm3); standard C1 has carbon_stock and dry_bulk_density, not a carbon density",
+    ("C1", "total_inorganic_carbon"): "MOSAIC total inorganic carbon; standard C1 has carbonate (CaCO3) only",
 }
 
 
@@ -204,8 +214,9 @@ def check_facts(fact: pd.DataFrame) -> None:
 
 # ------------------------------------------------------------------ labels
 
-# habitat -> bottom type
-HABITATS: dict[str, str] = {
+# habitat -> bottom type. "Water column" has no bottom (bottom_type NULL); it is the only
+# label that may carry a NULL bottom type.
+HABITATS: dict[str, str | None] = {
     "Tidal marsh": "soft",
     "Mangrove forest": "soft",
     "Tidal flat": "soft",
@@ -216,6 +227,7 @@ HABITATS: dict[str, str] = {
     "Rocky shore and reef": "hard",
     "Kelp and macroalgal bed": "hard",
     "Coral reef": "hard_biogenic",
+    "Water column": None,
 }
 SETTINGS = frozenset({"estuary", "coastal lagoon", "fjord", "river delta", "embayment",
                       "open coast", "shelf", "open ocean"})
