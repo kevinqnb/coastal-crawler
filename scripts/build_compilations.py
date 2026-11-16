@@ -9,7 +9,7 @@ Fails loud on any contract violation; there is no skip path here.
 
 Usage:
     uv run scripts/build_compilations.py --out data/compilations/compilations.duckdb \
-        data/compilations/coastal-carbon-library/extracted [more extracted dirs...]
+        data/compilations/smithsonian-coastal-carbon/extracted [more extracted dirs...]
 """
 
 from __future__ import annotations

@@ -23,7 +23,7 @@ from coastal_crawler.compilations import (
 )
 
 _EXTRACT = (
-    Path(__file__).resolve().parents[1] / "data" / "compilations" / "scoc" / "extract.py"
+    Path(__file__).resolve().parents[1] / "data" / "compilations" / "stratma-scoc" / "extract.py"
 )
 _spec = importlib.util.spec_from_file_location("scoc_extract", _EXTRACT)
 assert _spec and _spec.loader
@@ -246,7 +246,7 @@ def test_nullable_fk_global_keys_and_duckdb(tmp_path):
     # resolved id points at the right reference
     refs = glob["reference"].set_index("reference_id")
     rid = by.loc["study_004", "reference_id"]
-    assert refs.loc[rid, "reference_key"] == "study_003+study_004" and refs.loc[rid, "source_key"] == "scoc"
+    assert refs.loc[rid, "reference_key"] == "study_003+study_004" and refs.loc[rid, "source_key"] == "stratma-scoc"
     out = tmp_path / "c.duckdb"
     counts = build_compilations_from(tables, tmp_path, out)
     assert counts["study_screening_dim"] == 7 and counts["measurement_fact"] == 5

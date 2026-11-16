@@ -30,12 +30,12 @@ assignment, DuckDB write), `scripts/build_compilations.py` (CLI),
 
 ```bash
 # 1. per compilation (writes <compilation>/extracted/)
-python data/compilations/coastal-carbon-library/extract.py \
+python data/compilations/smithsonian-coastal-carbon/extract.py \
     --access-date YYYY-MM-DD --max-dry-bulk-density 3.0
 
 # 2. central build: validates every extracted dir, assigns global ids, writes the file
 python scripts/build_compilations.py --out data/compilations/compilations.duckdb \
-    data/compilations/coastal-carbon-library/extracted [other extracted dirs...]
+    data/compilations/smithsonian-coastal-carbon/extracted [other extracted dirs...]
 ```
 
 The build is a **full rebuild**, written to a temp file and atomically renamed; a
@@ -58,8 +58,8 @@ in the dimensions:
 | `reference_dim` | contributing study | `reference_key` (the compilation's own study id) |
 | `citation_dim` | study x citation | bibliography id, publication type, DOI, title, authors, year, URL |
 | `study_screening_dim` | candidate study | citation string and the compilation's own screening labels (`screening_phase`, `eligibility_phase`, `database_status`); `reference_id` is NULL for studies that contributed no facts (the only nullable FK). Empty for CCN. |
-| `location_dim` | core / site | lat, lon, position accuracy and method, site name, country, `water_body` (ocean/sea; open-water compilations), `habitat_type`, `geomorphic_setting`, `salinity_class`, `vegetation_class`, `tidal_position` (each with a `*_level` of core vs site), `modification_status[]`, `dominant_species[]`, elevation + units + datum + method |
-| `sample_dim` | depth interval | depth min/max (cm), representative depths, notes, sampling year/month, `vegetated_or_bare`, `marsh_zone`, `sediment_type` (raw), `median_grain_size_um`, `photosynthetic_sediment` (raw) |
+| `location_dim` | core / site | lat, lon, position accuracy and method, site name, country, `water_body` (ocean/sea; open-water compilations), `habitat_type`, `geomorphic_setting`, `bioregion`, `marine_ecoregion` (raw labels of a biogeographic / marine-ecoregion scheme), `salinity_class`, `vegetation_class`, `tidal_position` (each with a `*_level` of core vs site), `modification_status[]`, `dominant_species[]`, elevation + units + datum + method |
+| `sample_dim` | depth interval | depth min/max (cm), representative depths, notes, sampling year/month, `taxon`, `taxon_rank` (what was sampled/measured, raw label), `vegetated_or_bare`, `marsh_zone`, `sediment_type` (raw), `median_grain_size_um`, `photosynthetic_sediment` (raw) |
 | `method_dim` | (study, method id, attribute) | `technique`, coring method, carbon type, measured/modeled, carbon method, carbonate removal, `conversion_applied`, in-situ/ex-situ, light/dark, `method_status`, `params` (JSON text) |
 
 Conventions that hold for every compilation:
@@ -78,7 +78,14 @@ Conventions that hold for every compilation:
 - **Labels are raw as reported.** Controlled-vocabulary fields (salinity, habitat,
   vegetation) are whatever the source says; they are *not* mapped onto Venice classes
   or any shared scheme yet. Fields a compilation does not have are NULL
-  (`geomorphic_setting`, `in_situ_ex_situ`, `light_dark`, `sd`, `se`, `n` for CCN).
+  (`geomorphic_setting`, `in_situ_ex_situ`, `light_dark`, `sd`, `se`, `n`, and the new `bioregion`, `marine_ecoregion`, `taxon`, `taxon_rank` for CCN and SCOC).
+- **Attribute naming:** snake_case, prefixed with the compilation's own namespace where
+  the quantity could be confused with another compilation's (`scoc_*`, `seagrass_*`).
+  A statistic (mean/max/min) is part of the attribute name, not a separate field.
+  Percentages stay percentages (`units_raw` = `%`); fractions stay fractions.
+- **Study keys:** `reference_key` is the compilation's own study id where it has one;
+  otherwise the DOI (`doi:<bare lower-case doi>`), falling back to the source's
+  author/year text (`ref:<string>`). Never a hand-made merge of near-duplicates.
 - **Derived fields have one written rule** (in the compilation's `extract.py`
   docstring) and the raw value sits next to the derived one.
 - **Provenance:** `source_row_ref` is `<file>#data_row=<0-based data row>:<attribute>`;
@@ -91,7 +98,7 @@ Conventions that hold for every compilation:
 
 ## Compilations
 
-### coastal-carbon-library (Coastal Carbon Network Data Library v1.7.0)
+### smithsonian-coastal-carbon (Coastal Carbon Network Data Library v1.7.0)
 
 Smithsonian Coastal Carbon Network, DOI 10.25573/serc.21565671. Tidal-wetland soil
 carbon profiles: 16,715 cores, 117,518 depth intervals, ~550 studies; mostly marsh
@@ -123,7 +130,7 @@ Things to know:
 - **Provenance:** `reference_dim` = CCN `study_id`; studies can have several citations
   (see `citation_dim.publication_type`).
 
-### scoc (SCOC database v1)
+### stratma-scoc (SCOC database v1)
 
 Stratmann, Soetaert, Wei et al. (2022), Dryad, DOI 10.5061/dryad.25nd083 (accessed
 2026-11-15). Global marine **sediment community oxygen consumption** rates: 3,543 source
@@ -169,6 +176,70 @@ Things to know:
   and value but differ in some other column may be real replicates and are not flagged.
 - **`method_status`:** the source has no method id; `matched` = device and in/ex situ
   present, `method_id_null` = both NA.
+
+### foster-seagrass (Foster et al. 2025, seagrass biomass, production and structure)
+
+Foster, Nicole; Gomis, Enric; Montemayor, Diana et al. (2025). *Global patterns and
+drivers of seagrass biomass, net primary production and meadow structure* [Dataset].
+Dryad, DOI 10.5061/dryad.kprr4xhh1 (accessed 2026-11-15; `source.version` = `2025`, the
+Dryad year, because the source states no version; license not stated in the files).
+A meta-analysis table: 5,903 rows (one per study x site x genus x year), 463 distinct
+`Reference` strings, 1,131 locations (after the label split below), sampled 1972-2022,
+12 seagrass genera plus `Mixed`, coastal and estuarine, all bioregions.
+
+**Facts:** 12,980, one per non-blank measurement cell, units as in the source headers
+(`units_raw`). Attributes: `seagrass_biomass_above|below|total` (g DW m-2),
+`seagrass_shoot_density` (shoots m-2), `seagrass_leaf_density` (leaves m-2),
+`seagrass_percent_cover` (`%`, kept as a percentage, not a fraction),
+`seagrass_production_above|below|total|shoot|leaf` (g DW m-2 d-1). The `seagrass_`
+prefix keeps these quantities apart from other compilations' biomass-like attributes.
+No `sd`/`se`/`n`; no sediment depth (`depth_notes` says so).
+
+Things to know:
+
+- **Bio-ORACLE environmental columns are NOT loaded (deliberate, 2026-11-15).** The 19
+  `BO22_*` columns (sea-surface temperature, pH, PAR, nutrients, chlorophyll, salinity,
+  O2, current velocity, primary productivity; 5,628 rows populated, 275 empty) are a
+  gridded model/satellite climatology (2000-2014) looked up at each coordinate, not
+  seagrass measurements. They are asserted present and listed in `extract_report.json`
+  but create no facts. If added later they should be a distinct attribute family with a
+  method row marking them as modelled; note the dataset README's units for
+  `BO22_ppmax/ppmean` (mmol m-3) should be checked against Bio-ORACLE's own
+  documentation first.
+- **No value limits.** Values are taken as is: no thresholds, no clipping. There are no
+  zeros in the source (minimum 0.001), so absence cannot be told from "not measured".
+- **Totals are partly derived upstream.** The source README says total = above + below
+  "if not reported"; the data cannot distinguish reported from summed totals (734 rows
+  have a total with no parts, 51 have both parts but no total). Totals are carried as
+  given. Flag `total_ne_sum_of_parts` goes on all three facts of a biomass or production
+  triple where above, below and total are all present and total differs from
+  above+below by more than `--sum-rel-tol` relative and `--sum-abs-tol` absolute (run
+  with 1e-3 / 1e-3: 981 facts). The flag is tolerance-sensitive (726 facts at 1e-2,
+  1,473 at 1e-6), so treat it as a screen, not a verdict.
+- **Reference keys.** `reference_key` = `doi:<doi>` when the DOI cell is a DOI (bare, or
+  a doi.org URL; lower-cased, inner whitespace removed: four cells had stray spaces),
+  otherwise `ref:<Reference string>` (the source's "Author et al. year" text). 467
+  references are DOI-keyed and 91 text-keyed; 567 non-blank DOI cells are free-text
+  citations (some with encoding damage) and fall back to the Reference string. One
+  Reference string (`Hitchcock et al. 2017`) has both DOI and non-DOI rows, so it is two
+  references; no merging is attempted. `citation_dim`: `bibliography_id` = the
+  Reference string, `year` parsed from it, title/authors NULL.
+- **Labels.** `habitat_type` = constant `seagrass` (derived from the dataset's scope);
+  `geomorphic_setting` = `Geotype` (`Coastal` / `Estuarine`); `bioregion` = `Bioregion`
+  (Short et al. 2007 bioregions per the source README); `marine_ecoregion` = `ECOREGION`
+  (not documented in the source README; the names look like Marine Ecoregions of the
+  World, which is presumed, not stated). The location key includes all three labels, so
+  coordinates that carry conflicting labels (12 pairs differ in Geotype, 2 in Bioregion)
+  stay separate locations.
+- **Taxon.** `sample_dim.taxon` = `Genera` as given; `taxon_rank` = `genus`, or `mixed`
+  for the label `Mixed` (104 source rows). An unknown genus raises.
+- **Method info is absent:** one `method_dim` row per attribute, `method_status` =
+  `method_id_null`, `params` = the source column.
+- **Excluded:** 47 rows with none of the 11 measurement columns filled
+  (`no_seagrass_measurement`, in `skip_report.jsonl`). 5,903 = 5,856 rows with facts + 47.
+- **Flags:** `year_missing` (the source has `NA` in Year.of.sampling; 285 facts),
+  `duplicate_source_row` (rows identical in every column except `Unique.ID`; 236
+  facts), `total_ne_sum_of_parts`.
 
 ## Adding a compilation
 

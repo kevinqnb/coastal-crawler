@@ -71,7 +71,7 @@ import pandas as pd
 
 from coastal_crawler.compilations import ContractError, write_extracted
 
-SOURCE_KEY = "scoc"
+SOURCE_KEY = "stratma-scoc"
 SOURCE_NAME = "SCOC database"
 SOURCE_VERSION = "1"
 SOURCE_DOI = "10.5061/dryad.25nd083"
@@ -351,6 +351,8 @@ def build_tables(
             "water_body": first.ocean,
             "habitat_type": first.drange,
             "geomorphic_setting": None,
+            "bioregion": None,
+            "marine_ecoregion": None,
             "salinity_class": None,
             "salinity_class_level": None,
             "vegetation_class": None,
@@ -381,6 +383,8 @@ def build_tables(
             "depth_notes": DEPTH_NOTES,
             "sampling_year": None,
             "sampling_month": None,
+            "taxon": None,
+            "taxon_rank": None,
             "vegetated_or_bare": None,
             "marsh_zone": None,
             "sediment_type": d.sed,

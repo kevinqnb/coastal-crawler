@@ -154,6 +154,8 @@ TABLES: dict[str, Table] = {
             _s("water_body"),  # ocean / sea (open-water compilations)
             _s("habitat_type"),
             _s("geomorphic_setting"),
+            _s("bioregion"),  # biogeographic region label, raw (e.g. Short et al. 2007)
+            _s("marine_ecoregion"),  # marine ecoregion label, raw
             _s("salinity_class"),
             _s("salinity_class_level"),
             _s("vegetation_class"),
@@ -183,6 +185,8 @@ TABLES: dict[str, Table] = {
             _s("depth_notes"),
             _i("sampling_year"),
             _i("sampling_month"),
+            _s("taxon"),  # what was sampled/measured (raw label, e.g. a seagrass genus)
+            _s("taxon_rank"),  # rank of `taxon` as stated or derived by the extract.py
             _s("vegetated_or_bare"),
             _s("marsh_zone"),
             _s("sediment_type"),  # raw label

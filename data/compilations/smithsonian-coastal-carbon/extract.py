@@ -53,7 +53,7 @@ import pandas as pd
 
 from coastal_crawler.compilations import ContractError, empty_table, write_extracted
 
-SOURCE_KEY = "coastal-carbon-library"
+SOURCE_KEY = "smithsonian-coastal-carbon"
 SOURCE_NAME = "Coastal Carbon Library"
 SOURCE_VERSION = "1.7.0"
 SOURCE_DOI = "10.25573/serc.21565671"  # from README.txt
@@ -331,6 +331,8 @@ def _build_location(
             "water_body": None,  # not in this compilation
             "habitat_type": cores.habitat,
             "geomorphic_setting": None,  # not in this compilation
+            "bioregion": None,
+            "marine_ecoregion": None,
             "salinity_class": cores.salinity_class,
             "salinity_class_level": cores.salinity_class_level,
             "vegetation_class": cores.vegetation_class,
@@ -527,6 +529,8 @@ def build_tables(
             "sediment_type": None,  # not in this compilation
             "median_grain_size_um": None,
             "photosynthetic_sediment": None,
+            "taxon": None,
+            "taxon_rank": None,
         }
     )
     if units["depthseries"]["depth_min"] != "centimeter" or units["depthseries"]["depth_max"] != "centimeter":

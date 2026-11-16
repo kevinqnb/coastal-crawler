@@ -24,7 +24,7 @@ from coastal_crawler.compilations import (
 
 _EXTRACT = (
     Path(__file__).resolve().parents[1]
-    / "data" / "compilations" / "coastal-carbon-library" / "extract.py"
+    / "data" / "compilations" / "smithsonian-coastal-carbon" / "extract.py"
 )
 _spec = importlib.util.spec_from_file_location("ccn_extract", _EXTRACT)
 assert _spec and _spec.loader
