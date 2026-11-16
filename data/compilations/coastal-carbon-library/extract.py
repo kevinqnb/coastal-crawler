@@ -51,7 +51,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from coastal_crawler.compilations import ContractError, write_extracted
+from coastal_crawler.compilations import ContractError, empty_table, write_extracted
 
 SOURCE_KEY = "coastal-carbon-library"
 SOURCE_NAME = "Coastal Carbon Library"
@@ -328,6 +328,7 @@ def _build_location(
             "position_method": cores.position_method,
             "country": cores.country,
             "admin_division": cores.admin_division,
+            "water_body": None,  # not in this compilation
             "habitat_type": cores.habitat,
             "geomorphic_setting": None,  # not in this compilation
             "salinity_class": cores.salinity_class,
@@ -523,6 +524,9 @@ def build_tables(
             "sampling_month": srows.sampling_month,
             "vegetated_or_bare": srows.vegetated_or_bare,
             "marsh_zone": srows.marsh_zone,
+            "sediment_type": None,  # not in this compilation
+            "median_grain_size_um": None,
+            "photosynthetic_sediment": None,
         }
     )
     if units["depthseries"]["depth_min"] != "centimeter" or units["depthseries"]["depth_max"] != "centimeter":
@@ -626,6 +630,7 @@ def build_tables(
     # location: keep all cores (even ones with no facts); the builder permits it
     tables = {
         "source": source, "reference": reference, "citation": citation,
+        "study_screening": empty_table("study_screening"),
         "location": loc.reset_index(drop=True), "sample": sample, "method": method, "fact": fact,
     }
     flag_counts: dict[str, int] = {}

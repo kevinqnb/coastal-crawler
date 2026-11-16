@@ -48,6 +48,9 @@ class FK:
 
     columns: tuple[str, ...]
     parent: str
+    # nullable: a child row may leave the FK columns NULL (no parent). Only
+    # rows with every FK column non-null are checked / resolved to a parent id.
+    nullable: bool = False
 
 
 @dataclass(frozen=True)
@@ -116,6 +119,23 @@ TABLES: dict[str, Table] = {
         ("source_key", "citation_key"),
         (FK(("source_key", "reference_key"), "reference"),),
     ),
+    "study_screening": Table(
+        "study_screening",
+        (
+            _s("source_key", True),
+            _s("study_key", True),
+            _s("study_citation", True),
+            _s("screening_phase"),
+            _s("eligibility_phase"),
+            _s("database_status"),
+            _s("reference_key"),  # NULL when the study contributed no facts
+        ),
+        ("source_key", "study_key"),
+        (
+            FK(("source_key",), "source"),
+            FK(("source_key", "reference_key"), "reference", nullable=True),
+        ),
+    ),
     "location": Table(
         "location",
         (
@@ -131,6 +151,7 @@ TABLES: dict[str, Table] = {
             _s("position_method"),
             _s("country"),
             _s("admin_division"),
+            _s("water_body"),  # ocean / sea (open-water compilations)
             _s("habitat_type"),
             _s("geomorphic_setting"),
             _s("salinity_class"),
@@ -164,6 +185,9 @@ TABLES: dict[str, Table] = {
             _i("sampling_month"),
             _s("vegetated_or_bare"),
             _s("marsh_zone"),
+            _s("sediment_type"),  # raw label
+            _d("median_grain_size_um"),
+            _s("photosynthetic_sediment"),  # raw label (microphytobenthos present?)
         ),
         ("source_key", "sample_key"),
         (FK(("source_key",), "source"),),
@@ -224,6 +248,7 @@ GLOBAL_NAMES = {
     "source": "source_dim",
     "reference": "reference_dim",
     "citation": "citation_dim",
+    "study_screening": "study_screening_dim",
     "location": "location_dim",
     "sample": "sample_dim",
     "method": "method_dim",
@@ -233,6 +258,7 @@ ID_COLS = {
     "source": "source_id",
     "reference": "reference_id",
     "citation": "citation_id",
+    "study_screening": "study_screening_id",
     "location": "location_id",
     "sample": "sample_id",
     "method": "method_id",
@@ -247,6 +273,11 @@ _LIST_COLS = {
 # --------------------------------------------------------------------------
 # extract.py output: write / read / validate
 # --------------------------------------------------------------------------
+
+
+def empty_table(name: str) -> pd.DataFrame:
+    """A zero-row table with the contract's columns (for compilations with no rows)."""
+    return pd.DataFrame({c: pd.Series(dtype=object) for c in TABLES[name].col_names})
 
 
 def write_extracted(tables: dict[str, pd.DataFrame], out_dir: Path) -> None:
@@ -372,7 +403,10 @@ def _check_fk(tables: dict[str, pd.DataFrame], child: str, fk: FK) -> None:
     # column names differ between child fk columns and parent key only for
     # same-named keys, which the contract guarantees (reference_key etc.)
     parent_keys = set(map(tuple, tables[fk.parent][parent_cols].itertuples(index=False)))
-    child_keys = set(map(tuple, tables[child][child_cols].itertuples(index=False)))
+    child_df = tables[child][child_cols]
+    if fk.nullable:
+        child_df = child_df[child_df.notna().all(axis=1)]
+    child_keys = set(map(tuple, child_df.itertuples(index=False)))
     missing = child_keys - parent_keys
     if missing:
         raise ContractError(
@@ -429,7 +463,8 @@ def assign_global_keys(
             pk = list(TABLES[fk.parent].natural_key)
             lookup = out[fk.parent][pk + [parent_id]]
             out[name] = _merge_checked(
-                out[name], lookup, pk, f"{name}->{fk.parent}", left_on=list(fk.columns)
+                out[name], lookup, pk, f"{name}->{fk.parent}", left_on=list(fk.columns),
+                nullable=fk.nullable,
             )
     return out
 
@@ -440,6 +475,7 @@ def _merge_checked(
     on: list[str],
     what: str,
     left_on: list[str] | None = None,
+    nullable: bool = False,
 ) -> pd.DataFrame:
     n = len(left)
     lo = left_on or on
@@ -447,7 +483,13 @@ def _merge_checked(
     if len(merged) != n:
         raise ContractError(f"{what}: merge changed row count {n} -> {len(merged)}")
     new_cols = [c for c in right.columns if c not in on]
-    if merged[new_cols].isna().any().any():
+    unresolved = merged[new_cols].isna().any(axis=1)
+    if nullable:
+        # only rows whose FK columns are all NULL may stay unresolved
+        unresolved &= left[lo].notna().all(axis=1).to_numpy()
+        for c in new_cols:
+            merged[c] = merged[c].astype("Int64")
+    if unresolved.any():
         raise ContractError(f"{what}: unresolved foreign key")
     return merged  # how="left" preserves the (already id-sorted) left order
 
@@ -462,7 +504,7 @@ def _global_columns(name: str) -> list[Col]:
     for fk in spec.fks:
         if fk.parent == "source":
             continue
-        cols.append(Col(ID_COLS[fk.parent], "INTEGER", True))
+        cols.append(Col(ID_COLS[fk.parent], "INTEGER", not fk.nullable))
     for c in spec.cols:
         if name == "fact":
             # facts keep only their own measurement columns + trace ref

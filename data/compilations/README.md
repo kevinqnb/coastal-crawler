@@ -17,7 +17,7 @@ data/compilations/
     <raw files>                  as downloaded (ignored by git)
     extract.py                   the only tracked file; raw files -> parquet
     extracted/                   extract.py output (ignored by git)
-      source|reference|citation|location|sample|method|fact.parquet
+      source|reference|citation|study_screening|location|sample|method|fact.parquet
       skip_report.jsonl          rows excluded, with reason
       extract_report.json        counts, flag counts, method coverage
 ```
@@ -57,14 +57,21 @@ in the dimensions:
 | `source_dim` | compilation | name, version, DOI, access date, license, notes |
 | `reference_dim` | contributing study | `reference_key` (the compilation's own study id) |
 | `citation_dim` | study x citation | bibliography id, publication type, DOI, title, authors, year, URL |
-| `location_dim` | core / site | lat, lon, position accuracy and method, site name, country, `habitat_type`, `geomorphic_setting`, `salinity_class`, `vegetation_class`, `tidal_position` (each with a `*_level` of core vs site), `modification_status[]`, `dominant_species[]`, elevation + units + datum + method |
-| `sample_dim` | depth interval | depth min/max (cm), representative depths, notes, sampling year/month, `vegetated_or_bare`, `marsh_zone` |
+| `study_screening_dim` | candidate study | citation string and the compilation's own screening labels (`screening_phase`, `eligibility_phase`, `database_status`); `reference_id` is NULL for studies that contributed no facts (the only nullable FK). Empty for CCN. |
+| `location_dim` | core / site | lat, lon, position accuracy and method, site name, country, `water_body` (ocean/sea; open-water compilations), `habitat_type`, `geomorphic_setting`, `salinity_class`, `vegetation_class`, `tidal_position` (each with a `*_level` of core vs site), `modification_status[]`, `dominant_species[]`, elevation + units + datum + method |
+| `sample_dim` | depth interval | depth min/max (cm), representative depths, notes, sampling year/month, `vegetated_or_bare`, `marsh_zone`, `sediment_type` (raw), `median_grain_size_um`, `photosynthetic_sediment` (raw) |
 | `method_dim` | (study, method id, attribute) | `technique`, coring method, carbon type, measured/modeled, carbon method, carbonate removal, `conversion_applied`, in-situ/ex-situ, light/dark, `method_status`, `params` (JSON text) |
 
 Conventions that hold for every compilation:
 
 - **Values are carried as reported.** No unit conversion, no cleaning. Units are the
   compilation's own (`units_raw`), taken from its documentation where it has one.
+- **Standardisation is limited to what is needed to put compilations side by side.**
+  Allowed, and written in the compilation's `extract.py` docstring and below: sign/unit
+  changes for coordinates and elevation (longitude in [-180, 180], elevation in metres,
+  negative below the surface/water level; the raw value stays recoverable via
+  `source_row_ref`), whitespace stripping, and mapping the source's "NA"/blank to NULL.
+  The measured value, its units and categorical labels are never converted.
 - **Suspicious values are flagged, never changed or dropped.** Flags are a list on the
   fact (empty list = none). Cleaning decisions stay downstream. Filter on `flags`
   before any analysis.
@@ -116,10 +123,57 @@ Things to know:
 - **Provenance:** `reference_dim` = CCN `study_id`; studies can have several citations
   (see `citation_dim.publication_type`).
 
+### scoc (SCOC database v1)
+
+Stratmann, Soetaert, Wei et al. (2022), Dryad, DOI 10.5061/dryad.25nd083 (accessed
+2026-11-15). Global marine **sediment community oxygen consumption** rates: 3,543 source
+rows (3 fully blank, excluded as `empty_row`), 231 studies, from the shore to the abyssal
+plain; mostly not coastal wetlands. Raw files: `SCOC_database_version_1.csv`
+(measurements) and `List_of_studies_version_1.csv` (315 candidate studies and their
+screening outcome).
+
+**Facts:** 3,540, units `mmol O2 m-2 d-1` as reported. Attribute is set by the source's
+flux-type column and the three are different quantities: `scoc_tou` (total, 2,859),
+`scoc_dou` (diffusive, 650), `scoc_aou` (advective, 11), plus `scoc_unspecified` (20
+rows of one study with no flux type; flag `flux_type_missing`).
+
+Things to know:
+
+- **Mapping onto the contract:** `Region` -> `site_name`; `Ocean` -> `water_body`;
+  `Depth range` label -> `habitat_type`; `Location` label (exact / approximated) ->
+  `position_method`; depth -> `elevation` = -depth (m, datum "water surface");
+  device -> `method.technique`; in/ex situ and dark/light as raw labels; sediment type,
+  median grain size (um) and photosynthetic-sediment label -> new `sample` columns.
+  Country is not parsed from `Region`. `sd`/`se`/`n` NULL; no dates (`sampling_year`
+  NULL); no sediment depth interval (the flux is for the whole community).
+- **Longitude** mixes 0-360 and +-180 conventions: values above 180 are wrapped
+  (exact decimal subtraction, flag `lon_wrapped`, 2 rows).
+- **Labels are the source's own:** `not investigated` is kept (distinct from NULL = not
+  stated); `Depth range` / photosynthetic / dark-light vocabularies are not mapped.
+- **References:** the data file and study list share no id. A data reference string
+  matches a list entry on its case- and punctuation-insensitive form (215 of 231);
+  the other 16 are resolved by an explicit `CROSSWALK` in `extract.py` (typos such as
+  "accessed"/"assessed", dropped initials, a journal-name variant, and two cells citing
+  two studies, which become one reference `study_a+study_b`). `reference_key` =
+  `study_<0-based row of the list file>` (joined with `+`). Anything unresolved raises.
+  Authors/publication type are NULL (no parsing); year and DOI come from the citation
+  string by regex.
+- **`study_screening_dim`** holds all 315 list entries with their raw screening labels;
+  231 link to a reference, 84 (excluded studies) do not. One data row cites a study the
+  list marks as not in the database (Smith & Teal 1973, `study_251`): kept, flag
+  `study_marked_excluded`.
+- **Flags:** `zero_value` (15), `lon_wrapped`, `coords_missing` (4), `coords_approximate`
+  (800), `depth_missing` (38), `method_missing` (20), `flux_type_missing` (20),
+  `duplicate_source_row` (every member of a group of fully identical rows, 62 rows),
+  `study_marked_excluded` (1), `lat_lon_zero` (0 rows in v1). Rows that agree on station
+  and value but differ in some other column may be real replicates and are not flagged.
+- **`method_status`:** the source has no method id; `matched` = device and in/ex situ
+  present, `method_id_null` = both NA.
+
 ## Adding a compilation
 
 1. Put the raw files in `data/compilations/<name>/` and add `extract.py` there.
-2. `extract.py` builds the seven contract tables (columns and types in
+2. `extract.py` builds the eight contract tables (columns and types in
    `coastal_crawler.compilations.TABLES`) with compilation-local `*_key` strings and
    calls `write_extracted(tables, out_dir)`; it must assert its own row accounting
    (every source measurement is either a fact or a listed exclusion).
