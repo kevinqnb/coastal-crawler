@@ -240,6 +240,8 @@ out/*
 !/data/compilations/*/
 /data/compilations/*/*
 !/data/compilations/*/extract.py
+# per-compilation README (our own); a source's own README is a raw file, renamed README_<origin>.md
+!/data/compilations/*/README.md
 
 # Personal cluster config and job launchers (site-specific paths/accounts)
 scripts/cluster.local.sh
