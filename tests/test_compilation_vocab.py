@@ -176,3 +176,38 @@ def test_null_bottom_type_accepted_for_water_column_only():
     with pytest.raises(v.VocabError, match="bottom_type"):
         v.check_location_labels(_labels(None, "soft"))
     v.check_location_labels(_labels(None, None))  # no habitat, no bottom type (unchanged)
+
+
+# ---------------------------------------------------------------- flag / skip-reason registries
+
+
+def test_registries_known_answer():
+    built = {"negative_value", "zero_value", "fraction_gt_1", "dbd_gt_max", "depth_missing",
+             "depth_inverted", "duplicate_source_row", "carbon_type_unknown", "se_units_differ",
+             "coords_missing", "coords_approximate", "lon_wrapped", "lat_lon_zero",
+             "method_missing", "flux_type_missing", "study_marked_excluded", "year_missing",
+             "total_ne_sum_of_parts"}
+    c2 = {"habitat_from_scope", "covariate_conflict", "reference_inferred", "reference_unresolved",
+          "sd_converted_from_se", "converted_by_source", "potential_rate", "calculated_by_source"}
+    assert (built | c2) <= set(v.FLAGS)
+    assert {"depthseries_core_not_in_cores", "empty_row", "no_seagrass_measurement",
+            "below_detection_limit", "not_measured", "units_missing", "no_density"} == set(v.SKIP_REASONS)
+    for name, doc in {**v.FLAGS, **v.SKIP_REASONS}.items():
+        assert name.islower() and name.replace("_", "").isalnum() and doc.strip()
+
+
+def _flagged(*lists) -> pd.DataFrame:
+    return pd.DataFrame({"flags": list(lists)})
+
+
+def test_check_flags():
+    v.check_flags(_flagged([], ["habitat_from_scope", "zero_value"]))
+    with pytest.raises(v.VocabError, match="made_up_flag"):
+        v.check_flags(_flagged(["zero_value"], ["made_up_flag"]))
+
+
+def test_check_skip_reasons():
+    v.check_skip_reasons(["empty_row", "below_detection_limit"])
+    v.check_skip_reasons([])
+    with pytest.raises(v.VocabError, match="made_up_reason"):
+        v.check_skip_reasons(["empty_row", "made_up_reason"])

@@ -299,3 +299,13 @@ def test_roundtrip_global_build_and_determinism(built, tmp_path) -> None:
     r1 = duckdb.connect(str(out1), read_only=True).execute(q).fetchall()
     r2 = duckdb.connect(str(out2), read_only=True).execute(q).fetchall()
     assert r1 == r2 and len(r1) == 18
+
+
+def test_unregistered_flag_raises_at_validation(built) -> None:
+    tables, _, _ = built
+    bad = {k: v.copy() for k, v in tables.items()}
+    flags = list(bad["fact"]["flags"])
+    flags[0] = list(flags[0]) + ["made_up_flag"]
+    bad["fact"]["flags"] = flags
+    with pytest.raises(ContractError, match="made_up_flag"):
+        write_extracted(bad, Path("/nonexistent-never-written"))

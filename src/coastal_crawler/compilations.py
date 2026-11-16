@@ -450,6 +450,7 @@ def validate_tables(tables: dict[str, pd.DataFrame]) -> None:
         raise ContractError("fact table is empty")
     try:
         vocab.check_facts(tables["fact"])
+        vocab.check_flags(tables["fact"])
         vocab.check_location_labels(tables["location"])
     except vocab.VocabError as e:
         raise ContractError(str(e)) from e

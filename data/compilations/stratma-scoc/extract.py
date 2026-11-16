@@ -80,6 +80,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # data/compilations/
 from compilation_vocab import ATTRIBUTES as ATTRIBUTE_DECL  # noqa: E402
+from compilation_vocab import check_skip_reasons  # noqa: E402
 from coastal_crawler.compilations import ContractError, write_extracted
 
 SOURCE_KEY = "stratma-scoc"
@@ -110,6 +111,7 @@ ATTRIBUTE_BY_FLUX = {
     None: "scoc_unspecified",
 }
 ALLOWED_SKIP_REASONS = frozenset({"empty_row"})
+check_skip_reasons(ALLOWED_SKIP_REASONS)  # the local list must be a subset of the registry
 # Studies the data cites although the list marks them as not in the SCOC database
 # (found 2026-11-15: one row of Smith & Teal 1973, list row 251, "excluded" at the
 # eligibility phase). Kept and flagged ``study_marked_excluded``; any other mismatch raises.

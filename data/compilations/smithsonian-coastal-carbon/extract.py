@@ -72,6 +72,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # data/compilations/
 from compilation_vocab import ATTRIBUTES as ATTRIBUTE_DECL  # noqa: E402
+from compilation_vocab import check_skip_reasons  # noqa: E402
 from coastal_crawler.compilations import ContractError, empty_table, write_extracted
 
 SOURCE_KEY = "smithsonian-coastal-carbon"
@@ -82,6 +83,7 @@ SOURCE_DOI = "10.25573/serc.21565671"  # from README.txt
 ATTRIBUTES = ("dry_bulk_density", "fraction_organic_matter", "fraction_carbon")
 
 ALLOWED_SKIP_REASONS = frozenset({"depthseries_core_not_in_cores"})
+check_skip_reasons(ALLOWED_SKIP_REASONS)  # the local list must be a subset of the registry
 
 # in-situ water context columns on sample_dim that this compilation does not have
 NO_WATER_CONTEXT: dict[str, Any] = {

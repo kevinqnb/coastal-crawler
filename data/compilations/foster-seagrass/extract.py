@@ -100,6 +100,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # data/compilations/
 from compilation_vocab import ATTRIBUTES as ATTRIBUTE_DECL  # noqa: E402
+from compilation_vocab import check_skip_reasons  # noqa: E402
 from coastal_crawler.compilations import ContractError, empty_table, write_extracted
 
 SOURCE_KEY = "foster-seagrass"
@@ -159,6 +160,7 @@ GENERA = frozenset({
 })
 MIXED = "Mixed"
 ALLOWED_SKIP_REASONS = frozenset({"no_seagrass_measurement"})
+check_skip_reasons(ALLOWED_SKIP_REASONS)  # the local list must be a subset of the registry
 NULL_LITERALS = frozenset({"", "NA"})
 DEPTH_NOTES = "seagrass meadow quantity; no sediment depth interval"
 

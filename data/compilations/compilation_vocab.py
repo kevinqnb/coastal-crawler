@@ -17,6 +17,7 @@ mechanisms, both fail-loud:
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -210,6 +211,89 @@ def check_facts(fact: pd.DataFrame) -> None:
         bad_u = set(g["units_raw"]) - d.units
         if bad_u:
             raise VocabError(f"{attr}: units_raw {sorted(bad_u)} not declared (allowed {sorted(d.units)})")
+
+
+# ------------------------------------------------------------------ flags and skip reasons
+
+# Fact flags (``fact.flags``) and skip-report reasons (``skip_report.jsonl``) are closed
+# registries: a flag or reason not listed here raises (the builder checks every fact's flags;
+# every extract.py checks its skip reasons). Add a name here, with its meaning, when a source
+# needs it; the per-source README defines how that source applies it. Flags never change or
+# drop a value.
+FLAGS: dict[str, str] = {
+    # used by the built compilations
+    "negative_value": "value < 0 where the quantity cannot be negative",
+    "zero_value": "value is exactly 0",
+    "fraction_gt_1": "a fraction-valued quantity above 1",
+    "dbd_gt_max": "dry bulk density above the extract's --max-dry-bulk-density",
+    "depth_missing": "sediment/sample depth missing",
+    "depth_inverted": "depth interval min > max",
+    "duplicate_source_row": "row identical to another source row (per the source's own rule)",
+    "carbon_type_unknown": "carbon type (organic vs total) not stated",
+    "se_units_differ": "SE column is documented in a different unit from the value",
+    "coords_missing": "no coordinates in the source",
+    "coords_approximate": "source marks the position as approximated",
+    "lon_wrapped": "longitude given on 0-360 and wrapped to [-180, 180]",
+    "lat_lon_zero": "latitude and longitude both exactly 0",
+    "method_missing": "no method information in the source row",
+    "flux_type_missing": "flux type (TOU/DOU/AOU) not stated",
+    "study_marked_excluded": "the source's own study list marks the study as not in the database",
+    "year_missing": "sampling year missing",
+    "total_ne_sum_of_parts": "total differs from the sum of its parts beyond tolerance",
+    # D3: habitat label filled from a scope the source states for the whole dataset
+    "habitat_from_scope": "location habitat derived from the dataset's stated scope, not from a per-row label",
+    # named in INTEGRATION_PLAN.md for compilations not yet built (defined in each source README)
+    "covariate_conflict": "one sample carries two different values of one J1 attribute",
+    "reference_inferred": "reference attached by inference (location/dates), not stated by the source",
+    "reference_unresolved": "source gives no resolvable reference for this study id",
+    "sd_converted_from_se": "the source converted a reported SE to an SD",
+    "converted_by_source": "the source converted this value (or its unit) from the original",
+    "calculated_by_source": "the source calculated this value from other information",
+    "potential_rate": "rate is a potential rate (e.g. acetylene block), not an ambient rate",
+    "source_site_averaged": "source value is an average over sites",
+    "source_time_averaged": "source value is an average over time",
+    "source_average_row": "source row is itself an average of other rows",
+    "source_median": "source value is a median",
+    "salinity_units_missing": "salinity value has no unit in the source",
+    "coords_integer_degree": "coordinates are whole degrees",
+    "pers_comm": "value is a personal communication",
+    "secondary_source": "value was taken from a secondary compilation named by the source",
+    "secondary_compilation": "reference is an aggregated database, not the original study",
+    "cited_secondary": "source marks the citation as 'cited in' another paper",
+    "error_type_other": "error column is neither SD nor SE",
+    "error_propagated": "error is a propagated SE",
+    "digitized_from_figure": "value was digitised from a figure",
+    "replicate": "row is a replicate",
+    "shallow_lt10m": "source selection code: in situ, depth < 10 m",
+    "method_excluded": "source selection code: methodological exclusion",
+    "low_o2_bottom_water": "source selection code: bottom-water O2 < 25 uM",
+    "o2_units_ambiguous": "bottom-water O2 column mixes uM and % saturation",
+}
+
+SKIP_REASONS: dict[str, str] = {
+    "depthseries_core_not_in_cores": "CCN depth row whose (study, site, core) matches no core",
+    "empty_row": "source row with no content",
+    "no_seagrass_measurement": "seagrass row with none of the measurement columns filled",
+    "below_detection_limit": "value reported as below the detection limit (BDL); limit kept in the report",
+    "not_measured": "value reported as not measured (NM)",
+    "units_missing": "J1 value whose unit cell is blank (units are required)",
+    "no_density": "density row with no density value",
+}
+
+
+def check_flags(fact: pd.DataFrame) -> None:
+    """Every flag on every fact must be registered in FLAGS."""
+    seen = {x for lst in fact["flags"] for x in lst}
+    bad = seen - set(FLAGS)
+    if bad:
+        raise VocabError(f"flags not registered in FLAGS: {sorted(bad)}")
+
+
+def check_skip_reasons(reasons: Iterable[str]) -> None:
+    """Every skip-report reason must be registered in SKIP_REASONS."""
+    bad = set(reasons) - set(SKIP_REASONS)
+    if bad:
+        raise VocabError(f"skip reasons not registered in SKIP_REASONS: {sorted(bad)}")
 
 
 # ------------------------------------------------------------------ labels
