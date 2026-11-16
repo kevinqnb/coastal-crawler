@@ -610,6 +610,43 @@ def global_ddl() -> list[str]:
     return ddl
 
 
+def _bulk_insert(
+    con: duckdb.DuckDBPyConnection,
+    table: str,
+    df: pd.DataFrame,
+    name: str,
+    cols: list[Col],
+) -> None:
+    """Load ``df`` into ``table`` with one INSERT ... SELECT (no per-row Python round trip).
+
+    Values are normalised exactly as the row-wise path did (``_py``: NaN/NA -> NULL, numpy
+    scalars -> Python, list columns -> lists of str, empty list stays ``[]``) and every
+    column is cast to its declared type, so the stored contents are the same.
+    """
+    df = df[[c.name for c in cols]]
+    if len(df) == 0:
+        return
+    clean = pd.DataFrame(
+        {
+            c.name: pd.Series(
+                [_py(v, name, c.name) for v in df[c.name]], index=df.index, dtype=object
+            )
+            for c in cols
+        }
+    )
+    con.register("_bulk_src", clean)
+    try:
+        names = ", ".join(f'"{c.name}"' for c in cols)
+        sel = ", ".join(f'CAST("{c.name}" AS {c.type})' for c in cols)
+        con.execute(f'INSERT INTO "{table}" ({names}) SELECT {sel} FROM _bulk_src')
+    finally:
+        con.unregister("_bulk_src")
+    got = con.execute(f'SELECT count(*) FROM "{table}"').fetchone()
+    assert got is not None
+    if got[0] != len(df):
+        raise ContractError(f"{table}: loaded {got[0]} rows, expected {len(df)}")
+
+
 def write_duckdb(
     path: Path,
     global_tables: dict[str, pd.DataFrame],
@@ -629,17 +666,7 @@ def write_duckdb(
         for stmt in global_ddl():
             con.execute(stmt)
         for name in TABLES:
-            cols = _global_columns(name)
-            df = global_tables[name][[c.name for c in cols]]
-            ph = ", ".join("?" for _ in cols)
-            rows = [
-                tuple(_py(v, name, c.name) for v, c in zip(rec, cols))
-                for rec in df.itertuples(index=False, name=None)
-            ]
-            if rows:
-                con.executemany(
-                    f'INSERT INTO "{GLOBAL_NAMES[name]}" VALUES ({ph})', rows
-                )
+            _bulk_insert(con, GLOBAL_NAMES[name], global_tables[name], name, _global_columns(name))
         got = con.execute(f'SELECT count(*) FROM "{GLOBAL_NAMES["fact"]}"').fetchone()
         assert got is not None
         if got[0] != expected_fact_rows:

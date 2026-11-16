@@ -17,7 +17,13 @@ from coastal_crawler.compilations import (
     ContractError,
     add_derived_labels,
     assign_global_keys,
+    GLOBAL_NAMES,
+    TABLES,
+    _global_columns,
+    _py,
     build_compilations,
+    global_ddl,
+    write_duckdb,
     empty_table,
     validate_tables,
     write_extracted,
@@ -304,3 +310,51 @@ def test_nullable_fk_dangling_value_raises():
     tables["study_screening"].loc[0, "reference_key"] = "no_such_reference"
     with pytest.raises(ContractError, match="not in reference"):
         validate_tables(add_derived_labels(tables))
+
+
+def _write_duckdb_rowwise_reference(path, glob):
+    """The pre-bulk writer (row-by-row executemany), kept only as the reference for the
+    equivalence test below."""
+    con = duckdb.connect(str(path))
+    for stmt in global_ddl():
+        con.execute(stmt)
+    for name in TABLES:
+        cols = _global_columns(name)
+        df = glob[name][[c.name for c in cols]]
+        ph = ", ".join("?" for _ in cols)
+        rows = [tuple(_py(v, name, c.name) for v, c in zip(rec, cols))
+                for rec in df.itertuples(index=False, name=None)]
+        if rows:
+            con.executemany(f'INSERT INTO "{GLOBAL_NAMES[name]}" VALUES ({ph})', rows)
+    con.close()
+
+
+def test_bulk_load_identical_to_rowwise_writer(tmp_path):
+    """Two sources (one with an empty study_screening, a nullable Int64 FK, empty flag lists,
+    NaN doubles, all-NULL columns): the bulk writer stores exactly what the row writer did."""
+    tables = _build()[0]
+    derived = add_derived_labels(tables)
+    glob = assign_global_keys([derived, _second_source(derived)])
+    n = len(glob["fact"])
+    assert any(len(f) == 0 for f in glob["fact"]["flags"])  # empty list must stay []
+    ref, new = tmp_path / "ref.duckdb", tmp_path / "new.duckdb"
+    _write_duckdb_rowwise_reference(ref, glob)
+    write_duckdb(new, glob, n)
+    con = duckdb.connect()
+    con.execute(f"ATTACH '{ref}' AS o (READ_ONLY)")
+    con.execute(f"ATTACH '{new}' AS n (READ_ONLY)")
+    for t in GLOBAL_NAMES.values():
+        cols = [(r[0], r[1]) for r in con.execute(f"DESCRIBE o.{t}").fetchall()]
+        assert cols == [(r[0], r[1]) for r in con.execute(f"DESCRIBE n.{t}").fetchall()]
+        assert con.execute(f"select count(*) from o.{t}").fetchone() == con.execute(f"select count(*) from n.{t}").fetchone()
+        for a, b in (("o", "n"), ("n", "o")):
+            assert con.execute(f"select count(*) from (select * from {a}.{t} except all select * from {b}.{t})").fetchone()[0] == 0, (t, a, b)
+        for c, ty in cols:
+            def stats(db):
+                return con.execute(
+                    f'select count(*) filter (where "{c}" is null)'
+                    + (f', count(*) filter (where isnan("{c}"))' if ty == "DOUBLE" else ", 0")
+                    + (f', count(*) filter (where len("{c}") = 0)' if ty.endswith("[]") else ", 0")
+                    + f" from {db}.{t}").fetchone()
+            assert stats("o") == stats("n"), (t, c)
+    con.close()
