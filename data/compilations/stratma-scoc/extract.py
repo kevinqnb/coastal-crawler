@@ -59,7 +59,9 @@ Standardisation / derived-field rules (the raw value is recoverable through
 Flags: zero_value, lon_wrapped, lat_lon_zero, coords_missing, coords_approximate,
 depth_missing, method_missing, flux_type_missing, study_marked_excluded (the cited study is
 not `included` in the study list; 1 known row), duplicate_source_row (every member of
-a group of fully identical source rows).
+a group of fully identical source rows), habitat_from_scope (the location has a Depth range
+label, and every label maps to Subtidal soft sediment by the dataset's scope: SCOC is sediment;
+on the oxygen-uptake and the grain-size facts alike).
 
 Usage:
     python extract.py --access-date YYYY-MM-DD
@@ -80,10 +82,21 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # data/compilations/
 from compilation_vocab import ATTRIBUTES as ATTRIBUTE_DECL  # noqa: E402
-from compilation_vocab import check_skip_reasons  # noqa: E402
+from compilation_vocab import check_skip_reasons, load_label_maps  # noqa: E402
 from coastal_crawler.compilations import ContractError, write_extracted
 
 SOURCE_KEY = "stratma-scoc"
+
+
+def _assert_habitat_from_scope(labels: set[str]) -> None:
+    """``habitat_from_scope`` is put on every fact whose location has a ``habitat_type``, so every
+    such label must map to a habitat in the label map (otherwise the flag would claim a
+    scope-derived habitat that is not there)."""
+    m = load_label_maps().get((SOURCE_KEY, "habitat_type", "habitat"), {})
+    # a label absent from the map raises later, in the label derivation; here: listed but blank
+    bad = sorted(x for x in labels if x in m and m[x] is None)
+    if bad:
+        raise ContractError(f"habitat_type labels with a blank habitat in the label map: {bad}")
 SOURCE_NAME = "SCOC database"
 SOURCE_VERSION = "1"
 SOURCE_DOI = "10.5061/dryad.25nd083"
@@ -453,8 +466,11 @@ def build_tables(
     flags: list[list[str]] = []
     loc_flags: list[list[str]] = []  # flags about the station / source row, shared by the G1 fact
     not_incl = {k for k in studies.study_key[studies.database_status != "included"]}
+    _assert_habitat_from_scope(set(d.drange.dropna()))
     for r, w, dp in zip(d.itertuples(index=False), d.wrapped, dup):
         f: list[str] = []
+        if not pd.isna(r.drange):
+            f.append("habitat_from_scope")  # every Depth range label maps to Subtidal soft sediment
         if r.scoc_v == 0:
             f.append("zero_value")
         if w:

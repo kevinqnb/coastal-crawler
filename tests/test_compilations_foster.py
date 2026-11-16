@@ -158,6 +158,10 @@ def test_references(built) -> None:
 def test_flags(built) -> None:
     tables, _, rep = built
     f = tables["fact"].set_index("fact_key")
+    # habitat is the dataset's scope (seagrass): every fact carries habitat_from_scope; the
+    # rest is checked without it
+    assert all("habitat_from_scope" in x for x in f["flags"])
+    f = f.assign(flags=[[x for x in fl if x != "habitat_from_scope"] for fl in f["flags"]])
     # rows 0 and 4 identical except id: every fact flagged duplicate
     assert f.loc["id1:seagrass_shoot_density", "flags"] == ["duplicate_source_row"]
     assert f.loc["id5:seagrass_shoot_density", "flags"] == ["duplicate_source_row"]
@@ -168,7 +172,8 @@ def test_flags(built) -> None:
         assert f.loc[f"id3:seagrass_production_{a}", "flags"] == []
     # consistent triple 10+5=15 is not flagged beyond the duplicate flag
     assert "total_ne_sum_of_parts" not in f.loc["id1:seagrass_biomass_total", "flags"]
-    assert rep["flag_counts"] == {"duplicate_source_row": 8, "year_missing": 1, "total_ne_sum_of_parts": 3}
+    assert rep["flag_counts"] == {"habitat_from_scope": 18, "duplicate_source_row": 8, "year_missing": 1,
+                                  "total_ne_sum_of_parts": 3}
 
 
 def test_values_units_and_provenance(built) -> None:

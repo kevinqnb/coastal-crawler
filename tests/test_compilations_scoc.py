@@ -124,6 +124,10 @@ def test_values_units_and_provenance():
 
 def test_flags():
     f = _build()[0]["fact"].set_index("fact_key")
+    # every fixture location has a Depth range label that maps to a habitat, so every fact
+    # (oxygen-uptake and grain size alike) carries habitat_from_scope; the rest is checked without it
+    assert all("habitat_from_scope" in x for x in f["flags"])
+    f = f.assign(flags=[[x for x in fl if x != "habitat_from_scope"] for fl in f["flags"]])
     assert f.loc["row0:scoc_tou", "flags"] == ["coords_approximate", "duplicate_source_row", "lon_wrapped"]
     assert f.loc["row1:scoc_tou", "flags"] == ["coords_approximate", "duplicate_source_row", "lon_wrapped"]
     assert f.loc["row2:scoc_unspecified", "flags"] == [
@@ -335,6 +339,7 @@ def test_bulk_load_identical_to_rowwise_writer(tmp_path):
     tables = _build()[0]
     derived = add_derived_labels(tables)
     glob = assign_global_keys([derived, _second_source(derived)])
+    glob["fact"].at[0, "flags"] = []  # every built fact now has a flag; force the empty-list case
     n = len(glob["fact"])
     assert any(len(f) == 0 for f in glob["fact"]["flags"])  # empty list must stay []
     ref, new = tmp_path / "ref.duckdb", tmp_path / "new.duckdb"
@@ -358,3 +363,13 @@ def test_bulk_load_identical_to_rowwise_writer(tmp_path):
                     + f" from {db}.{t}").fetchone()
             assert stats("o") == stats("n"), (t, c)
     con.close()
+
+
+def test_habitat_from_scope_guard_raises_on_blank_mapping(monkeypatch):
+    """The flag claims a scope-derived habitat, so a label that maps to blank must raise."""
+    real = scoc.load_label_maps()
+    key = ("stratma-scoc", "habitat_type", "habitat")
+    broken = {**real, key: {**real[key], "near-shore (0-50m)": None}}
+    monkeypatch.setattr(scoc, "load_label_maps", lambda: broken)
+    with pytest.raises(ContractError, match="blank habitat"):
+        _build()

@@ -46,7 +46,9 @@ Things to know:
   231 link to a reference, 84 (excluded studies) do not. One data row cites a study the
   list marks as not in the database (Smith & Teal 1973, `study_251`): kept, flag
   `study_marked_excluded`.
-- **Flags:** `zero_value` (15), `lon_wrapped`, `coords_missing` (4), `coords_approximate`
+- **Flags:** `habitat_from_scope` (all 3,907 facts, oxygen-uptake and grain size alike: every
+  `Depth range` label maps to subtidal soft sediment by the dataset's scope; the extract raises if
+  a label mapped to blank), `zero_value` (15), `lon_wrapped`, `coords_missing` (4), `coords_approximate`
   (800), `depth_missing` (38), `method_missing` (20), `flux_type_missing` (20),
   `duplicate_source_row` (every member of a group of fully identical rows, 62 rows),
   `study_marked_excluded` (1), `lat_lon_zero` (0 rows in v1). Rows that agree on station

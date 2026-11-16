@@ -75,7 +75,8 @@ Standardisation / derived-field rules (the raw value is recoverable via
     year = last 4-digit 19xx/20xx in the Reference string; title/authors NULL.
     The counts of references that mix DOI and non-DOI rows are in extract_report.json.
 
-Flags (informational; nothing is changed or dropped): year_missing,
+Flags (informational; nothing is changed or dropped): habitat_from_scope (every fact: habitat is
+the dataset's scope, seagrass, not a per-row label), year_missing,
 duplicate_source_row (every member of a group of rows identical in all columns except
 Unique.ID, BO22 columns included), total_ne_sum_of_parts (on every fact of a
 biomass or production triple whose above, below and total are all present and where
@@ -100,10 +101,22 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # data/compilations/
 from compilation_vocab import ATTRIBUTES as ATTRIBUTE_DECL  # noqa: E402
-from compilation_vocab import check_skip_reasons  # noqa: E402
+from compilation_vocab import check_skip_reasons, load_label_maps  # noqa: E402
 from coastal_crawler.compilations import ContractError, empty_table, write_extracted
 
 SOURCE_KEY = "foster-seagrass"
+HABITAT_TYPE = "seagrass"  # constant: the dataset's scope
+
+
+def _assert_habitat_from_scope(labels: set[str]) -> None:
+    """``habitat_from_scope`` is put on every fact whose location has a ``habitat_type``, so every
+    such label must map to a habitat in the label map (otherwise the flag would claim a
+    scope-derived habitat that is not there)."""
+    m = load_label_maps().get((SOURCE_KEY, "habitat_type", "habitat"), {})
+    # a label absent from the map raises later, in the label derivation; here: listed but blank
+    bad = sorted(x for x in labels if x in m and m[x] is None)
+    if bad:
+        raise ContractError(f"habitat_type labels with a blank habitat in the label map: {bad}")
 SOURCE_NAME = "Foster et al. seagrass biomass, production and structure"
 SOURCE_VERSION = "2025"  # Dryad publication year; the source states no version number
 SOURCE_DOI = "10.5061/dryad.kprr4xhh1"
@@ -298,7 +311,7 @@ def build_tables(
             "country": None,
             "admin_division": None,
             "water_body": None,
-            "habitat_type": "seagrass",
+            "habitat_type": HABITAT_TYPE,
             "geomorphic_setting": first[GEOTYPE_COL],
             "bioregion": first[BIOREGION_COL],
             "marine_ecoregion": first[ECOREGION_COL],
@@ -364,11 +377,12 @@ def build_tables(
         mismatch |= m
     triple_of = {x: k for k, tr in enumerate(SUM_TRIPLES) for x in tr}
 
+    _assert_habitat_from_scope({HABITAT_TYPE})
     rows = []
     d_rows = d.reset_index(drop=True)
     for col, (attr, units) in MEASUREMENTS.items():
         for i in np.flatnonzero(~np.isnan(val[attr])):
-            flags = []
+            flags = ["habitat_from_scope"]  # habitat_type is the constant "seagrass" (dataset scope)
             if pd.isna(d_rows.year_v.iloc[i]):
                 flags.append("year_missing")
             if dup_k[i]:

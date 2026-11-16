@@ -173,7 +173,8 @@ Where it is filled from such a scope (every SCOC depth class is subtidal soft se
 the dataset is sediment; Foster is all seagrass; water-column sources get `water column`), the
 facts carry the flag `habitat_from_scope`, so label-derived and scope-derived habitat can be
 told apart. Where it is NULL (no label, no scope) there is no flag. `water column` is not in
-the label map yet: no built source uses it.
+the label map yet: no built source uses it. SCOC and Foster were rebuilt once to add the flag;
+fact counts and every other column were unchanged.
 
 Within a declared (source, raw column, mapped column) every distinct raw label needs a
 row (blank = no equivalent); an unlisted label raises, and every source must declare
@@ -206,8 +207,8 @@ source needs it; the compilation's README says how that source applies it.
   `dbd_gt_max`, `depth_missing`, `depth_inverted`, `duplicate_source_row`,
   `carbon_type_unknown`, `se_units_differ`, `coords_missing`, `coords_approximate`,
   `lon_wrapped`, `lat_lon_zero`, `method_missing`, `flux_type_missing`,
-  `study_marked_excluded`, `year_missing`, `total_ne_sum_of_parts`, and (SCOC, Foster, after
-  the next rebuild) `habitat_from_scope`.
+  `study_marked_excluded`, `year_missing`, `total_ne_sum_of_parts`, and `habitat_from_scope` (SCOC and Foster: on all
+  their facts, 3,907 and 12,980).
 - Registered ahead of use, for compilations not yet built (names only; defined in each
   source's README when it is built): `covariate_conflict`, `reference_inferred`,
   `reference_unresolved`, `sd_converted_from_se`, `converted_by_source`,

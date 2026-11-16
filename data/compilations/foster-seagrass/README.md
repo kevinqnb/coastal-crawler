@@ -69,7 +69,8 @@ Things to know:
   `method_id_null`, `params` = the source column.
 - **Excluded:** 47 rows with none of the 11 measurement columns filled
   (`no_seagrass_measurement`, in `skip_report.jsonl`). 5,903 = 5,856 rows with facts + 47.
-- **Flags:** `year_missing` (the source has `NA` in Year.of.sampling; 285 facts),
+- **Flags:** `habitat_from_scope` (all 12,980 facts: `habitat_type` is the constant `seagrass`),
+  `year_missing` (the source has `NA` in Year.of.sampling; 285 facts),
   `duplicate_source_row` (rows identical in every column except `Unique.ID`; 236
   facts), `total_ne_sum_of_parts`.
 
