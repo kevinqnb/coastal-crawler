@@ -14,6 +14,7 @@ import pandas as pd
 import pytest
 
 from coastal_crawler.compilations import (
+    add_derived_labels,
     ContractError,
     assign_global_keys,
     build_compilations,
@@ -111,7 +112,22 @@ def test_counts(built) -> None:
     assert len(tables["sample"]) == 7 and len(tables["method"]) == 9
     assert len(tables["study_screening"]) == 0
     assert rep["facts_by_attribute"]["seagrass_biomass_total"] == 4  # rows 0,1,2,4
-    validate_tables(tables)
+    validate_tables(add_derived_labels(tables))
+
+
+def test_types_and_labels(built) -> None:
+    tables = built[0]
+    f = tables["fact"]
+    by = f.drop_duplicates("attribute").set_index("attribute")[["measurement_type", "subfield"]]
+    assert tuple(by.loc["seagrass_biomass_above"]) == ("B2", "above_ground_biomass")
+    assert tuple(by.loc["seagrass_shoot_density"]) == ("B3", "shoot_or_stem_density")
+    assert tuple(by.loc["seagrass_production_total"]) == ("B6", "total_npp")
+    loc = add_derived_labels(tables)["location"]
+    assert set(loc.habitat) == {"Seagrass meadow"} and set(loc.bottom_type) == {"soft"}
+    # Geotype Estuarine -> setting estuary; Coastal -> blank; raw label kept
+    est = loc[loc.geomorphic_setting == "Estuarine"]
+    assert len(est) and set(est.setting) == {"estuary"}
+    assert loc[loc.geomorphic_setting == "Coastal"].setting.isna().all()
 
 
 def test_no_bo22_loaded(built) -> None:

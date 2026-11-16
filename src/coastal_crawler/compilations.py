@@ -23,12 +23,19 @@ parquet is read/written through DuckDB (no pyarrow dependency).
 from __future__ import annotations
 
 import os
+import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
 import duckdb
 import pandas as pd
+
+# The vocabulary and label maps live with the raw compilations (data/compilations/).
+# The extract.py scripts import the same module name, so there is one instance.
+COMPILATIONS_DIR = Path(__file__).resolve().parents[2] / "data" / "compilations"
+sys.path.insert(0, str(COMPILATIONS_DIR))
+import compilation_vocab as vocab  # noqa: E402
 
 
 class ContractError(Exception):
@@ -115,6 +122,10 @@ TABLES: dict[str, Table] = {
             _s("authors"),
             _i("year"),
             _s("url"),
+            # filled by a later DOI-resolution job (OpenAlex); NULL from every extract.py
+            _s("openalex_id"),
+            _s("doi_resolved"),
+            _s("doi_resolution_source"),  # "source" | "openalex" | NULL
         ),
         ("source_key", "citation_key"),
         (FK(("source_key", "reference_key"), "reference"),),
@@ -168,6 +179,15 @@ TABLES: dict[str, Table] = {
             _s("elevation_units"),
             _s("elevation_datum"),
             _s("elevation_method"),
+            _d("water_depth_m"),  # positive down
+            _d("distance_to_shore_km"),
+            # derived from the raw columns by the label maps (write_extracted adds them;
+            # an extract.py must not supply them)
+            _s("habitat"),
+            _s("bottom_type"),
+            _s("setting"),
+            _s("salinity_zone"),
+            _ls("modification_class", True),
         ),
         ("source_key", "location_key"),
         (FK(("source_key",), "source"),),
@@ -190,8 +210,13 @@ TABLES: dict[str, Table] = {
             _s("vegetated_or_bare"),
             _s("marsh_zone"),
             _s("sediment_type"),  # raw label
-            _d("median_grain_size_um"),
             _s("photosynthetic_sediment"),  # raw label (microphytobenthos present?)
+            _d("sample_depth_m"),  # water-column sample depth
+            _d("water_temperature_c"),
+            _d("water_salinity"),
+            _s("water_salinity_units"),
+            _d("bottom_water_o2"),
+            _s("bottom_water_o2_units"),
         ),
         ("source_key", "sample_key"),
         (FK(("source_key",), "source"),),
@@ -214,6 +239,8 @@ TABLES: dict[str, Table] = {
             _s("conversion_applied"),
             _s("in_situ_ex_situ"),
             _s("light_dark"),
+            _s("incubation_type"),  # raw: intact core / in situ chamber / slurry ...
+            _s("experimental_status"),  # raw: control / treatment / natural ...
             _s("params"),  # JSON text
         ),
         ("source_key", "method_key"),
@@ -229,6 +256,8 @@ TABLES: dict[str, Table] = {
             _s("sample_key", True),
             _s("method_key", True),
             _s("attribute", True),
+            _s("measurement_type", True),  # standard type code (G1..P1) or "other"
+            _s("subfield"),
             _d("value", True),
             _s("units_raw", True),
             _d("sd"),
@@ -285,7 +314,8 @@ def empty_table(name: str) -> pd.DataFrame:
 
 
 def write_extracted(tables: dict[str, pd.DataFrame], out_dir: Path) -> None:
-    """Validate then write one parquet per table into ``out_dir``."""
+    """Add the derived labels, validate, then write one parquet per table."""
+    tables = add_derived_labels(tables)
     validate_tables(tables)
     out_dir.mkdir(parents=True, exist_ok=True)
     for name, spec in TABLES.items():
@@ -297,6 +327,24 @@ def write_extracted(tables: dict[str, pd.DataFrame], out_dir: Path) -> None:
         con.execute(f"COPY t TO '{tmp}' (FORMAT parquet)")
         con.close()
         os.replace(tmp, out_dir / f"{name}.parquet")
+
+
+def add_derived_labels(tables: dict[str, pd.DataFrame]) -> dict[str, pd.DataFrame]:
+    """Return ``tables`` with location's label columns derived from the label maps.
+
+    An extract.py supplies the raw labels only; supplying a derived column raises.
+    """
+    loc = tables["location"]
+    already = [c for c in vocab.DERIVED_LOCATION_COLUMNS if c in loc.columns]
+    if already:
+        raise ContractError(f"location: derived columns supplied by extract.py: {already}")
+    if len(tables["source"]) != 1:
+        raise ContractError("an extract.py must produce exactly 1 source row")
+    src = tables["source"]["source_key"].iloc[0]
+    derived = vocab.derive_location_labels(loc, src, vocab.load_label_maps())
+    out = dict(tables)
+    out["location"] = pd.concat([loc, derived], axis=1)
+    return out
 
 
 def read_extracted(in_dir: Path) -> dict[str, pd.DataFrame]:
@@ -318,6 +366,16 @@ def read_extracted(in_dir: Path) -> dict[str, pd.DataFrame]:
         con.close()
         out[name] = df
     validate_tables(out)
+    # the label map may have changed since extract.py ran: stale parquet must not build
+    src = out["source"]["source_key"].iloc[0]
+    loc = out["location"]
+    raw = loc.drop(columns=vocab.DERIVED_LOCATION_COLUMNS)
+    fresh = vocab.derive_location_labels(raw, src, vocab.load_label_maps())
+    for c in vocab.DERIVED_LOCATION_COLUMNS:
+        a = [list(x) if c == "modification_class" else (None if pd.isna(x) else x) for x in loc[c]]
+        b = [list(x) if c == "modification_class" else (None if pd.isna(x) else x) for x in fresh[c]]
+        if a != b:
+            raise ContractError(f"{in_dir}: location.{c} is stale vs the label map; re-run extract.py")
     return out
 
 
@@ -390,6 +448,11 @@ def validate_tables(tables: dict[str, pd.DataFrame]) -> None:
             _check_fk(tables, name, fk)
     if len(tables["fact"]) == 0:
         raise ContractError("fact table is empty")
+    try:
+        vocab.check_facts(tables["fact"])
+        vocab.check_location_labels(tables["location"])
+    except vocab.VocabError as e:
+        raise ContractError(str(e)) from e
     unused_methods = set(tables["method"]["method_key"]) - set(tables["fact"]["method_key"])
     if unused_methods:
         raise ContractError(f"{len(unused_methods)} method rows no fact references")

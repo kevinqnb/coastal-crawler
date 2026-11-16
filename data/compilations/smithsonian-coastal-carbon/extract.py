@@ -8,9 +8,11 @@ ids and builds ``compilations.duckdb``).
 
 Grain: ONE FACT PER VARIABLE MEASUREMENT = one non-null cell of
 ``dry_bulk_density`` / ``fraction_organic_matter`` / ``fraction_carbon`` in
-CCN_depthseries.csv. Depth interval, year/month and core-level labels are
-context in ``sample``/``location``. Radiometric/dating columns are out of
-scope. Values are carried exactly as reported (no unit conversion, no
+CCN_depthseries.csv (measurement type C1), plus one fact per core with a
+``pb210_cic_accretion_rate`` in CCN_cores.csv (measurement type G2; core-level, so its
+sample row has no depth interval). Depth interval, year/month and core-level labels
+are context in ``sample``/``location``. The other radiometric/dating columns are
+out of scope. Values are carried exactly as reported (no unit conversion, no
 cleaning); suspicious values are FLAGGED in ``fact.flags``, never changed or
 dropped.
 
@@ -19,6 +21,22 @@ Fail loud. The only exclusions are depth-series rows whose
 labels, no date): they go to ``skip_report.jsonl`` with the reason from
 ``ALLOWED_SKIP_REASONS`` and, where one exists, a *suggested* case/spelling
 match that is NOT applied. An unlisted exclusion reason raises.
+
+Measurement types (``compilation_vocab.ATTRIBUTES``): dry_bulk_density ->
+C1 dry_bulk_density; fraction_organic_matter -> C1 loi_organic_matter;
+fraction_carbon -> C1 with ``subfield`` from the method row's ``carbon_type``
+("organic carbon" -> organic_carbon, "total carbon" -> total_carbon, anything else,
+including no matched method row -> carbon_unspecified); pb210_cic_accretion_rate -> G2
+vertical_accretion (technique = 210Pb constant-initial-concentration model, from the
+column name; the cores file has no method id, so method_status = method_id_null).
+Standard labels (habitat, setting, salinity_zone, modification_class) come from
+``compilation_label_maps.csv``, not from this file.
+
+Accretion facts: value = ``pb210_cic_accretion_rate`` (centimeterPerYear per the structure
+doc); ``se`` = ``pb210_cic_accretion_rate_se``, which the doc gives in a DIFFERENT unit
+(millimetersPerYear). Nothing is converted: the fact is flagged ``se_units_differ`` and
+``method.params`` records ``se_units``; max depth, r2 and notes go in ``method.params``
+(one method row per core).
 
 Derived-field rules (the raw value is always kept alongside in ``location``):
   * salinity_class / vegetation_class / tidal_position (= inundation_class):
@@ -31,7 +49,8 @@ Derived-field rules (the raw value is always kept alongside in ``location``):
     "vegetated"; ``mudflat`` -> NULL (no stated vegetation status).
   * marsh_zone: tidal_position if habitat == "marsh" and tidal_position in
     {low, mid, high}; otherwise NULL.
-  * modification_status: union of site-level and core-level CCN_impacts rows.
+  * modification_status: union of site-level and core-level CCN_impacts rows; rows whose
+    impact_class is blank are dropped.
   * conversion_applied (fraction_carbon only): fraction_carbon_method if the
     study says carbon was "modeled" or the method contains "regression".
 
@@ -42,15 +61,17 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import html
 import json
 import re
+import sys
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pandas as pd
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # data/compilations/
+from compilation_vocab import ATTRIBUTES as ATTRIBUTE_DECL  # noqa: E402
 from coastal_crawler.compilations import ContractError, empty_table, write_extracted
 
 SOURCE_KEY = "smithsonian-coastal-carbon"
@@ -61,6 +82,17 @@ SOURCE_DOI = "10.25573/serc.21565671"  # from README.txt
 ATTRIBUTES = ("dry_bulk_density", "fraction_organic_matter", "fraction_carbon")
 
 ALLOWED_SKIP_REASONS = frozenset({"depthseries_core_not_in_cores"})
+
+# in-situ water context columns on sample_dim that this compilation does not have
+NO_WATER_CONTEXT: dict[str, Any] = {
+    "sample_depth_m": np.nan, "water_temperature_c": np.nan, "water_salinity": np.nan,
+    "water_salinity_units": None, "bottom_water_o2": np.nan, "bottom_water_o2_units": None,
+}
+
+ACCRETION_ATTR = "pb210_cic_accretion_rate"
+ACCRETION_SE_COL = "pb210_cic_accretion_rate_se"
+ACCRETION_TECHNIQUE = "210Pb constant initial concentration (CIC) model"
+CARBON_SUBFIELD = {"organic carbon": "organic_carbon", "total carbon": "total_carbon"}
 
 VEG_TO_VEGETATED_OR_BARE: dict[str, str | None] = {
     "unvegetated": "bare",
@@ -283,6 +315,7 @@ def _build_location(
 
     # --- impacts and species -> lists per core (assert no orphan-keys silently)
     imp = raw["impacts"].copy()
+    imp = imp[imp.impact_class.notna()]  # blank impact_class: no information
     site_imp = imp[imp.core_id.isna()].groupby(_key(imp.study_id, imp.site_id)[imp.core_id.isna()]).impact_class.agg(set)
     core_imp = imp[imp.core_id.notna()].groupby(
         _key(imp.study_id, imp.site_id, imp.core_id)[imp.core_id.notna()]
@@ -345,6 +378,8 @@ def _build_location(
             "elevation_units": cores.elevation_units,
             "elevation_datum": cores.elevation_datum,
             "elevation_method": cores.elevation_method,
+            "water_depth_m": np.nan,  # not in this compilation
+            "distance_to_shore_km": np.nan,
         }
     )
     report = {
@@ -392,6 +427,7 @@ def _method_rows(
             "carbon_measured_or_modeled": None, "fraction_carbon_method": None,
             "carbonates_removed": None, "carbonate_removal_method": None,
             "conversion_applied": None, "in_situ_ex_situ": None, "light_dark": None,
+            "incubation_type": None, "experimental_status": None,
             "params": None,
         }
         cands = by_key.get((study, mid), []) if mid_n is not None else []
@@ -432,6 +468,120 @@ def _method_rows(
                     row["conversion_applied"] = fcm
         out.append(row)
     return pd.DataFrame(out)
+
+
+# ---------------------------------------------------------------- accretion (G2)
+
+
+def _accretion(
+    cores_raw: pd.DataFrame, ctx: pd.DataFrame, units: dict[str, dict[str, str | None]]
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Core-level 210Pb CIC accretion facts: (sample, method, fact) rows.
+
+    One fact per core with a rate. The rate is in the doc's centimeterPerYear, its SE in
+    the doc's (different) millimetersPerYear; both are carried as reported, the SE fact
+    is flagged ``se_units_differ``.
+    """
+    cu = units["cores"]
+    rate_units, se_units = cu.get(ACCRETION_ATTR), cu.get(ACCRETION_SE_COL)
+    if rate_units is None or se_units is None:
+        raise ContractError("no documented units for the accretion columns")
+    cores = cores_raw.reset_index(drop=True).copy()
+    cores["row_idx"] = np.arange(len(cores))
+    cores["location_key"] = _key(cores.study_id, cores.site_id, cores.core_id)
+    if (cores[ACCRETION_SE_COL].notna() & cores[ACCRETION_ATTR].isna()).any():
+        raise ContractError("accretion SE without a rate")
+    keep = ["row_idx", "location_key", "study_id", ACCRETION_ATTR, ACCRETION_SE_COL,
+            "pb210_cic_max_depth", "pb210_cic_r2", "pb210_cic_notes"]
+    sub = cores.loc[cores[ACCRETION_ATTR].notna(), keep].merge(
+        ctx, on="location_key", how="left", validate="1:1"
+    )  # ctx carries the label-fallback vegetation_class / tidal_position
+    if len(sub) != int(cores[ACCRETION_ATTR].notna().sum()):
+        raise ContractError("accretion/context join changed row count")
+    sample_key = sub.location_key + "|core_level"
+    sample = pd.DataFrame(
+        {
+            "source_key": SOURCE_KEY,
+            "sample_key": sample_key,
+            "source_sample_id": None,
+            "depth_min_cm": np.nan,
+            "depth_max_cm": np.nan,
+            "representative_depth_min_cm": np.nan,
+            "representative_depth_max_cm": np.nan,
+            "depth_notes": "core-level value; no depth interval",
+            "sampling_year": sub.sampling_year,
+            "sampling_month": sub.sampling_month,
+            "vegetated_or_bare": sub.vegetation_class.map(VEG_TO_VEGETATED_OR_BARE),
+            "marsh_zone": np.where(
+                (sub.habitat == "marsh") & sub.tidal_position.isin(MARSH_ZONES), sub.tidal_position, None
+            ),
+            "sediment_type": None,
+            "photosynthetic_sediment": None,
+            "taxon": None,
+            "taxon_rank": None,
+            **NO_WATER_CONTEXT,
+        }
+    )
+    method_key = sub.location_key + "|" + ACCRETION_ATTR
+    params = []
+    for md, r2, nt in zip(sub.pb210_cic_max_depth, sub.pb210_cic_r2, sub.pb210_cic_notes):
+        p: dict[str, Any] = {"se_units": se_units}
+        if _none(md) is not None:
+            p["max_depth_cm"] = float(md)  # doc units: centimeter
+        if _none(r2) is not None:
+            p["r2"] = float(r2)
+        if _none(nt) is not None:
+            p["notes"] = nt
+        params.append(json.dumps(p, sort_keys=True))
+    if cu.get("pb210_cic_max_depth") != "centimeter":
+        raise ContractError("pb210_cic_max_depth is not documented in centimeter")
+    method = pd.DataFrame(
+        {
+            "source_key": SOURCE_KEY,
+            "method_key": method_key,
+            "source_method_id": None,
+            "attribute": ACCRETION_ATTR,
+            "method_status": "method_id_null",  # cores file has no method id
+            "technique": ACCRETION_TECHNIQUE,
+            "coring_method": None, "carbon_type": None, "carbon_measured_or_modeled": None,
+            "fraction_carbon_method": None, "carbonates_removed": None,
+            "carbonate_removal_method": None, "conversion_applied": None,
+            "in_situ_ex_situ": None, "light_dark": None,
+            "incubation_type": None, "experimental_status": None,
+            "params": params,
+        }
+    )
+    val = _num(sub[ACCRETION_ATTR], ACCRETION_ATTR)
+    se = _num(sub[ACCRETION_SE_COL], ACCRETION_SE_COL)
+    flags = []
+    for v, e in zip(val, se):
+        f = []
+        if v < 0:
+            f.append("negative_value")
+        if not np.isnan(e):
+            f.append("se_units_differ")
+        flags.append(f)
+    fact = pd.DataFrame(
+        {
+            "source_key": SOURCE_KEY,
+            "fact_key": sample_key + "|" + ACCRETION_ATTR,
+            "reference_key": sub.study_id,
+            "location_key": sub.location_key,
+            "sample_key": sample_key,
+            "method_key": method_key,
+            "attribute": ACCRETION_ATTR,
+            "measurement_type": ATTRIBUTE_DECL[ACCRETION_ATTR].measurement_type,
+            "subfield": "vertical_accretion",
+            "value": val,
+            "units_raw": rate_units,
+            "sd": np.nan,
+            "se": se,
+            "n": pd.array([pd.NA] * len(sub), dtype="Int64"),
+            "flags": flags,
+            "source_row_ref": "CCN_cores.csv#data_row=" + sub.row_idx.astype(str) + ":" + ACCRETION_ATTR,
+        }
+    )
+    return sample, method, fact
 
 
 # ---------------------------------------------------------------- main build
@@ -527,10 +677,10 @@ def build_tables(
             "vegetated_or_bare": srows.vegetated_or_bare,
             "marsh_zone": srows.marsh_zone,
             "sediment_type": None,  # not in this compilation
-            "median_grain_size_um": None,
             "photosynthetic_sediment": None,
             "taxon": None,
             "taxon_rank": None,
+            **NO_WATER_CONTEXT,
         }
     )
     if units["depthseries"]["depth_min"] != "centimeter" or units["depthseries"]["depth_max"] != "centimeter":
@@ -551,6 +701,7 @@ def build_tables(
     d_max = _num(long.depth_max, "depth_max")
     unit_of = {a: units["depthseries"][a] for a in ATTRIBUTES}
     flags: list[list[str]] = []
+    subfields: list[str | None] = []
     for att, val, dup, lo, hi, mk in zip(
         long.attribute, long.value, long.dup, d_min, d_max, long.method_key
     ):
@@ -572,6 +723,12 @@ def build_tables(
         ):
             f.append("carbon_type_unknown")
         flags.append(f)
+        if att == "dry_bulk_density":
+            subfields.append("dry_bulk_density")
+        elif att == "fraction_organic_matter":
+            subfields.append("loi_organic_matter")
+        else:  # fraction_carbon: by the method row's carbon_type; unknown stays unspecified
+            subfields.append(CARBON_SUBFIELD.get(carbon_type[mk], "carbon_unspecified"))
     fact = pd.DataFrame(
         {
             "source_key": SOURCE_KEY,
@@ -581,6 +738,8 @@ def build_tables(
             "sample_key": long.sample_key,
             "method_key": long.method_key,
             "attribute": long.attribute,
+            "measurement_type": long.attribute.map(lambda a: ATTRIBUTE_DECL[a].measurement_type),
+            "subfield": subfields,
             "value": long.value,
             "units_raw": long.attribute.map(unit_of),
             "sd": np.nan, "se": np.nan, "n": pd.array([pd.NA] * len(long), dtype="Int64"),
@@ -588,6 +747,15 @@ def build_tables(
             "source_row_ref": "CCN_depthseries.csv#data_row=" + long.row_idx.astype(str) + ":" + long.attribute,
         }
     )
+
+    # ---- accretion (G2) facts, core level
+    fact_method_status = fact.method_key.map(method_status).value_counts().to_dict()
+    n_depth_facts = len(fact)
+    acc_sample, acc_method, acc_fact = _accretion(raw["cores"], ctx, units)
+    sample = pd.concat([sample, acc_sample], ignore_index=True)
+    method = pd.concat([method, acc_method], ignore_index=True)
+    fact = pd.concat([fact, acc_fact], ignore_index=True)
+    flags = [list(f) for f in fact["flags"]]
 
     # ---- reference / citation (only studies that have facts)
     studies = sorted(set(fact.reference_key))
@@ -612,6 +780,9 @@ def build_tables(
             "authors": cit.author,
             "year": _int(cit.year, "citation year"),
             "url": cit.url,
+            "openalex_id": None,
+            "doi_resolved": None,
+            "doi_resolution_source": None,
         }
     )
     reference = pd.DataFrame({"source_key": SOURCE_KEY, "reference_key": studies})
@@ -626,7 +797,8 @@ def build_tables(
                 "access_date": access_date,
                 "license": None,
                 "notes": "Tidal-wetland soil carbon profiles; facts = dry_bulk_density, "
-                "fraction_organic_matter, fraction_carbon only (radiometric/dating out of scope).",
+                "fraction_organic_matter, fraction_carbon (C1) and core-level 210Pb CIC accretion (G2); "
+                "other radiometric/dating columns out of scope.",
             }
         ]
     )
@@ -648,7 +820,8 @@ def build_tables(
         "locations": len(loc),
         "methods": len(method),
         "method_status": method.method_status.value_counts().to_dict(),
-        "fact_method_status": fact.method_key.map(method_status).value_counts().to_dict(),
+        "fact_method_status": fact_method_status,
+        "accretion_facts": len(acc_fact),
         "flag_counts": flag_counts,
         "citation_exact_duplicate_rows_collapsed": n_cit_exact_dups,
         "depthseries_rows": len(ds),
@@ -659,7 +832,7 @@ def build_tables(
     }
     # accounting: every non-null measurement cell is either a fact or excluded
     total_cells = int(sum(ds[a].notna().sum() for a in ATTRIBUTES))
-    if report["facts"] + report["facts_excluded"] != total_cells:
+    if n_depth_facts + report["facts_excluded"] != total_cells or len(fact) != n_depth_facts + len(acc_fact):
         raise ContractError("fact + excluded != total non-null measurement cells")
     return tables, skips, report
 

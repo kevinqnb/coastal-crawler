@@ -15,6 +15,7 @@ import pytest
 
 from coastal_crawler.compilations import (
     ContractError,
+    add_derived_labels,
     assign_global_keys,
     build_compilations,
     empty_table,
@@ -87,19 +88,30 @@ def _build(rows=ROWS):
 
 def test_counts_and_accounting():
     tables, skips, report = _build()
-    # 6 source rows = 5 facts + 1 empty row
-    assert report["source_rows"] == 6 and report["facts"] == 5
+    # 6 source rows = 5 O2 facts + 1 empty row; rows 3 and 4 also give a grain-size fact
+    assert report["source_rows"] == 6 and report["facts"] == 7 and report["grain_size_facts"] == 2
     assert [s["reason"] for s in skips] == ["empty_row"] and skips[0]["data_row"] == 5
     assert report["facts_by_attribute"] == {
         "scoc_tou": 2, "scoc_unspecified": 1, "scoc_dou": 1, "scoc_aou": 1,
+        "scoc_median_grain_size": 2,
     }
-    validate_tables(tables)  # whole contract incl. new table / nullable FK
+    validate_tables(add_derived_labels(tables))  # whole contract incl. vocabulary
 
 
 def test_values_units_and_provenance():
     f = _build()[0]["fact"].set_index("fact_key")
     assert f.loc["row3:scoc_dou", "value"] == 7.0
-    assert set(f.units_raw) == {"mmol O2 m-2 d-1"}
+    assert set(f.units_raw) == {"mmol O2 m-2 d-1", "um"}
+    # B5 for the O2 rates, G1 for grain size; subfield NULL when flux type unstated
+    assert f.loc["row3:scoc_dou", "measurement_type"] == "B5" and f.loc["row3:scoc_dou", "subfield"] == "diffusive_o2_uptake"
+    assert f.loc["row4:scoc_aou", "subfield"] == "advective_o2_uptake"
+    assert f.loc["row0:scoc_tou", "subfield"] == "total_o2_uptake"
+    assert pd.isna(f.loc["row2:scoc_unspecified", "subfield"])
+    g = f.loc["row3:scoc_median_grain_size"]
+    assert (g.value, g.units_raw, g.measurement_type, g.subfield) == (120.0, "um", "G1", "median_grain_size")
+    assert f.loc["row4:scoc_median_grain_size", "value"] == 33.5
+    assert "row0:scoc_median_grain_size" not in f.index  # grain size was NA
+    assert g.source_row_ref == "SCOC_database_version_1.csv#data_row=3:scoc_median_grain_size"
     assert f.loc["row3:scoc_dou", "source_row_ref"] == "SCOC_database_version_1.csv#data_row=3:scoc_dou"
     assert f.sd.isna().all() and f.se.isna().all() and f.n.isna().all()
 
@@ -113,6 +125,7 @@ def test_flags():
     ]
     assert f.loc["row3:scoc_dou", "flags"] == []
     assert f.loc["row4:scoc_aou", "flags"] == []
+    assert f.loc["row3:scoc_median_grain_size", "flags"] == []
 
 
 def test_location_standardisation():
@@ -120,13 +133,13 @@ def test_location_standardisation():
     # 255.7367 - 360 exactly, by decimal arithmetic (no float noise)
     assert loc.loc["Reg1, X", "longitude"] == -104.2633
     assert loc.loc["Reg1, X", "latitude"] == 10.5
-    assert loc.loc["Reg1, X", "elevation"] == -100.0 and loc.loc["Reg1, X", "elevation_units"] == "m"
-    assert loc.loc["Reg1, X", "elevation_datum"] == "water surface"
+    assert loc.loc["Reg1, X", "water_depth_m"] == 100.0  # positive down
+    assert pd.isna(loc.loc["Reg1, X", "elevation"]) and pd.isna(loc.loc["Reg1, X", "elevation_datum"])
     assert loc.loc["Reg1, X", "water_body"] == "Pacific Ocean"
     assert loc.loc["Reg1, X", "habitat_type"] == "continental shelf (>50-200m)"
     assert loc.loc["Reg1, X", "position_method"] == "approximated location"
-    assert loc.loc["Reg3", "longitude"] == -70.5 and loc.loc["Reg3", "elevation"] == -10.5
-    assert pd.isna(loc.loc["Reg2", "latitude"]) and pd.isna(loc.loc["Reg2", "elevation"])
+    assert loc.loc["Reg3", "longitude"] == -70.5 and loc.loc["Reg3", "water_depth_m"] == 10.5
+    assert pd.isna(loc.loc["Reg2", "latitude"]) and pd.isna(loc.loc["Reg2", "water_depth_m"])
     assert pd.isna(loc.loc["Reg2", "elevation_units"]) and pd.isna(loc.loc["Reg2", "position_method"])
     assert len(loc) == 4  # rows 0 and 1 share one location
 
@@ -135,8 +148,7 @@ def test_sample_and_method_labels():
     t = _build()[0]
     s = t["sample"].set_index("sample_key")
     assert s.loc["row0", "sediment_type"] == "silt"  # stripped
-    assert pd.isna(s.loc["row0", "median_grain_size_um"]) and s.loc["row3", "median_grain_size_um"] == 120.0
-    assert pd.isna(s.loc["row2", "median_grain_size_um"])
+    assert "median_grain_size_um" not in s.columns  # grain size is a G1 fact now
     assert s.loc["row3", "photosynthetic_sediment"] == "not investigated"  # kept as a label
     assert pd.isna(s.loc["row2", "photosynthetic_sediment"])  # NA -> NULL
     assert s.sampling_year.isna().all()
@@ -145,6 +157,23 @@ def test_sample_and_method_labels():
     assert m.loc["scoc_dou", "in_situ_ex_situ"] == "ex situ"  # trailing space stripped
     assert m.loc["scoc_dou", "light_dark"] == "not investigated"
     assert m.loc["scoc_dou", "method_status"] == "matched"
+
+
+def test_labels_from_label_map():
+    loc = add_derived_labels(_build()[0])["location"].set_index("site_name")
+    # every Depth range label -> subtidal soft sediment / soft; setting from the depth class
+    assert set(loc.habitat) == {"Subtidal soft sediment"} and set(loc.bottom_type) == {"soft"}
+    assert loc.loc["Reg1, X", "setting"] == "shelf"
+    assert pd.isna(loc.loc["Reg2", "setting"])  # near-shore: blank on purpose
+    assert loc.modification_class.map(len).eq(0).all()
+
+
+def test_unmapped_raw_label_raises():
+    rows = [list(r) for r in ROWS]
+    rows[2][6] = "hadal trench"  # a Depth range label with no row in the label map
+    tables = _build(rows)[0]
+    with pytest.raises(Exception, match="hadal trench"):
+        add_derived_labels(tables)
 
 
 def test_references_citations_screening():
@@ -237,7 +266,8 @@ def _second_source(tables):
 
 def test_nullable_fk_global_keys_and_duckdb(tmp_path):
     tables = _build()[0]
-    glob = assign_global_keys([tables, _second_source(tables)])
+    derived = add_derived_labels(tables)
+    glob = assign_global_keys([derived, _second_source(derived)])
     sc = glob["study_screening"]
     assert len(sc) == 7  # the empty screening table of the second source adds nothing
     by = sc.set_index("study_key")
@@ -249,7 +279,7 @@ def test_nullable_fk_global_keys_and_duckdb(tmp_path):
     assert refs.loc[rid, "reference_key"] == "study_003+study_004" and refs.loc[rid, "source_key"] == "stratma-scoc"
     out = tmp_path / "c.duckdb"
     counts = build_compilations_from(tables, tmp_path, out)
-    assert counts["study_screening_dim"] == 7 and counts["measurement_fact"] == 5
+    assert counts["study_screening_dim"] == 7 and counts["measurement_fact"] == 7
     con = duckdb.connect(str(out), read_only=True)
     n_null = con.execute("select count(*) from study_screening_dim where reference_id is null").fetchone()[0]
     n_ref = con.execute(
@@ -257,7 +287,8 @@ def test_nullable_fk_global_keys_and_duckdb(tmp_path):
     ).fetchone()[0]
     assert (n_null, n_ref) == (2, 5)
     cols = {r[0] for r in con.execute("describe sample_dim").fetchall()}
-    assert {"sediment_type", "median_grain_size_um", "photosynthetic_sediment"} <= cols
+    assert {"sediment_type", "photosynthetic_sediment", "bottom_water_o2"} <= cols
+    assert "median_grain_size_um" not in cols
     assert "water_body" in {r[0] for r in con.execute("describe location_dim").fetchall()}
     con.close()
 
@@ -272,4 +303,4 @@ def test_nullable_fk_dangling_value_raises():
     tables = _build()[0]
     tables["study_screening"].loc[0, "reference_key"] = "no_such_reference"
     with pytest.raises(ContractError, match="not in reference"):
-        validate_tables(tables)
+        validate_tables(add_derived_labels(tables))

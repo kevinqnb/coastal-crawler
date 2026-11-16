@@ -12,11 +12,21 @@ station. Values are carried exactly as reported, in the source's units
 (``mmol O2 m-2 d-1``, read from the column header and asserted). Suspicious values
 are FLAGGED in ``fact.flags``, never changed or dropped.
 
-Attribute (from the TOU/DOU/AOU column; different quantities, never mixed):
-  TOU -> scoc_tou (total oxygen uptake)   DOU -> scoc_dou (diffusive oxygen uptake)
-  AOU -> scoc_aou (advective oxygen uptake)
-  NA  -> scoc_unspecified (20 rows, all one study; flux type not stated) + flag
-         ``flux_type_missing``.
+Attribute (from the TOU/DOU/AOU column; different quantities, never mixed), all
+measurement type B5 (benthic metabolism); ``fact.subfield`` in brackets:
+  TOU -> scoc_tou (total oxygen uptake) [total_o2_uptake]
+  DOU -> scoc_dou (diffusive oxygen uptake) [diffusive_o2_uptake]
+  AOU -> scoc_aou (advective oxygen uptake) [advective_o2_uptake; a declared extension
+         of the standard B5 subfields]
+  NA  -> scoc_unspecified (20 rows, all one study; flux type not stated) [NULL subfield]
+         + flag ``flux_type_missing``.
+Plus ONE G1 fact per data row with a median grain size: scoc_median_grain_size
+[median_grain_size], units ``um`` (the source header's "?m" is a mangled micro sign), its
+own method row per study (no method information), flags = the row's location/duplicate/
+study flags (+ ``zero_value`` if 0).
+Standard labels (habitat, setting) come from ``compilation_label_maps.csv``: habitat = subtidal soft
+sediment for every ``Depth range`` label; setting shelf / open ocean for the shelf and
+abyssal labels, blank for near-shore and slope.
 
 Fail loud. The only exclusion is a row whose every field is blank (reason
 ``empty_row``, listed in ``skip_report.jsonl``); a row that is only partly blank
@@ -28,15 +38,13 @@ Standardisation / derived-field rules (the raw value is recoverable through
     ``not investigated`` is kept as a label (it is information, not missing).
   * longitude: if > 180 (source mixes 0-360 and +-180) subtract 360 using exact decimal
     arithmetic; flag ``lon_wrapped``. latitude and longitude are otherwise unchanged.
-  * elevation = -(Depth (m)), units "m", datum "water surface" (sign convention only;
-    negative = below the sea surface).  ``habitat_type`` = the source's ``Depth range``
-    label; ``water_body`` = ``Ocean``; ``site_name`` = ``Region``.
+  * water_depth_m = Depth (m), unchanged (positive down); elevation is NULL.  ``habitat_type`` = the source's ``Depth range``
+    label (a depth class, kept raw); ``water_body`` = ``Ocean``; ``site_name`` = ``Region``.
     ``position_method`` = the source's ``Location`` label (exact / approximated location).
   * No country / admin_division is parsed out of ``Region``.
   * sample: one row per data row (the flux is for the whole community at the sediment
-    surface, so there is no sediment depth interval); sediment type, median grain
-    size (um; the source header's "?m" is a mangled micro sign) and the
-    photosynthetic-sediment label go in the new sample columns.
+    surface, so there is no sediment depth interval); sediment type and the
+    photosynthetic-sediment label are sample columns.
   * method: technique = measuring device; in_situ_ex_situ and light_dark raw labels.
     ``method_status`` is ``matched`` when device and in/ex-situ are present and
     ``method_id_null`` when both are NA (the source has no method id at all).
@@ -63,12 +71,15 @@ import argparse
 import json
 import re
 from decimal import Decimal
+import sys
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pandas as pd
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # data/compilations/
+from compilation_vocab import ATTRIBUTES as ATTRIBUTE_DECL  # noqa: E402
 from coastal_crawler.compilations import ContractError, write_extracted
 
 SOURCE_KEY = "stratma-scoc"
@@ -104,6 +115,18 @@ ALLOWED_SKIP_REASONS = frozenset({"empty_row"})
 # eligibility phase). Kept and flagged ``study_marked_excluded``; any other mismatch raises.
 KNOWN_USED_BUT_NOT_INCLUDED = frozenset({"study_251"})
 NULL_LITERALS = frozenset({"", "NA", "Na"})
+GRAIN_ATTR = "scoc_median_grain_size"
+GRAIN_UNITS = "um"
+SUBFIELD_BY_ATTR = {
+    "scoc_tou": "total_o2_uptake",
+    "scoc_dou": "diffusive_o2_uptake",
+    "scoc_aou": "advective_o2_uptake",
+    "scoc_unspecified": None,
+}
+NO_WATER_CONTEXT = {  # in-situ water context columns on sample_dim this compilation does not have
+    "sample_depth_m": np.nan, "water_temperature_c": np.nan, "water_salinity": np.nan,
+    "water_salinity_units": None, "bottom_water_o2": np.nan, "bottom_water_o2_units": None,
+}
 DEPTH_NOTES = "sediment-water interface flux; no sediment depth interval"
 
 # data-reference prefix -> list-of-studies prefixes (normalised strings, see _norm).
@@ -361,13 +384,14 @@ def build_tables(
             "tidal_position_level": None,
             "modification_status": [[] for _ in range(len(first))],
             "dominant_species": [[] for _ in range(len(first))],
-            "elevation": -first.depth_v,
-            "elevation_units": np.where(first.depth_v.notna(), "m", None),
-            "elevation_datum": np.where(first.depth_v.notna(), "water surface", None),
+            "elevation": np.nan,  # water depth is water_depth_m, not an elevation
+            "elevation_units": None,
+            "elevation_datum": None,
             "elevation_method": None,
+            "water_depth_m": first.depth_v,
+            "distance_to_shore_km": np.nan,
         }
     )
-    loc["elevation"] = loc.elevation.where(loc.elevation.notna(), np.nan)
 
     # ---- sample (one per data row)
     d["sample_key"] = "row" + d.row_idx.astype(str)
@@ -388,8 +412,8 @@ def build_tables(
             "vegetated_or_bare": None,
             "marsh_zone": None,
             "sediment_type": d.sed,
-            "median_grain_size_um": d.grain_v,
             "photosynthetic_sediment": d.photo,
+            **NO_WATER_CONTEXT,
         }
     )
 
@@ -416,6 +440,8 @@ def build_tables(
             "conversion_applied": None,
             "in_situ_ex_situ": mfirst.insitu,
             "light_dark": mfirst.dl,
+            "incubation_type": None,
+            "experimental_status": None,
             "params": [json.dumps({"flux_type": f}, sort_keys=True) for f in mfirst.flux],
         }
     )
@@ -423,6 +449,7 @@ def build_tables(
 
     # ---- fact
     flags: list[list[str]] = []
+    loc_flags: list[list[str]] = []  # flags about the station / source row, shared by the G1 fact
     not_incl = {k for k in studies.study_key[studies.database_status != "included"]}
     for r, w, dp in zip(d.itertuples(index=False), d.wrapped, dup):
         f: list[str] = []
@@ -438,14 +465,15 @@ def build_tables(
             f.append("coords_approximate")
         if np.isnan(r.depth_v):
             f.append("depth_missing")
-        if mstatus[r.method_key] != "matched":
-            f.append("method_missing")
-        if r.flux is None:
-            f.append("flux_type_missing")
         if dp:
             f.append("duplicate_source_row")
         if not_incl & set(r.reference_key.split("+")):
             f.append("study_marked_excluded")
+        loc_flags.append(sorted(x for x in f if x != "zero_value"))
+        if mstatus[r.method_key] != "matched":
+            f.append("method_missing")
+        if r.flux is None:
+            f.append("flux_type_missing")
         flags.append(sorted(f))
     if set(d.locq.dropna()) - {"exact location", "approximated location"}:
         raise ContractError(f"unknown Location labels {set(d.locq.dropna())}")
@@ -458,6 +486,8 @@ def build_tables(
             "sample_key": d.sample_key,
             "method_key": d.method_key,
             "attribute": d.attribute,
+            "measurement_type": d.attribute.map(lambda a: ATTRIBUTE_DECL[a].measurement_type),
+            "subfield": d.attribute.map(SUBFIELD_BY_ATTR),
             "value": d.scoc_v,
             "units_raw": EXPECTED_UNITS,
             "sd": np.nan,
@@ -467,6 +497,58 @@ def build_tables(
             "source_row_ref": DATA_FILE + "#data_row=" + d.row_idx.astype(str) + ":" + d.attribute,
         }
     )
+    fact["subfield"] = fact.subfield.astype(object).where(fact.subfield.notna(), None)
+
+    # ---- G1 facts: one per data row with a median grain size (no method info: one method
+    # row per study)
+    g = d[d.grain_v.notna()]
+    g_flags = [
+        sorted(lf + (["zero_value"] if gv == 0 else []))
+        for lf, gv, has in zip(loc_flags, d.grain_v, d.grain_v.notna()) if has
+    ]
+    g_method_key = g.reference_key + "|" + GRAIN_ATTR
+    gm = pd.DataFrame({"reference_key": g.reference_key, "method_key": g_method_key}).drop_duplicates(
+        "method_key"
+    ).sort_values("method_key")
+    grain_method = pd.DataFrame(
+        {
+            "source_key": SOURCE_KEY,
+            "method_key": gm.method_key,
+            "source_method_id": None,
+            "attribute": GRAIN_ATTR,
+            "method_status": "method_id_null",
+            "technique": None, "coring_method": None, "carbon_type": None,
+            "carbon_measured_or_modeled": None, "fraction_carbon_method": None,
+            "carbonates_removed": None, "carbonate_removal_method": None,
+            "conversion_applied": None, "in_situ_ex_situ": None, "light_dark": None,
+            "incubation_type": None, "experimental_status": None,
+            "params": json.dumps({"source_column": "median sediment grain size (?m)"}, sort_keys=True),
+        }
+    )
+    grain_fact = pd.DataFrame(
+        {
+            "source_key": SOURCE_KEY,
+            "fact_key": g.sample_key + ":" + GRAIN_ATTR,
+            "reference_key": g.reference_key,
+            "location_key": g.location_key,
+            "sample_key": g.sample_key,
+            "method_key": g_method_key,
+            "attribute": GRAIN_ATTR,
+            "measurement_type": ATTRIBUTE_DECL[GRAIN_ATTR].measurement_type,
+            "subfield": "median_grain_size",
+            "value": g.grain_v,
+            "units_raw": GRAIN_UNITS,
+            "sd": np.nan,
+            "se": np.nan,
+            "n": None,
+            "flags": g_flags,
+            "source_row_ref": DATA_FILE + "#data_row=" + g.row_idx.astype(str) + ":" + GRAIN_ATTR,
+        }
+    )
+    n_o2_facts = len(fact)
+    fact = pd.concat([fact, grain_fact], ignore_index=True)
+    method = pd.concat([method, grain_method], ignore_index=True)
+    flags = [list(f) for f in fact["flags"]]
 
     # ---- reference / citation / study_screening
     ref_keys = sorted(set(d.reference_key))
@@ -495,6 +577,9 @@ def build_tables(
             "authors": None,
             "year": pd.Series([year(s) for s in cit.study_citation], index=cit.index, dtype="Int64"),
             "url": None,
+            "openalex_id": None,
+            "doi_resolved": None,
+            "doi_resolution_source": None,
         }
     )
     screening = pd.DataFrame(
@@ -538,6 +623,7 @@ def build_tables(
         "source_rows": n_source,
         "facts": len(fact),
         "facts_excluded": len(skips),
+        "grain_size_facts": len(grain_fact),
         "facts_by_attribute": fact.attribute.value_counts().to_dict(),
         "samples": len(sample),
         "locations": len(loc),
@@ -550,10 +636,12 @@ def build_tables(
         "flag_counts": flag_counts,
     }
     # accounting: every source row is a fact or a listed exclusion
-    if report["facts"] + report["facts_excluded"] != n_source:
-        raise ContractError("facts + excluded rows != source rows")
-    if len(fact) != len(d):
-        raise ContractError("fact count != non-blank data rows")
+    if n_o2_facts + report["facts_excluded"] != n_source:
+        raise ContractError("O2 facts + excluded rows != source rows")
+    if n_o2_facts != len(d):
+        raise ContractError("O2 fact count != non-blank data rows")
+    if len(fact) != n_o2_facts + int(d.grain_v.notna().sum()):
+        raise ContractError("fact count != O2 facts + non-blank grain-size cells")
     return tables, skips, report
 
 

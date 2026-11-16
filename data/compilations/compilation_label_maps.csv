@@ -1,0 +1,76 @@
+source_key,raw_column,raw_label,mapped_column,mapped_label
+smithsonian-coastal-carbon,habitat_type,marsh,habitat,Tidal marsh
+smithsonian-coastal-carbon,habitat_type,mangrove,habitat,Mangrove forest
+smithsonian-coastal-carbon,habitat_type,seagrass,habitat,Seagrass meadow
+smithsonian-coastal-carbon,habitat_type,mudflat,habitat,Tidal flat
+smithsonian-coastal-carbon,habitat_type,swamp,habitat,
+smithsonian-coastal-carbon,habitat_type,scrub/shrub,habitat,
+smithsonian-coastal-carbon,habitat_type,upland,habitat,
+smithsonian-coastal-carbon,habitat_type,sabkha,habitat,
+smithsonian-coastal-carbon,habitat_type,microbial mat,habitat,
+smithsonian-coastal-carbon,habitat_type,algal mat,habitat,
+smithsonian-coastal-carbon,habitat_type,unvegetated,habitat,
+smithsonian-coastal-carbon,salinity_class,fresh,salinity_zone,limnetic
+smithsonian-coastal-carbon,salinity_class,oligohaline,salinity_zone,oligohaline
+smithsonian-coastal-carbon,salinity_class,mesohaline,salinity_zone,mesohaline
+smithsonian-coastal-carbon,salinity_class,polyhaline,salinity_zone,polyhaline
+smithsonian-coastal-carbon,salinity_class,brine,salinity_zone,hyperhaline
+smithsonian-coastal-carbon,salinity_class,mixoeuhaline,salinity_zone,
+smithsonian-coastal-carbon,salinity_class,saline,salinity_zone,
+smithsonian-coastal-carbon,salinity_class,brackish,salinity_zone,
+smithsonian-coastal-carbon,salinity_class,estuarine,salinity_zone,
+smithsonian-coastal-carbon,salinity_class,deltaic,salinity_zone,
+smithsonian-coastal-carbon,salinity_class,riverine,salinity_zone,
+smithsonian-coastal-carbon,salinity_class,estuarine C-CAP,salinity_zone,
+smithsonian-coastal-carbon,salinity_class,palustrine,salinity_zone,
+smithsonian-coastal-carbon,salinity_class,brackish to fresh,salinity_zone,
+smithsonian-coastal-carbon,salinity_class,brackish to saline,salinity_zone,
+smithsonian-coastal-carbon,salinity_class,fresh,setting,
+smithsonian-coastal-carbon,salinity_class,oligohaline,setting,
+smithsonian-coastal-carbon,salinity_class,mesohaline,setting,
+smithsonian-coastal-carbon,salinity_class,polyhaline,setting,
+smithsonian-coastal-carbon,salinity_class,brine,setting,
+smithsonian-coastal-carbon,salinity_class,mixoeuhaline,setting,
+smithsonian-coastal-carbon,salinity_class,saline,setting,
+smithsonian-coastal-carbon,salinity_class,brackish,setting,
+smithsonian-coastal-carbon,salinity_class,estuarine,setting,estuary
+smithsonian-coastal-carbon,salinity_class,deltaic,setting,river delta
+smithsonian-coastal-carbon,salinity_class,riverine,setting,
+smithsonian-coastal-carbon,salinity_class,estuarine C-CAP,setting,
+smithsonian-coastal-carbon,salinity_class,palustrine,setting,
+smithsonian-coastal-carbon,salinity_class,brackish to fresh,setting,
+smithsonian-coastal-carbon,salinity_class,brackish to saline,setting,
+smithsonian-coastal-carbon,modification_status,natural,modification_class,natural
+smithsonian-coastal-carbon,modification_status,ditched,modification_class,
+smithsonian-coastal-carbon,modification_status,tidally restored,modification_class,restored
+smithsonian-coastal-carbon,modification_status,restored,modification_class,restored
+smithsonian-coastal-carbon,modification_status,farmed,modification_class,
+smithsonian-coastal-carbon,modification_status,impounded,modification_class,
+smithsonian-coastal-carbon,modification_status,sediment added,modification_class,
+smithsonian-coastal-carbon,modification_status,degraded,modification_class,
+smithsonian-coastal-carbon,modification_status,wetlands built,modification_class,created
+smithsonian-coastal-carbon,modification_status,wood harvesting,modification_class,
+smithsonian-coastal-carbon,modification_status,canalled,modification_class,
+smithsonian-coastal-carbon,modification_status,storm or wind,modification_class,
+smithsonian-coastal-carbon,modification_status,agro-industrial deforestation,modification_class,
+smithsonian-coastal-carbon,modification_status,disturbed,modification_class,
+smithsonian-coastal-carbon,modification_status,firewood extraction,modification_class,
+smithsonian-coastal-carbon,modification_status,tidally restricted,modification_class,
+smithsonian-coastal-carbon,modification_status,invasive plants removed,modification_class,
+smithsonian-coastal-carbon,modification_status,restoring,modification_class,
+smithsonian-coastal-carbon,modification_status,salt impacted,modification_class,
+smithsonian-coastal-carbon,modification_status,diked and drained,modification_class,
+smithsonian-coastal-carbon,modification_status,revegetated,modification_class,restored
+smithsonian-coastal-carbon,modification_status,managed,modification_class,
+smithsonian-coastal-carbon,modification_status,managed impounded,modification_class,
+stratma-scoc,habitat_type,near-shore (0-50m),habitat,Subtidal soft sediment
+stratma-scoc,habitat_type,continental shelf (>50-200m),habitat,Subtidal soft sediment
+stratma-scoc,habitat_type,continental slope (>200-2000m),habitat,Subtidal soft sediment
+stratma-scoc,habitat_type,abyssal plain/ continental rise (>2000m),habitat,Subtidal soft sediment
+stratma-scoc,habitat_type,near-shore (0-50m),setting,
+stratma-scoc,habitat_type,continental shelf (>50-200m),setting,shelf
+stratma-scoc,habitat_type,continental slope (>200-2000m),setting,
+stratma-scoc,habitat_type,abyssal plain/ continental rise (>2000m),setting,open ocean
+foster-seagrass,habitat_type,seagrass,habitat,Seagrass meadow
+foster-seagrass,geomorphic_setting,Coastal,setting,
+foster-seagrass,geomorphic_setting,Estuarine,setting,estuary

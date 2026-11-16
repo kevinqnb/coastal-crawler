@@ -235,6 +235,8 @@ out/*
 !/data/compilations/
 /data/compilations/*
 !/data/compilations/README.md
+!/data/compilations/compilation_vocab.py
+!/data/compilations/compilation_label_maps.csv
 !/data/compilations/*/
 /data/compilations/*/*
 !/data/compilations/*/extract.py

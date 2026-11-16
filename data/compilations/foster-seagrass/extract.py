@@ -19,7 +19,17 @@ Attributes (source column -> attribute, units_raw):
   Percent.cover....                           -> seagrass_percent_cover                 %  (kept as a percentage)
   Above/Below/Total/Shoot/Leaf.production.. . -> seagrass_production_above/_below/_total/_shoot/_leaf   g DW m-2 d-1
 
-NOT LOADED (deliberate, 2026-11-15): the 19 ``BO22_*`` columns are Bio-ORACLE gridded
+Measurement types (``compilation_vocab.ATTRIBUTES``; ``fact.measurement_type`` /
+``subfield``): biomass above/below/total -> B2 above_ground_biomass / below_ground_biomass /
+total_biomass; shoot density -> B3 shoot_or_stem_density; leaf density -> B3 leaf_density
+(declared extension); percent cover -> B3 percent_cover; production above/below ->
+B6 above_ground_npp / below_ground_npp; production total/shoot/leaf -> B6 total_npp /
+shoot_production / leaf_production (declared extensions). Production is per DAY here
+(``g DW m-2 d-1``) where the standard B6 lists per year: carried as reported. Standard labels:
+habitat = Seagrass meadow (from the constant ``seagrass``), setting = estuary for
+``Geotype`` Estuarine (Coastal -> blank), via ``compilation_label_maps.csv``.
+
+NOT LOADED (deliberate): the 19 ``BO22_*`` columns are Bio-ORACLE gridded
 model/satellite climatology looked up at each coordinate (2000-2014), not seagrass
 measurements and not study results. They are asserted to be present and are listed in
 ``extract_report.json``; they create no facts. They can be added later as a
@@ -82,11 +92,14 @@ import argparse
 import json
 import math
 import re
+import sys
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # data/compilations/
+from compilation_vocab import ATTRIBUTES as ATTRIBUTE_DECL  # noqa: E402
 from coastal_crawler.compilations import ContractError, empty_table, write_extracted
 
 SOURCE_KEY = "foster-seagrass"
@@ -299,6 +312,8 @@ def build_tables(
             "elevation_units": None,
             "elevation_datum": None,
             "elevation_method": None,
+            "water_depth_m": np.nan,
+            "distance_to_shore_km": np.nan,
         }
     ).reset_index(drop=True)
 
@@ -321,8 +336,13 @@ def build_tables(
             "vegetated_or_bare": None,
             "marsh_zone": None,
             "sediment_type": None,
-            "median_grain_size_um": np.nan,
             "photosynthetic_sediment": None,
+            "sample_depth_m": np.nan,
+            "water_temperature_c": np.nan,
+            "water_salinity": np.nan,
+            "water_salinity_units": None,
+            "bottom_water_o2": np.nan,
+            "bottom_water_o2_units": None,
         }
     ).reset_index(drop=True)
 
@@ -363,6 +383,8 @@ def build_tables(
                     "sample_key": r.sample_key,
                     "method_key": attr,
                     "attribute": attr,
+                    "measurement_type": ATTRIBUTE_DECL[attr].measurement_type,
+                    "subfield": next(iter(ATTRIBUTE_DECL[attr].subfields)),
                     "value": float(val[attr][i]),
                     "units_raw": units,
                     "sd": np.nan,
@@ -401,6 +423,8 @@ def build_tables(
             "conversion_applied": None,
             "in_situ_ex_situ": None,
             "light_dark": None,
+            "incubation_type": None,
+            "experimental_status": None,
             "params": params,
         }
     )
@@ -426,6 +450,9 @@ def build_tables(
             "authors": None,
             "year": pd.array([year(s) for s in cits.ref_norm], dtype="Int64"),
             "url": None,
+            "openalex_id": None,
+            "doi_resolved": None,
+            "doi_resolution_source": None,
         }
     ).reset_index(drop=True)
 
