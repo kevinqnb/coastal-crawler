@@ -85,3 +85,18 @@ stratma-bio,habitat_type,near-shore (0-50m),setting,
 stratma-bio,habitat_type,continental shelf (>50-200m),setting,shelf
 stratma-bio,habitat_type,continental slope (>200-2000m),setting,
 stratma-bio,habitat_type,abyssal plain/ continental rise (>2000m),setting,open ocean
+usgs-wetlands,habitat_type,salt marsh,habitat,Tidal marsh
+usgs-wetlands,habitat_type,mangrove,habitat,Mangrove forest
+usgs-wetlands,habitat_type,salt flat,habitat,
+usgs-wetlands,habitat_type,salt marsh mangrove,habitat,
+rosentreter-ghg,habitat_type,water column,habitat,Water column
+rosentreter-ghg,habitat_type,Mangroves,habitat,Mangrove forest
+rosentreter-ghg,habitat_type,Saltmarshes,habitat,Tidal marsh
+rosentreter-ghg,habitat_type,Seagrasses,habitat,Seagrass meadow
+rosentreter-ghg,geomorphic_setting,Tidal systems and deltas,setting,
+rosentreter-ghg,geomorphic_setting,Lagoons,setting,coastal lagoon
+rosentreter-ghg,geomorphic_setting,Fjords,setting,fjord
+chang-denitrification,habitat_type,,habitat,
+ray-oyster,habitat_type,Reef,habitat,Shellfish reef / bed
+ray-oyster,habitat_type,Aquaculture,habitat,
+ray-oyster,habitat_type,Mesocosm,habitat,

@@ -171,7 +171,46 @@ ATTRIBUTES: dict[str, AttrDecl] = {
     # BenBioDen (stratma-bio): total biomass (four unit spellings, one per source row) and total density
     "benbio_biomass": _d("B10", {"total_biomass"}, {"g WM/ m2", "g DM/ m2", "g C/ m2", "g AFDM/ m2"}),
     "benden_density": _d("B10", {"total_density"}, {"ind/ m2"}),
+    # USGS tidal saline wetlands (Feher et al.): one attribute per workbook sheet
+    "usgs_canopy_height": _d("B3", {"canopy_height"}, {"m"}),
+    "usgs_aboveground_biomass": _d("B2", {"above_ground_biomass"}, {"t/ha"}),
+    "usgs_productivity": _d("B6", {"litterfall", "above_ground_npp", None}, {"t/ha/yr"}),
+    "usgs_soil_c_density": _d("C1", {"soil_carbon_density"}, {"g/cm3"}),
+    "usgs_soil_c_accum": _d("G2", {"carbon_burial"}, {"g/m2/yr"}),
+    # Rosentreter et al. coastal GHG database: estuary (water-air) vs vegetated-coast fluxes are separate
+    # attributes because the exchange interface differs; units are the sheet header spellings
+    "ghg_co2_estuary": _d("C8", {"co2_flux"}, {"g CO2 m2 d-1"}),
+    "ghg_ch4_estuary": _d("C8", {"ch4_flux"}, {"mg CH4 m2 d-1"}),
+    "ghg_n2o_estuary": _d("C8", {"n2o_flux"}, {"mg N2O m2 d-1"}),
+    "ghg_co2_vegetation": _d("C8", {"co2_flux"}, {"g C m2 yr-1"}),
+    "ghg_ch4_vegetation": _d("C8", {"ch4_flux"}, {"mg CH4 m2 d-1"}),
+    "ghg_n2o_vegetation": _d("C8", {"n2o_flux"}, {"mg N2O m2 d-1"}),
+    # Chang et al. benthic N loss (units: header spellings, thin/no-break spaces as plain spaces)
+    "chang_denitrification": _d("C4", {"denitrification"}, {"μmol N m−2 h−1"}),
+    "chang_anammox": _d("C4", {"anammox"}, {"μmol N m−2 h−1"}),
+    "chang_total_n2_production": _d("C4", {"total_n2_production"}, {"μmol N m−2 h−1"}),
+    "chang_organic_carbon": _d("C1", {"organic_carbon"}, {"%"}),
+    "chang_c_n_ratio": _d("C1", {"c_n_ratio"}, {"mol:mol"}),
+    "chang_o2_penetration_depth": _d("C2", {"o2_penetration_depth"}, {"mm"}),
+    # J1 joined fields (water-medium in-situ values); shared across compilations, each declares its own units
+    "water_nitrate": _d("J1", {"nitrate"}, {"μM"}),
+    "water_ammonium": _d("J1", {"ammonium"}, {"μM"}),
+    "water_o2": _d("J1", {"dissolved_oxygen"}, {"μM"}),
 }
+
+# Ray and Fulweiler oyster meta-analysis: one attribute per solute and per sheet. The workbook has no units; the paper
+# (Nature Sustainability 4, 261-269, Methods) says the authors converted all sediment fluxes to umol m-2 h-1 and all
+# oyster fluxes to umol per individual and hour (its Table 1 shows N2O and CH4 as nmol, ie x1000 of the file's values).
+_RAY_TYPES = {  # solute -> (type, subfield)
+    "n2": ("C4", "denitrification"), "nh4": ("C3", "ammonium_flux"), "n2o": ("C8", "n2o_flux"),
+    "co2": ("C8", "co2_flux"), "po4": ("C3", "phosphate_flux"), "ch4": ("C8", "ch4_flux"),
+    "si": ("C3", "silicate_flux"), "nox": ("C3", "nitrate_nitrite_flux"), "no3": ("C3", "nitrate_flux"),
+    "no2": ("C3", "nitrite_flux"),
+}
+for _sol, (_t, _sub) in _RAY_TYPES.items():
+    ATTRIBUTES[f"ray_sediment_{_sol}"] = _d(_t, {_sub}, {"µmol m−2 h−1"})
+    if _sol not in ("co2", "si"):  # the oyster sheet has no CO2 or Si columns
+        ATTRIBUTES[f"ray_oyster_{_sol}"] = _d(_t, {_sub}, {"µmol ind−1 h−1"})
 
 
 def check_attribute_decls() -> None:
@@ -252,6 +291,8 @@ FLAGS: dict[str, str] = {
     "sd_converted_from_se": "the source converted a reported SE to an SD",
     "converted_by_source": "the source converted this value (or its unit) from the original",
     "calculated_by_source": "the source calculated this value from other information",
+    "negative_sd": "the source's SD is negative (impossible); kept as reported",
+    "assigned_by_source": "value assigned by the source from a rule or habitat class, not measured (USGS salt-flat zeros)",
     "potential_rate": "rate is a potential rate (e.g. acetylene block), not an ambient rate",
     "source_site_averaged": "source value is an average over sites",
     "source_time_averaged": "source value is an average over time",

@@ -33,7 +33,7 @@ data/compilations/
 
 Code: `src/coastal_crawler/compilations.py` (table contract, validation, key
 assignment, DuckDB write), `scripts/build_compilations.py` (CLI),
-`tests/test_compilations_{ccn,scoc,foster,strydom,bio}.py`, `tests/test_compilation_vocab.py`.
+`tests/test_compilations_{ccn,scoc,foster,strydom,bio,usgs,rosentreter,chang,ray}.py`, `tests/test_compilation_vocab.py`.
 
 ## Workflow
 
@@ -145,9 +145,9 @@ bottom water); sediment-medium values are C2 (porewater) or `other`, and bottom-
 measured beside a benthic rate stays in the `bottom_water_o2` sample slot. Subfields:
 `nitrate`, `nitrite`, `ammonium`, `phosphate`, `silicate`, `nitrate_nitrite`, `din`, `ph`,
 `dissolved_oxygen`, `chlorophyll_a` (carbonate-chemistry subfields are added when a source
-reports them). No J1 attribute is declared yet: each is declared, with its source's verbatim
-unit strings, by the compilation that first emits it. Values from gridded model or satellite
-climatologies are never J1.
+reports them). Each J1 attribute is declared, with its source's verbatim unit strings, by the compilation that
+first emits it: `water_nitrate`, `water_ammonium` and `water_o2` (all `μM`) by Chang; later sources add their own unit
+spellings. Values from gridded model or satellite climatologies are never J1.
 
 **Attribute declarations** (`ATTRIBUTES`): every fact attribute names its type, the
 subfields it may carry (`None` = no subfield, kept NULL rather than guessed) and the
@@ -172,9 +172,11 @@ mapped_column, mapped_label`):
 Where it is filled from such a scope (every SCOC depth class is subtidal soft sediment because
 the dataset is sediment; Foster is all seagrass; water-column sources get `water column`), the
 facts carry the flag `habitat_from_scope`, so label-derived and scope-derived habitat can be
-told apart. Where it is NULL (no label, no scope) there is no flag. `water column` is not in
-the label map yet: no built source uses it. SCOC and Foster were rebuilt once to add the flag;
-fact counts and every other column were unchanged.
+told apart. Where it is NULL (no label, no scope) there is no flag. `water column` is mapped by
+Rosentreter's estuary sheets (raw `habitat_type` = the constant `water column`). SCOC and Foster were rebuilt once to add the flag;
+fact counts and every other column were unchanged. A source with no habitat label and no stated scope (Chang) declares the habitat
+column with one empty-label row (`<source>,habitat_type,,habitat,`) because the build requires every source to declare it; its
+locations then have NULL habitat and no flag.
 
 Within a declared (source, raw column, mapped column) every distinct raw label needs a
 row (blank = no equivalent); an unlisted label raises, and every source must declare
@@ -194,6 +196,10 @@ Counts are as built; the extract's own `extract_report.json` has the authoritati
 | [foster-seagrass](foster-seagrass/README.md) | 12,980 | Foster et al. 2025: seagrass biomass, production and meadow structure |
 | [strydom-seagrass](strydom-seagrass/README.md) | 14,266 | Strydom et al. (PANGAEA 929968, last change 2025-05-06): the same seagrass measures as Foster, in PANGAEA's unit spellings |
 | [stratma-bio](stratma-bio/README.md) | 63,350 | BenBioDen (Stratmann et al., Dryad v4): meio-, macro- and megabenthic biomass (11,792) and density (51,558), shore to abyssal |
+| [usgs-wetlands](usgs-wetlands/README.md) | 1,485 | Feher et al. (USGS data release, 2025-05-07): tidal saline wetland canopy height, aboveground biomass and productivity, soil carbon density and accumulation |
+| [rosentreter-ghg](rosentreter-ghg/README.md) | 738 | Rosentreter et al. (2023, figshare v1): CO2, CH4 and N2O fluxes of estuaries (water-air) and vegetated coasts |
+| [chang-denitrification](chang-denitrification/README.md) | 2,495 | Chang et al. (figshare v3): benthic denitrification, anammox and total N2 production, with sediment covariates and water nitrate, ammonium and oxygen (J1) |
+| [ray-oyster](ray-oyster/README.md) | 241 | Ray and Fulweiler (2020, figshare v1): sediment (control vs oyster) and oyster fluxes of N2, nutrients and GHGs |
 
 A source's own README, if it ships one, is a raw file kept beside ours as `README_<origin>.md`
 (for example `foster-seagrass/README_dryad.md`); only `README.md` is ours and tracked.
@@ -212,15 +218,21 @@ source needs it; the compilation's README says how that source applies it.
   `study_marked_excluded`, `year_missing`, `total_ne_sum_of_parts`, `converted_by_source` and `lat_beyond_pole`
   (stratma-bio; the latter on 1 fact) and
   `habitat_from_scope` (SCOC, Foster and Strydom: on all their facts, 3,907, 12,980 and 14,266; stratma-bio: on the facts
-  whose `Depth range` label is present, 21,659 of 63,350).
+  whose `Depth range` label is present, 21,659 of 63,350; Rosentreter: its 484 estuary facts),
+  `assigned_by_source` (USGS: the 46 salt-flat height and biomass zeros the authors assigned), `secondary_source`,
+  `method_missing` and `depth_missing` (USGS), `coords_integer_degree` and `pers_comm` (Rosentreter; USGS checks the first),
+  `potential_rate` and `negative_sd` (Ray: 4 facts and the one negative SD in the file).
 - Registered ahead of use, for compilations not yet built (names only; defined in each
   source's README when it is built): `covariate_conflict`, `reference_inferred`,
   `reference_unresolved`, `sd_converted_from_se`,
-  `calculated_by_source`, `potential_rate`, `source_site_averaged`, `source_time_averaged`,
-  `source_average_row`, `source_median`, and others listed in `FLAGS`.
+  `calculated_by_source`, `source_site_averaged`, `source_time_averaged`,
+  `source_average_row`, `source_median`, and others listed in `FLAGS`. (`sd_converted_from_se`, `converted_by_source` and
+  `source_site_averaged` were considered for Ray and Rosentreter and not used: the files do not say which rows, or the flag's
+  meaning does not fit; see their READMEs.)
 - Skip reasons in use: `depthseries_core_not_in_cores`, `empty_row`,
   `no_seagrass_measurement`, `no_density` (stratma-bio; its skip report entries carry a `file` key because the source has
-  two data files). Registered ahead of use: `below_detection_limit`, `not_measured`, `units_missing`.
+  two data files), `not_measured` (Chang: 2 cells coded `nm`; its entries carry `data_row` and `attribute`). Registered
+  ahead of use: `below_detection_limit`, `units_missing`.
 
 ## Not yet built
 
@@ -230,13 +242,13 @@ The table structure already has room for each of these.
   `doi_resolution_source` (NULL everywhere) for a separate script to fill via OpenAlex,
   so compiled and extracted values can be joined by DOI. `extract.py` never calls a
   network service and the source's own DOI is never overwritten. DOI coverage now: CCN
-  959/1,012 citations, Foster 476/567, SCOC 17/231, Strydom 312/400, BenBioDen 43/777.
+  959/1,012 citations, Foster 476/567, SCOC 17/231, Strydom 312/400, BenBioDen 43/777, USGS 185/267, Rosentreter 10/483,
+  Chang 0/69, Ray 0/52.
 - **Coverage report.** A habitat x `measurement_type` count of facts, references and
   locations per source, answering what has been extracted and to what extent. Its
   inputs (`location_dim.habitat`, `measurement_fact.measurement_type`) are in place.
-- **More compilations.** Raw files for 16 more sit in `data/compilations/` with no
-  `extract.py`: usgs-wetlands, rosentreter-ghg, ray-oyster,
-  chang-denitrification, boynton-flux, fulweiler-nfix, davis-calcification,
+- **More compilations.** Raw files for 12 more sit in `data/compilations/` with no
+  `extract.py`: boynton-flux, fulweiler-nfix, davis-calcification,
   pessarrodona-seaweed, tang-nitrification, shao-nfix, jorgensen-oxygen, mouw-carbon,
   francesco-phytoplankton, paradis-mosaic, cloern-phytoplankton (a PDF supplement) and
   ribeiro-mangrove (a reference list only, no measurements). Expect overlap between
