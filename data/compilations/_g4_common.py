@@ -46,6 +46,7 @@ class J1Cell:
     value: float
     ref: str  # source_row_ref of the raw cell
     payload: object = None  # whatever the caller needs back (row id, reference, ...)
+    variant: tuple = ()  # extra identity of the value (e.g. comparator, sd): cells collapse only if value AND variant are equal
 
 
 @dataclass(frozen=True)
@@ -63,11 +64,11 @@ def collapse_j1(cells: Sequence[J1Cell]) -> tuple[list[J1Fact], dict]:
     values, one fact per different value is kept and each carries ``covariate_conflict``. Nothing is averaged or
     dropped. Returns the facts (in ``order`` of their representative cell) and counts.
     """
-    groups: dict[tuple[str, str], dict[float, list[J1Cell]]] = {}
+    groups: dict[tuple[str, str], dict[tuple, list[J1Cell]]] = {}
     for c in sorted(cells, key=lambda c: c.order):
         if not math.isfinite(c.value):
             raise ContractError(f"J1 cell {c.ref}: non-finite value")
-        groups.setdefault((c.sample_key, c.attribute), {}).setdefault(c.value, []).append(c)
+        groups.setdefault((c.sample_key, c.attribute), {}).setdefault((c.value, c.variant), []).append(c)
     facts: list[J1Fact] = []
     n_conflict_groups = 0
     n_conflict_facts = 0

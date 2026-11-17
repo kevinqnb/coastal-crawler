@@ -125,3 +125,4 @@ jorgensen-oxygen,habitat_type,Slope (1000-2000m),setting,
 jorgensen-oxygen,habitat_type,Rise (2000-4000m),setting,open ocean
 jorgensen-oxygen,habitat_type,Abyss (4000-6500m),setting,open ocean
 jorgensen-oxygen,habitat_type,Hadal (>6500m),setting,open ocean
+shao-nfix,habitat_type,water column,habitat,Water column

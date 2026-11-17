@@ -224,6 +224,7 @@ def _g4_declare_j1(attr: str, subfield: str, *units: str) -> None:
 
 
 _g4_declare_j1("water_nitrite", "nitrite", "μM")  # Tang (U+03BC, header spelling)
+_g4_declare_j1("water_ph", "ph", "unitless")  # Tang (no unit in the sheet); also declared by group 3 (union)
 # Tang et al. volumetric nitrification rates (two sheets -> two attributes)
 ATTRIBUTES["tang_ammonia_oxidation"] = _d("C5", {"ammonia_oxidation"}, {"nmol N L-1 d-1"})
 ATTRIBUTES["tang_nitrite_oxidation"] = _d("C5", {"nitrite_oxidation"}, {"nmol N L-1 d-1"})
@@ -235,6 +236,10 @@ for _a, _sub in (("poc", "poc_flux"), ("pon", "pon_flux"), ("total_mass", "total
     ATTRIBUTES[f"mouw_{_a}_flux"] = _d("C6", {_sub}, {"mg/m**2/day"})
 # Mattei and Scardi (Francesco) global marine phytoplankton production: depth-resolved and profile-level values
 _g4_declare_j1("water_chl_a", "chlorophyll_a", "mg m^-3")
+# Shao et al. diazotroph database: U+00B5 'µM' (micro sign) is a different string from U+03BC 'μM'; rule 3.2
+_g4_declare_j1("water_nitrate", "nitrate", "µM")
+_g4_declare_j1("water_phosphate", "phosphate", "µM")
+_g4_declare_j1("water_chl_a", "chlorophyll_a", "mg m-3")
 _g4_declare_j1("water_chl_a_integrated", "chlorophyll_a", "mg m^-2")
 _g4_declare_j1("water_chl_a_total", "chlorophyll_a", "mg m^-2")
 ATTRIBUTES["francesco_pp_volumetric"] = _d("B8", {"primary_production_per_volume"}, {"mg C m^-3 day^-1"})
@@ -245,6 +250,14 @@ ATTRIBUTES["francesco_pbopt"] = _d("B8", {"chlorophyll_specific_production"}, {"
 ATTRIBUTES["jorgensen_tou"] = _d("B5", {"total_o2_uptake"}, {"mmol m-2 d-1"})
 ATTRIBUTES["jorgensen_dou"] = _d("B5", {"diffusive_o2_uptake"}, {"mmol m-2 d-1"})
 ATTRIBUTES["jorgensen_opd"] = _d("C2", {"o2_penetration_depth"}, {"mm"})
+# Shao et al. diazotroph database v2 (rates: units are the sheet headers' spellings, U+03BC in 'μmol')
+for _f in ("total", "whole_seawater", "trichodesmium", "heterocyst", "lt10um", "gt10um", "light", "dark"):
+    ATTRIBUTES[f"shao_n2fix_{_f}"] = _d("C5", {"n2_fixation"}, {"μmol N m-3 d-1", "μmol N m-3 h-1", "μmol N m-2 d-1", "μmol N m-2 h-1"})
+ATTRIBUTES["shao_n2fix_per_cell"] = _d("C5", {"n2_fixation"}, {"fmol N cell-1 d-1"})
+ATTRIBUTES["shao_n2fix_per_cellular_n"] = _d("C5", {"n2_fixation"}, {"fmol N fmol N-1 d-1"})
+ATTRIBUTES["shao_cellular_n_content"] = _d(
+    "other", {None}, {"fmol N cell-1"},
+    "Shao Cell_Specific sheet: cellular N content (fmol N cell-1) of the organism, the divisor of the N-specific rate")
 
 
 def check_attribute_decls() -> None:
@@ -343,6 +356,8 @@ FLAGS: dict[str, str] = {
     "error_propagated": "error is a propagated SE",
     "inequality": "the source prints the value as an inequality (e.g. '<0.02'); value is the printed number and "
                   "fact.value_comparator holds the sign ('<' or '>')",
+    "source_mean_reported": "the source prints 'mean (sd)': value is the mean, sd the bracket number (an aggregate, not a single measurement)",
+    "qc_rejected_by_source": "the source's own note says the value was REJECTED by its quality control; the value is loaded with this flag",
     "digitized_from_figure": "value was digitised from a figure",
     "replicate": "row is a replicate",
     "shallow_lt10m": "source selection code: in situ, depth < 10 m",
