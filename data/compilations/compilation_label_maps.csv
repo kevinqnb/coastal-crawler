@@ -100,3 +100,21 @@ chang-denitrification,habitat_type,,habitat,
 ray-oyster,habitat_type,Reef,habitat,Shellfish reef / bed
 ray-oyster,habitat_type,Aquaculture,habitat,
 ray-oyster,habitat_type,Mesocosm,habitat,
+paradis-mosaic,habitat_type,marine sediment core,habitat,Subtidal soft sediment
+paradis-mosaic,geomorphic_setting,shelf,setting,shelf
+paradis-mosaic,geomorphic_setting,canyon,setting,
+paradis-mosaic,geomorphic_setting,glacial_trough,setting,
+paradis-mosaic,geomorphic_setting,slope,setting,
+paradis-mosaic,geomorphic_setting,estuary,setting,estuary
+paradis-mosaic,geomorphic_setting,fjord,setting,fjord
+paradis-mosaic,geomorphic_setting,basin,setting,
+paradis-mosaic,geomorphic_setting,pro-delta,setting,
+paradis-mosaic,geomorphic_setting,abyss,setting,
+paradis-mosaic,geomorphic_setting,trough,setting,
+paradis-mosaic,geomorphic_setting,trench,setting,
+paradis-mosaic,geomorphic_setting,loch,setting,
+paradis-mosaic,geomorphic_setting,plateau,setting,
+paradis-mosaic,geomorphic_setting,ridge,setting,
+paradis-mosaic,geomorphic_setting,rise,setting,
+paradis-mosaic,geomorphic_setting,fans,setting,
+paradis-mosaic,geomorphic_setting,shelf_valley,setting,
