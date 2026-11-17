@@ -413,11 +413,17 @@ def _map_scalar(raw: pd.Series, mapping: dict[str, str | None], what: str) -> pd
     return pd.Series([None if pd.isna(v) else mapping[v] for v in raw], index=raw.index, dtype=object)
 
 
-def derive_location_labels(location: pd.DataFrame, source_key: str, maps: LabelMaps) -> pd.DataFrame:
-    """The five derived label columns for a location table (aligned to its index)."""
+def derive_location_labels(
+    location: pd.DataFrame, source_key: str, maps: LabelMaps, allow_factless: bool = False
+) -> pd.DataFrame:
+    """The five derived label columns for a location table (aligned to its index).
+
+    ``allow_factless`` (the build's explicit ``--allow-factless`` for this source) waives the
+    "no habitat label map declared" error, and only when the location table is empty.
+    """
     out = pd.DataFrame(index=location.index)
     feeders = {m: [k for k in maps if k[0] == source_key and k[2] == m] for m in _MAPPED_VOCAB}
-    if not feeders["habitat"]:
+    if not feeders["habitat"] and not (allow_factless and len(location) == 0):
         raise VocabError(f"{source_key}: no habitat label map declared")
     for mc in ("habitat", "setting", "salinity_zone"):
         col = pd.Series([None] * len(location), index=location.index, dtype=object)
