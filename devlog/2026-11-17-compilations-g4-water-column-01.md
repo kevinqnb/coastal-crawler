@@ -11,6 +11,8 @@ kind: build
 
 - Follow-up (user decisions): merge main (value_comparator, method.notes); load Tang pH as unitless J1; drop Francesco temperature; build shao-nfix with the user's rules (references by DOI or author-year, missing codes to the skip report, mean (sd) -> value + sd, censored values with a comparator, Notes verbatim into method.notes, Cell_Specific with taxon).
 
+- Follow-up 2 (Shao): every SOURCE cell is a reference as written; the 24 temperature/salinity-conflict samples go in an explicit allow-list.
+
 ### Implemented
 Four new extracts under data/compilations/ (tang-nitrification 9,824 facts, mouw-carbon 57,045, francesco-phytoplankton 99,779, jorgensen-oxygen 4,623), each with a README and fixture tests (tests/test_compilations_{tang,mouw,francesco,jorgensen}.py), plus a shared group helper data/compilations/_g4_common.py (the J1 sample-keyed collapse). After the user's decisions, shao-nfix (32,224 facts), Tang pH (66 facts, J1 `water_ph` unitless, 9,890 facts) and the Francesco temperature drop were added; new flags `source_mean_reported`, `qc_rejected_by_source`. Shared edits are attribute declarations (a merge-safe `_g4_declare_j1` helper), one skip reason (`unparseable_value`) and label-map rows; no contract code changed. The five group-4 sources build to 203,561 facts together (main's other sources unchanged), and every new fact round-trips to its raw cell. No configs/<id>.yaml (not an experiment-contract stage).
 

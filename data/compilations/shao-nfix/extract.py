@@ -41,11 +41,12 @@ Flags from Notes: ``converted_by_source`` where a note matches ``CONVERSION_PATT
 statements; counts per pattern in the report) and ``qc_rejected_by_source`` where it says ``REJECTED by Quality Control`` (the
 values are loaded; the flag is on every rate fact of the row, the note says which fraction).
 
-References: the ``SOURCE`` column mixes references and comment lines. A cell is a REFERENCE if it contains a DOI or an author-year
-pattern (starts with a capital letter, has a four-digit year); everything else is a comment. A row belongs to the last reference
-above it. Comment-looking leftovers are NOT guessed: every non-reference string is printed in ``extract_report.json`` with the number
-of rows that follow it before the next reference, for review. ``reference_key`` = ``doi:<lower-case doi>`` where a DOI is in the
-string, else ``ref:<string>``; the citation title comes from ``Reference List`` where its DOI matches.
+References: EVERY non-blank ``SOURCE`` cell starts a new reference block and IS the reference of the rows after it until the next
+non-blank cell (the user's rule): no classification into references and comments. ``reference_key`` = ``doi:<lower-case doi>`` where
+the string contains a DOI, else ``ref:<the string, whitespace-normalised>``; the citation's ``bibliography_id`` is the string, its title
+comes from ``Reference List`` where the DOI matches. ``pers_comm`` only where the string itself says pers. comm. / personal
+communication. A data row before the first SOURCE cell of its sheet raises. The report counts the SOURCE strings with neither a DOI nor
+an author-year pattern (information only).
 
 Habitat ``Water column`` from scope (flag ``habitat_from_scope`` on every fact). Dates: datetime -> year/month; text ranges
 (``2008/7/19-8/3``) -> year if both ends agree, month NULL, the text in ``sample.depth_notes``. Depth: volumetric depth ->
@@ -214,6 +215,33 @@ CONVERSION_PATTERNS = {
     "hourly rates multiplied (to 12/24 h or daylength)": re.compile(r"hourly rates?\s*(\*|multiplied)", re.I),
     "daily NFR divided by 24 h (to hourly)": re.compile(r"dividing it by 24", re.I),
 }
+SLOT_CONFLICT_SAMPLES: frozenset[str] = frozenset({  # the 24 samples whose rows disagree on temperature or salinity: slots NULL
+    'doi:10.1038/ismej.2010.205|16.89|-24.83|2007-11-22|5|vol',
+    'doi:10.3354/meps06882|-20.84|167.08|2002-05-26|0|vol',
+    'doi:10.3354/meps06882|-20.84|167.1|2002-04-08|0|vol',
+    'doi:10.3354/meps06882|-20.84|167.1|2002-04-08|100|vol',
+    'doi:10.3354/meps06882|-20.84|167.1|2002-04-08|10|vol',
+    'doi:10.3354/meps06882|-20.84|167.1|2002-04-08|20|vol',
+    'doi:10.3354/meps06882|-20.84|167.1|2002-04-08|40|vol',
+    'doi:10.3354/meps06882|-20.84|167.1|2002-04-08|80|vol',
+    'doi:10.3354/meps06882|-21.95|166.75|2002-01-15|0|vol',
+    'doi:10.3354/meps06882|-21.95|166.75|2002-01-15|10|vol',
+    'doi:10.3354/meps06882|-21.95|166.75|2002-01-15|15|vol',
+    'doi:10.3354/meps06882|-21.95|166.75|2002-01-15|20|vol',
+    'doi:10.3354/meps06882|-21.95|166.75|2002-01-15|30|vol',
+    'doi:10.3354/meps06882|-21.95|166.75|2002-01-15|5|vol',
+    'doi:10.3354/meps06882|-21.96|166.75|2002-04-03|0|vol',
+    'doi:10.3354/meps06882|-21.96|166.75|2002-04-03|10|vol',
+    'doi:10.3354/meps06882|-21.96|166.75|2002-04-03|15|vol',
+    'doi:10.3354/meps06882|-21.96|166.75|2002-04-03|20|vol',
+    'doi:10.3354/meps06882|-21.96|166.75|2002-04-03|30|vol',
+    'doi:10.3354/meps06882|-21.96|166.75|2002-04-03|5|vol',
+    'ref:average data shown in table 1 and 2|29.916667|34.466667|2010-04-03|10|vol',
+    'ref:date from introduction|-0.6623666666666667|-10.000416666666666|2009-06-07|40|vol',
+    'ref:date from introduction|-0.6623666666666667|-10.000416666666666|2009-06-07|4|vol',
+    'ref:date from introduction|-3.9972|4.998766666666667|2009-06-21|4|vol',
+})
+PERS_COMM = re.compile(r"pers\. ?comm|personal communication", re.I)
 QC_PATTERN = re.compile(r"REJECTED by Quality Control", re.I)
 
 # ---- references
@@ -266,7 +294,6 @@ def build_tables(raw: dict[str, pd.DataFrame], access_date: str) -> tuple[dict[s
     stats: Counter = Counter()
     skips: list[dict] = []
     code_counts: dict[str, Counter] = {k: Counter() for k in ("bdl", "nm", "malformed_cells", "censored", "mean_sd", "plain_text_number")}
-    leftovers: dict[str, dict] = {}
     facts: list[dict] = []
     j1_cells: list[J1Cell] = []
     cell_numeric_j1 = Counter()
@@ -278,6 +305,7 @@ def build_tables(raw: dict[str, pd.DataFrame], access_date: str) -> tuple[dict[s
     unused_cells: Counter = Counter()
     slot_stats: Counter = Counter()
     slot_conflicts: dict[str, set] = {}
+    no_doi_no_year: set[str] = set()
     n_cells_in = 0
 
     def add_skip(sheet: str, i: int, attr: str, kind: str, v: object, ref: str, extra: dict | None = None) -> None:
@@ -349,7 +377,6 @@ def build_tables(raw: dict[str, pd.DataFrame], access_date: str) -> tuple[dict[s
         # ---- walk rows
         ref: str | None = None
         since_ref = 0
-        last_leftover: str | None = None
         for i in range(len(body)):
             row = list(body.iloc[i])
             what = f"{sheet} row {i}"
@@ -357,19 +384,13 @@ def build_tables(raw: dict[str, pd.DataFrame], access_date: str) -> tuple[dict[s
             if not is_blank(row[0]) and not isinstance(row[0], str):
                 raise ContractError(f"{what}: SOURCE cell {row[0]!r} is not text")
             if src:
-                if is_reference(src):
-                    ref = src
-                    last_leftover = None
-                    stats["reference_cells"] += 1
-                else:
-                    d = leftovers.setdefault(src, {"sheet": sheet, "count": 0, "rows_following_before_next_reference": 0})
-                    d["count"] += 1
-                    last_leftover = src
+                ref = src
+                stats["reference_cells"] += 1
+                if not (doi_of(src) or is_reference(src)):
+                    no_doi_no_year.add(src)
             if ref is None:
-                raise ContractError(f"{what}: no reference above")
+                raise ContractError(f"{what}: no reference above (a data row before the first SOURCE cell)")
             ref_rows[ref] = ref
-            if last_leftover is not None:
-                leftovers[last_leftover]["rows_following_before_next_reference"] += 1
             refkey = (f"doi:{doi_of(ref)}" if doi_of(ref) else f"ref:{ref}")
             lat = _coord(row[4], what + " latitude", stats)
             lon = _coord(row[5], what + " longitude", stats)
@@ -552,6 +573,10 @@ def build_tables(raw: dict[str, pd.DataFrame], access_date: str) -> tuple[dict[s
             "value_comparator": comp, "units_raw": unit, "sd": sd, "se": np.nan, "n": None,
             "flags": sorted(fl), "source_row_ref": c.ref,
         })
+    key_text = {(f"doi:{doi_of(t)}" if doi_of(t) else f"ref:{t}"): t for t in ref_rows}
+    for f in facts:
+        if PERS_COMM.search(key_text[f["reference_key"]]):
+            f["flags"] = sorted({*f["flags"], "pers_comm"})
     fact = pd.DataFrame(facts)
     fact["n"] = pd.array([None] * len(fact), dtype="Int64")
     if fact.fact_key.duplicated().any():
@@ -564,6 +589,9 @@ def build_tables(raw: dict[str, pd.DataFrame], access_date: str) -> tuple[dict[s
     bad = {s["reason"] for s in skips} - ALLOWED_SKIP_REASONS
     if bad:
         raise ContractError(f"unlisted skip reasons {bad}")
+    if set(slot_conflicts) != SLOT_CONFLICT_SAMPLES:
+        raise ContractError("samples with conflicting temperature/salinity differ from SLOT_CONFLICT_SAMPLES: new "
+                            f"{sorted(set(slot_conflicts) - SLOT_CONFLICT_SAMPLES)}, missing {sorted(SLOT_CONFLICT_SAMPLES - set(slot_conflicts))}")
     # ---- samples
     used_s = sorted(set(fact.sample_key))
     s_rows = [samples[k] for k in used_s]
@@ -666,11 +694,11 @@ def build_tables(raw: dict[str, pd.DataFrame], access_date: str) -> tuple[dict[s
         "citations_with_doi": int(citation.doi.notna().sum()),
         "citations_with_reference_list_title": int(citation.title.notna().sum()),
         "reference_list_entries": len(entries),
-        "non_reference_strings_in_source_column": dict(sorted(leftovers.items())),
-        "non_reference_strings_count": len(leftovers),
+        "source_strings_without_doi_and_author_year_pattern": len(no_doi_no_year),
+        "source_strings_without_doi_and_author_year_pattern_list": sorted(no_doi_no_year),
         "coordinates_text_with_whitespace": stats["coordinates_text_with_whitespace"],
         "slot_cells_not_plain_numbers": dict(slot_stats),
-        "samples_with_conflicting_temperature_or_salinity_set_to_null": len(slot_conflicts),
+        "samples_with_conflicting_temperature_or_salinity_set_to_null": sorted(slot_conflicts),
         "samples": len(sample),
         "locations": len(loc),
         "methods": len(method),

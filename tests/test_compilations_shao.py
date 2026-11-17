@@ -43,7 +43,7 @@ def _v(src="", meth="C2H2 Reduction", inc=24, date=dt.datetime(2009, 7, 26), lat
 
 V_ROWS = [
     _v(BEN, lt10=0.03, whole=0.0456, total=0.0456, temp=18.6, sal=35.7, no3="2.38 (0.64)", po4="<0.02", fe=1, chl=0.15, notes=N0),
-    _v("Data shown in Figure 3", trich="bdl", lt10="0.49 (0.02", whole="n.d.", total="nm", temp="nd", no3="2.38 (0.64)", chl="n.a.",
+    _v("", trich="bdl", lt10="0.49 (0.02", whole="n.d.", total="nm", temp="nd", no3="2.38 (0.64)", chl="n.a.",
        notes="rates were reported  as daily rates"),
     _v(PAL, date="2008/7/19-8/3", lat="25.128\t", lon=10, depth="", whole=5.0, no3=">5", chl="1.29  (0.22)", notes=QC),
     _v(CHURCH, date="2008/7/19-8/3", lat="25.128\t", lon=10, depth="", whole=1.0),
@@ -85,9 +85,19 @@ def _raw() -> dict[str, pd.DataFrame]:
     return raw
 
 
+@pytest.fixture(autouse=True)
+def _no_real_slot_conflicts(monkeypatch):
+    monkeypatch.setattr(sh, "SLOT_CONFLICT_SAMPLES", frozenset())
+
+
 @pytest.fixture(scope="module")
 def built():
-    return sh.build_tables(_raw(), ACCESS)
+    saved = sh.SLOT_CONFLICT_SAMPLES  # module fixtures cannot use monkeypatch
+    sh.SLOT_CONFLICT_SAMPLES = frozenset()
+    try:
+        return sh.build_tables(_raw(), ACCESS)
+    finally:
+        sh.SLOT_CONFLICT_SAMPLES = saved
 
 
 def test_counts(built) -> None:
@@ -98,7 +108,7 @@ def test_counts(built) -> None:
         "shao_cellular_n_content": 1, "shao_n2fix_per_cell": 1, "shao_n2fix_per_cellular_n": 1, "shao_n2fix_total": 2,
         "shao_n2fix_whole_seawater": 4, "shao_n2fix_lt10um": 1, "water_chl_a": 3, "water_nitrate": 3, "water_phosphate": 1}
     assert rep["skipped_by_reason"] == {"below_detection_limit": 2, "not_measured": 2, "unparseable_value": 1}
-    assert len(tables["sample"]) == 5 and len(tables["location"]) == 4 and len(tables["reference"]) == 4
+    assert len(tables["sample"]) == 6 and len(tables["location"]) == 4 and len(tables["reference"]) == 5
     assert len(tables["method"]) == 13 and rep["methods_with_notes"] == 9
     validate_tables(add_derived_labels(tables))
 
@@ -163,11 +173,13 @@ def test_references_and_leftovers(built) -> None:
     f = tables["fact"].set_index("fact_key")
     assert f.loc["v24#0:shao_n2fix_total", "reference_key"] == "doi:10.3354/ame01534"
     assert f.loc["v24#2:shao_n2fix_whole_seawater", "reference_key"] == f"ref:{PAL}"
-    assert f.loc["v24#3:shao_n2fix_whole_seawater", "reference_key"] == f"ref:{PAL}"  # a leftover does not start a reference
+    assert f.loc["v24#3:shao_n2fix_whole_seawater", "reference_key"] == f"ref:{CHURCH}"  # every SOURCE cell is a reference, e-mail ones too
+    assert f.loc["v24#1:water_nitrate" if "v24#1:water_nitrate" in f.index else "v24#0:water_nitrate", "reference_key"] == "doi:10.3354/ame01534"  # blank cell: same block
     assert f.loc["cs#0:shao_n2fix_per_cell[UCYN-A1]", "reference_key"] == "doi:10.1038/s41396-020-0610-z"
-    assert set(rep["non_reference_strings_in_source_column"]) == {"Data shown in Figure 3", CHURCH}
-    assert rep["non_reference_strings_in_source_column"][CHURCH]["rows_following_before_next_reference"] == 1
+    assert rep["source_strings_without_doi_and_author_year_pattern"] == 1 and rep["reference_cells"] == 5  # CHURCH has neither
+    assert "pers_comm" not in f["flags"].sum()  # not inferred from an e-mail address
     c = tables["citation"].set_index("reference_key")
+    assert c.loc[f"ref:{CHURCH}", "bibliography_id"] == CHURCH and pd.isna(c.loc[f"ref:{CHURCH}", "doi"])
     assert c.loc["doi:10.3354/ame01534", "year"] == 2011 and c.loc["doi:10.3354/ame01534", "title"].startswith("Benavides, M.")
     assert pd.isna(c.loc[f"ref:{PAL}", "doi"]) and c.loc[f"ref:{PAL}", "year"] == 2020 and rep["citations_with_reference_list_title"] == 1
 
@@ -237,3 +249,29 @@ def test_reference_rule() -> None:
     for t in ("data shown in figure 4", "Fig.2", "ETSP cruise", "Correspondence: Berman-Frank", CHURCH, "Foster et al. Unpublish",
               "during El Nino (2010) and La Nina (2011)"):
         assert not sh.is_reference(t), t
+
+
+def test_pers_comm_only_when_the_string_says_so() -> None:
+    raw = _raw()
+    raw[V24] = raw[V24].copy()
+    raw[V24].iat[4, 0] = "Church, pers. comm."
+    t, _, _ = sh.build_tables(raw, ACCESS)
+    f = t["fact"].set_index("fact_key")
+    assert "pers_comm" in f.loc["v24#3:shao_n2fix_whole_seawater", "flags"] and "pers_comm" not in f.loc["v24#0:shao_n2fix_total", "flags"]
+
+
+def test_slot_conflicts_need_the_allow_list(monkeypatch) -> None:
+    raw = _raw()
+    raw[V24] = raw[V24].copy()
+    raw[V24].loc[len(raw[V24])] = _v(BEN, whole=2.0, temp=19.0, sal=35.7)  # same sample as row 0, another temperature
+    with pytest.raises(ContractError, match="differ from SLOT_CONFLICT_SAMPLES"):
+        sh.build_tables(raw, ACCESS)
+    key = "doi:10.3354/ame01534|41.5|-9.3|2009-07-26|5|vol"
+    monkeypatch.setattr(sh, "SLOT_CONFLICT_SAMPLES", frozenset({key}))
+    t, _, rep = sh.build_tables(raw, ACCESS)
+    s = t["sample"].set_index("sample_key").loc[key]
+    assert pd.isna(s.water_temperature_c) and s.water_salinity == 35.7  # only the disagreeing slot is NULL
+    assert rep["samples_with_conflicting_temperature_or_salinity_set_to_null"] == [key]
+    monkeypatch.setattr(sh, "SLOT_CONFLICT_SAMPLES", frozenset({key, "x|1|1|d|1|vol"}))
+    with pytest.raises(ContractError, match="missing"):
+        sh.build_tables(raw, ACCESS)

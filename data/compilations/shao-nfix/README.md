@@ -38,7 +38,7 @@ figshare, https://doi.org/10.6084/m9.figshare.21677687.v3 (paper: *Earth System 
   8,374 cells = 8,297 facts + 77 collapsed repeats; 64 sample-attribute groups with differing values, 133 facts flagged `covariate_conflict`. The sample key is reference | latitude | longitude | date | depth | family (volumetric, integral or cell).
   On the integral sheets the near-surface nitrate, phosphate and chlorophyll columns are used (J1 only). `Fe`, `Net Primary Production`, the C fixation column and the unnamed 65th column of Cell_Specific are not loaded (counted in the report).
 - **Temperature and salinity** go to the sample slots on the volumetric and Cell_Specific sheets (units `PSU`, the header's). The integral sheets' near-surface temperature (793 + 290 cells) and salinity (703 + 269) are **not** loaded (surface values of an integral sample; the same reason as Francesco's SST).
-  24 samples have rows that disagree on temperature or salinity: those slots are NULL (reported).
+  **24 samples** have rows that disagree on temperature or salinity: they are named in the explicit allow-list `SLOT_CONFLICT_SAMPLES` in `extract.py` (and in `extract_report.json`); the disagreeing slot is NULL for those only, and any new disagreement, or an allow-listed one that no longer occurs, raises. The integral sheets' near-surface temperature and salinity stay unloaded.
 - **Habitat** `Water column` for all locations (flag `habitat_from_scope` on every fact). Depth: volumetric depth -> `sample_depth_m`; the integral sheets' depth is an integration depth -> `depth_notes`; text depths too. Date ranges (`2008/7/19-8/3`) -> year if both ends agree, month NULL,
   the text in `depth_notes`. 29 coordinates written as text with a tab (`25.128`) are read as numbers.
 
@@ -54,7 +54,7 @@ figshare, https://doi.org/10.6084/m9.figshare.21677687.v3 (paper: *Earth System 
 | `0.49 (0.02`, `1.98 (0.45`, `0.01 (0.00)*` (malformed) | skip `unparseable_value` | 9 (listed in the report) |
 | blank or whitespace | nothing | |
 
-Per-code counts are in `extract_report.json`. Anything else raises. `n` and `DL` are the least certain codes (`DL` may mean 'at the detection limit'): both are skips, never values.
+Per-code counts are in `extract_report.json`. Anything else raises. `n` (16 cells) and `DL` (16 cells) are accepted by the user as skips (`n` -> `not_measured`, `DL` -> `below_detection_limit`), never values.
 
 ## Notes column
 
@@ -64,111 +64,9 @@ on the rate facts of the 3 rows saying `REJECTED by Quality Control` (8 facts; t
 
 ## References
 
-The `SOURCE` column mixes references and comment lines. A cell is a **reference** if it contains a DOI or an author-year pattern (capital initial, four-digit year); the rest are comments, and a row belongs to the last reference above it. 180 references, 154 with a DOI (`doi:<lower-case>` key; the others `ref:<string>`);
-132 citation titles come from the `Reference List` by DOI.
-**Review needed:** 100 strings are not classified as references; nothing was guessed. Several are personal-communication references without a year (an e-mail address) or `Foster et al. Unpublish`; for those the rows
-that follow are attributed to the reference ABOVE them, so check the counts below before using the affected rows (the list is also in `extract_report.json`):
-
-- `*other data shown in Figure 3 is included in Church et al.2019` (NF; x2; 274 rows follow before the next reference)
-- `*value of 0 meters is value of 5 meters` (NF; x2; 2 rows follow before the next reference)
-- `Church, M.J., University of Hawaii, mjchurch@hawaii.edu` (NF; x2; 174 rows follow before the next reference)
-- `Correspondence: Berman-Frank` (NF_Integral; x1; 20 rows follow before the next reference)
-- `ETSP cruise` (NF; x1; 13 rows follow before the next reference)
-- `ETSP cruise/ NERC cruise` (NF; x1; 21 rows follow before the next reference)
-- `Fig.2` (NF; x1; 24 rows follow before the next reference)
-- `Foster et al. Unpublish` (NF; x4; 4 rows follow before the next reference)
-- `Matthew J. Church, Correspondence: mjchurch@hawaii.edu` (NF; x2; 2 rows follow before the next reference)
-- `Mulholland, M.R., Old Dominion University, mmulholl@odu.edu` (NF; x4; 428 rows follow before the next reference)
-- `NERC cruise` (NF; x1; 9 rows follow before the next reference)
-- `NFR data come from Fig. 4` (NF; x1; 13 rows follow before the next reference)
-- `Norbert Wasmund, Leibniz Institute for Baltic Sea Research, Seestr. Norbert.wasmund@io-warnemuende.de` (NF_Integral; x1; 1 rows follow before the next reference)
-- `Rees, A.P, Plymouth Marine Laboratory, apre@pml.ac.uk` (NF; x1; 91 rows follow before the next reference)
-- `Three papers describe the same project in ETSP` (NF_Integral; x1; 1 rows follow before the next reference)
-- `White, A.E., Oregon State University, awhite@coas.oregonstate.edu` (NF; x4; 167 rows follow before the next reference)
-- `all cruise NFR reported daily rate` (NF; x1; 25 rows follow before the next reference)
-- `and in supplementary table` (NF_Integral; x1; 78 rows follow before the next reference)
-- `areal rates shown in figure 1` (NF_Integral; x1; 1 rows follow before the next reference)
-- `average data shown in table 1 and 2` (NF; x1; 59 rows follow before the next reference)
-- `calculate depth-integrated NFR` (NF_Integral; x3; 10 rows follow before the next reference)
-- `combined data shown in figure 2, 3 and supplement TableS1` (NF; x1; 110 rows follow before the next reference)
-- `data come from 7 Cruise, sampling date come from:` (NF_Integral; x1; 1 rows follow before the next reference)
-- `data come from FIGURE 4.` (NF; x1; 67 rows follow before the next reference)
-- `data come from Fig.1、Fig.2 and Fig.3` (NF; x1; 2 rows follow before the next reference)
-- `data come from Fig.3a` (NF; x1; 1 rows follow before the next reference)
-- `data come from Figure 2.` (NF; x3; 63 rows follow before the next reference)
-- `data come from Figure 3.` (NF; x2; 31 rows follow before the next reference)
-- `data come from Figure 7.` (NF; x2; 22 rows follow before the next reference)
-- `data come from Supplement` (NF; x3; 327 rows follow before the next reference)
-- `data come from Supplement Table S1.` (NF; x1; 45 rows follow before the next reference)
-- `data come from Supplement Table S2.` (NF_Integral; x1; 9 rows follow before the next reference)
-- `data come from Table 1 and Figure 4.` (NF; x2; 20 rows follow before the next reference)
-- `data come from Table 1.` (NF; x3; 65 rows follow before the next reference)
-- `data come from Table 2.` (NF; x2; 24 rows follow before the next reference)
-- `data come from Table 3.` (NF_Integral; x1; 17 rows follow before the next reference)
-- `data come from author` (NF; x1; 12 rows follow before the next reference)
-- `data come from author.` (NF; x2; 109 rows follow before the next reference)
-- `data come from http://scope.soest.hawaii.edu/data/hot/` (NF; x2; 75 rows follow before the next reference)
-- `data come from supplement` (NF; x1; 220 rows follow before the next reference)
-- `data come from supplement Data S1` (NF; x2; 158 rows follow before the next reference)
-- `data come from supplement Table Data Set S1` (NF; x2; 87 rows follow before the next reference)
-- `data come from supplement Table S3` (NF; x2; 103 rows follow before the next reference)
-- `data come from supplement Table.S1-S7` (NF; x1; 178 rows follow before the next reference)
-- `data come from table 2` (NF; x1; 6 rows follow before the next reference)
-- `data comes from Fig.6` (NF_Integral; x1; 13 rows follow before the next reference)
-- `data comes from Figure 2.` (NF; x1; 36 rows follow before the next reference)
-- `data comes from Figure 5.` (NF; x1; 31 rows follow before the next reference)
-- `data comes from authors (ljx2ljx@scsio.ac.cn)` (NF_Integral; x1; 3 rows follow before the next reference)
-- `data comes from fig.3 &table.1.` (NF; x1; 30 rows follow before the next reference)
-- `data comes from fig.4 &table.1/2.` (NF; x1; 3 rows follow before the next reference)
-- `data comes from http://www.obs-vlfr.fr/proof/ftpfree/outpace/db/data/BOTTLE/` (NF; x1; 51 rows follow before the next reference)
-- `data comes from table 1` (NF_Integral; x1; 3 rows follow before the next reference)
-- `data comes from table S1` (NF_Integral; x1; 6 rows follow before the next reference)
-- `data comes from table.1` (NF; x5; 72 rows follow before the next reference)
-- `data comes from table.1&2` (NF_Integral; x1; 6 rows follow before the next reference)
-- `data comes from table.2` (NF_Integral; x1; 14 rows follow before the next reference)
-- `data comes from table.S2` (NF; x1; 46 rows follow before the next reference)
-- `data from Fig. 4` (NF_Integral; x1; 4 rows follow before the next reference)
-- `data from Fig.4(a)` (NF_Integral; x1; 10 rows follow before the next reference)
-- `data from Fig.5` (NF_Integral; x1; 1 rows follow before the next reference)
-- `data from Figure1` (NF; x1; 3 rows follow before the next reference)
-- `data from author` (NF; x6; 137 rows follow before the next reference)
-- `data from supplement table S1` (NF; x1; 70 rows follow before the next reference)
-- `data from table.1` (NF_Integral; x1; 16 rows follow before the next reference)
-- `data from table.2` (NF_Integral; x1; 24 rows follow before the next reference)
-- `data in table 1 and figure 1,2` (NF; x2; 4 rows follow before the next reference)
-- `data shown in figure 2 and table 1` (NF; x1; 40 rows follow before the next reference)
-- `data shown in figure 3` (NF; x3; 113 rows follow before the next reference)
-- `data shown in figure 3,5,6 and table 2` (NF; x1; 2 rows follow before the next reference)
-- `data shown in figure 4` (NF; x3; 37 rows follow before the next reference)
-- `data shown in figure 5,6` (NF; x2; 31 rows follow before the next reference)
-- `data shown in figure 6` (NF_Integral; x1; 19 rows follow before the next reference)
-- `data shown in figure 7 and supplementary` (NF_Integral; x1; 4 rows follow before the next reference)
-- `data shown in figure 8, 9` (NF; x2; 90 rows follow before the next reference)
-- `data shown in firgure 3` (NF; x1; 1 rows follow before the next reference)
-- `data shown in supplementary material` (NF_Integral; x1; 10 rows follow before the next reference)
-- `data shown in table 1` (NF_Integral; x1; 1 rows follow before the next reference)
-- `data shown in table 1 and supplementary` (NF_Integral; x1; 33 rows follow before the next reference)
-- `data shown in table 1 and supplementary table 1` (NF_Integral; x1; 1 rows follow before the next reference)
-- `data shown in table 1 without lat, lon` (NF_Integral; x1; 4 rows follow before the next reference)
-- `data shown in table 1. but coordinates are not available` (NF_Integral; x1; 1 rows follow before the next reference)
-- `date from introduction` (NF; x1; 94 rows follow before the next reference)
-- `depth from supplementary table S3` (NF_Integral; x1; 3 rows follow before the next reference)
-- `depth from volumetric` (NF_Integral; x1; 19 rows follow before the next reference)
-- `depth-integrated rates from Fig.3` (NF_Integral; x1; 69 rows follow before the next reference)
-- `during El Nino (2010) and La Nina (2011)` (NF_Integral; x1; 5 rows follow before the next reference)
-- `hourly rates*24 hrs` (Cell_Specific_NF_Rate; x1; 18 rows follow before the next reference)
-- `integral data shown in figure 1` (NF_Integral; x1; 1 rows follow before the next reference)
-- `integrated rates calculated from volumetric rates` (NF_Integral; x1; 1 rows follow before the next reference)
-- `other cruise date are estimated` (NF_Integral; x1; 2 rows follow before the next reference)
-- `read them mannually from figure 1` (NF_Integral; x1; 4 rows follow before the next reference)
-- `show integrated rates in table 3` (NF; x1; 1 rows follow before the next reference)
-- `shown supplementary table 1` (NF; x1; 225 rows follow before the next reference)
-- `supplementary tables` (NF; x2; 92 rows follow before the next reference)
-- `surface rates shown in table 3` (NF; x1; 19 rows follow before the next reference)
-- `table 4` (NF_Integral; x1; 57 rows follow before the next reference)
-- `vertical profiles shown in figure 1 and` (NF; x1; 1 rows follow before the next reference)
-- `volumetric rates was shown in figure 6d` (NF; x1; 47 rows follow before the next reference)
-- `计算得depth-integrated` (NF_Integral; x1; 11 rows follow before the next reference)
+**Every non-blank `SOURCE` cell is used as the reference exactly as written** (whitespace-normalised only): it starts a new reference block and is the reference of the rows after it until the next non-blank cell. There is no classification into references and comments, and no attribution to "the reference above" for strings that look like comments (`data come from Table 2.`, `Fig.2`, e-mail personal communications, `Foster et al. Unpublish` are all references here). A data row before the first `SOURCE` cell of its sheet raises.
+280 references from 442 SOURCE cells. `reference_key` = `doi:<bare lower-case doi>` where the string contains a DOI (154 references), otherwise `ref:<string>`; the citation's `bibliography_id` is the string, DOI NULL for the others, `title` from the `Reference List` where the DOI matches (132).
+`pers_comm` only where the string itself says pers. comm. / personal communication (no fact has it; it is not inferred from e-mail addresses). For information: 100 SOURCE strings contain neither a DOI nor an author-year pattern (listed in `extract_report.json`); they are references all the same. Because the sample key includes the reference, a comment-like cell splits what was one station block into two samples (the facts and J1 collapse counts are unchanged from the earlier classification run: 32,224 facts, 77 collapsed; references 180 -> 280, samples 10,518 -> 10,513).
 
 ## Flags
 
@@ -178,7 +76,7 @@ that follow are attributed to the reference ABOVE them, so check the counts belo
 ## Row accounting
 
 Verified by an independent parse of the workbook after the build: the non-blank cells of the loaded columns number 33,141 (the extract's own count agrees) and equal facts + skips + collapsed; every fact's value, comparator, `sd`, unit (header), mean/inequality flags and the method note were re-derived from its raw cell (32,224 of 32,224 agree).
-A tiny end-to-end check (the first 12 rows of the 24 h sheet, predicted by an independent cell count: 76 facts, 12 samples) matched. Two runs give byte-identical parquet, skip report and report. `source_row_ref` is `<file>[<sheet>]#data_row=<0-based row below the header>:<attribute>` (Cell_Specific: `<attribute>[<taxon>]`).
+A tiny end-to-end check (a block starting with an e-mail string, `Church, M.J., University of Hawaii, ...`, plus 12 rows of it and the block before: 194 rows, predicted by an independent cell count: 388 facts) matched; every fact's reference was also re-derived from the forward-filled SOURCE cells. Two runs give byte-identical parquet, skip report and report. `source_row_ref` is `<file>[<sheet>]#data_row=<0-based row below the header>:<attribute>` (Cell_Specific: `<attribute>[<taxon>]`).
 
 ## Overlap with other compilations
 
