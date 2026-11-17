@@ -218,6 +218,63 @@ for _sol, (_t, _sub) in _RAY_TYPES.items():
 ATTRIBUTES["cloern_appp_median"] = _d("B8", {"depth_integrated_primary_production"}, {"g C m-2 yr-1"})
 
 
+# --- group 3 (boynton-flux, fulweiler-nfix, pessarrodona-seaweed, davis-calcification) -------------------------
+def _j1(attr: str, subfield: str, units: set[str]) -> None:
+    """Declare a shared J1 attribute, or add unit strings to it when another compilation declared it first."""
+    old = ATTRIBUTES.get(attr)
+    if old is not None:
+        if old.measurement_type != "J1" or old.subfields != frozenset({subfield}):
+            raise VocabError(f"{attr}: already declared differently")
+        units = set(old.units) | units
+    ATTRIBUTES[attr] = _d("J1", {subfield}, units)
+
+
+# Boynton World Flux Data Set: units are the header spellings (ASCII "u"); the element basis of each flux is in Table 2
+# of the workbook (O2, N, P, DSi), not in the header. pH has no header unit: "unitless" is Table 2's.
+ATTRIBUTES["boynton_soc"] = _d("B5", {"total_o2_uptake"}, {"umol/m2/hr"})
+ATTRIBUTES["boynton_nh4_flux"] = _d("C3", {"ammonium_flux"}, {"umol/m2/hr"})
+ATTRIBUTES["boynton_po4_flux"] = _d("C3", {"phosphate_flux"}, {"umol/m2/hr"})
+ATTRIBUTES["boynton_no2_flux"] = _d("C3", {"nitrite_flux"}, {"umol/m2/hr"})
+ATTRIBUTES["boynton_no3_flux"] = _d("C3", {"nitrate_flux"}, {"umol/m2/hr"})
+ATTRIBUTES["boynton_no23_flux"] = _d("C3", {"nitrate_nitrite_flux"}, {"umol/m2/hr"})
+ATTRIBUTES["boynton_dsi_flux"] = _d("C3", {"silicate_flux"}, {"umol/m2/hr"})
+ATTRIBUTES["boynton_water_respiration"] = _d("B9", {"community_respiration"}, {"gO2/m2/day"})
+ATTRIBUTES["boynton_sediment_chl_a"] = _d("B1", {"sediment_chlorophyll_a"}, {"mg/m2"})
+ATTRIBUTES["boynton_poc"] = _d("C1", {"organic_carbon"}, {"%DW"})
+ATTRIBUTES["boynton_pon"] = _d(OTHER, {None}, {"%DW"}, "particulate organic nitrogen, % of dry weight (Boynton Table 2: usually top 1 cm); not total N")
+ATTRIBUTES["boynton_pp"] = _d(OTHER, {None}, {"%DW"}, "particulate phosphorus, % of dry weight (Boynton Table 2: usually top 1 cm)")
+_j1("water_ammonium", "ammonium", {"uM"})
+_j1("water_phosphate", "phosphate", {"uM"})
+_j1("water_nitrate", "nitrate", {"uM"})
+_j1("water_nitrate_nitrite", "nitrate_nitrite", {"uM"})
+_j1("water_silicate", "silicate", {"uM"})
+_j1("water_ph", "ph", {"unitless"})
+
+# Fulweiler et al. N2 fixation (EDI edi.1759.2): rates are the source's converted molar values (four unit spellings, the same
+# for the water-column and benthic attributes); J1 units are the verbatim ancillary-file unit cells (all ASCII).
+_FULWEILER_RATE_UNITS = {"umol-n m-2 h-1", "umol-n l-1 h-1", "umol-n g-1 h-1", "umol-n m-3 h-1"}
+ATTRIBUTES["fulweiler_n2fix_water"] = _d("C5", {"n2_fixation"}, _FULWEILER_RATE_UNITS)
+ATTRIBUTES["fulweiler_n2fix_benthic"] = _d("C7", {"n2_fixation"}, _FULWEILER_RATE_UNITS)
+_j1("water_ammonium", "ammonium", {"mg l-1", "mg-n l-1", "nh4-n mg l-1", "nmol l-1", "ug l-1", "ug-n l-1", "um", "umol l-1", "umol-n l-1"})
+_j1("water_nitrate", "nitrate", {"g-no3 m-3", "mg l-1", "mg-n l-1", "nmol l-1", "no3-n mg l-1", "ug l-1", "ug-n l-1", "um", "umol", "umol l-1", "umol-n l-1"})
+_j1("water_nitrite", "nitrite", {"um", "umol l-1", "umol-n l-1"})
+_j1("water_nitrate_nitrite", "nitrate_nitrite", {"mg l-1", "mg m-3", "mg-n l-1", "mmol m-2", "nm", "ug l-1", "ug-n l-1", "um", "umol kg-1", "umol l-1"})
+_j1("water_din", "din", {"ug l-1", "umol l-1"})
+_j1("water_phosphate", "phosphate", {"mg l-1", "mg m-3", "mg-p l-1", "mmol m-2", "nm", "ug l-1", "ug-p l-1", "um", "umol", "umol kg-1", "umol l-1", "umol-p l-1", "umol-po4 l-1"})
+_j1("water_o2", "dissolved_oxygen", {"%", "% sat", "mg l-1", "mg o2/l", "ml l-1", "um", "umol kg-1", "umol l-1"})
+_j1("water_chl_a", "chlorophyll_a", {"fluor mg m-3", "mg m-2", "mg m-3", "mg-chla m-3", "ug cm-2", "ug l-1", "ug ml-1", "ug-chla l-1"})
+
+# Pessarrodona et al. seaweed NPP: the source's harmonised value (column Avg_NPP_kg_C_m2_y); the unit is the header's.
+ATTRIBUTES["pessarrodona_npp"] = _d("B6", {"seagrass_seaweed_npp"}, {"kg C m-2 y-1"})
+
+# Davis et al. reef calcification and production (SEANOE 80022): units are the sheet's header spellings. The sheet does not say
+# whether Pnet is on an O2 or a C basis.
+ATTRIBUTES["davis_gnet"] = _d("B7", {"net_ecosystem_calcification"}, {"mmol m-2 d-1"})
+ATTRIBUTES["davis_pnet"] = _d("B5", {"net_ecosystem_production"}, {"mmol m-2 d-1"})
+ATTRIBUTES["davis_coral_cover"] = _d("B4", {"live_hard_coral_cover"}, {"%"})
+ATTRIBUTES["davis_coralline_cover"] = _d("B4", {"turf_cca_invertebrate_cover"}, {"%"})
+
+
 def check_attribute_decls() -> None:
     """Self-consistency of the declarations above (run by the tests)."""
     for attr, d in ATTRIBUTES.items():

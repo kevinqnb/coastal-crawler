@@ -119,3 +119,74 @@ paradis-mosaic,geomorphic_setting,ridge,setting,
 paradis-mosaic,geomorphic_setting,rise,setting,
 paradis-mosaic,geomorphic_setting,fans,setting,
 paradis-mosaic,geomorphic_setting,shelf_valley,setting,
+boynton-flux,habitat_type,,habitat,
+fulweiler-nfix,habitat_type,salt marshes,habitat,Tidal marsh
+fulweiler-nfix,habitat_type,mangroves,habitat,Mangrove forest
+fulweiler-nfix,habitat_type,tidal flats,habitat,Tidal flat
+fulweiler-nfix,habitat_type,seagrasses,habitat,Seagrass meadow
+fulweiler-nfix,habitat_type,estuaries,habitat,
+fulweiler-nfix,habitat_type,continental shelves,habitat,
+fulweiler-nfix,habitat_type,lakes,habitat,
+fulweiler-nfix,habitat_type,rivers,habitat,
+fulweiler-nfix,habitat_type,freshwater wetlands,habitat,
+fulweiler-nfix,habitat_type,estuaries | wc,habitat,Water column
+fulweiler-nfix,habitat_type,continental shelves | wc,habitat,Water column
+fulweiler-nfix,habitat_type,lakes | wc,habitat,Water column
+fulweiler-nfix,habitat_type,rivers | wc,habitat,Water column
+fulweiler-nfix,habitat_type,freshwater wetlands | wc,habitat,Water column
+fulweiler-nfix,habitat_type,seagrasses | wc,habitat,Water column
+fulweiler-nfix,habitat_type,salt marshes,setting,
+fulweiler-nfix,habitat_type,mangroves,setting,
+fulweiler-nfix,habitat_type,tidal flats,setting,
+fulweiler-nfix,habitat_type,seagrasses,setting,
+fulweiler-nfix,habitat_type,estuaries,setting,estuary
+fulweiler-nfix,habitat_type,continental shelves,setting,shelf
+fulweiler-nfix,habitat_type,lakes,setting,
+fulweiler-nfix,habitat_type,rivers,setting,
+fulweiler-nfix,habitat_type,freshwater wetlands,setting,
+fulweiler-nfix,habitat_type,estuaries | wc,setting,estuary
+fulweiler-nfix,habitat_type,continental shelves | wc,setting,shelf
+fulweiler-nfix,habitat_type,lakes | wc,setting,
+fulweiler-nfix,habitat_type,rivers | wc,setting,
+fulweiler-nfix,habitat_type,freshwater wetlands | wc,setting,
+fulweiler-nfix,habitat_type,seagrasses | wc,setting,
+pessarrodona-seaweed,habitat_type,Marine forest | Rocky Reef,habitat,Kelp and macroalgal bed
+pessarrodona-seaweed,habitat_type,Brown algal beds | Rocky Reef,habitat,Kelp and macroalgal bed
+pessarrodona-seaweed,habitat_type,Red algal beds | Rocky Reef,habitat,Kelp and macroalgal bed
+pessarrodona-seaweed,habitat_type,Red algal beds | Sand,habitat,Kelp and macroalgal bed
+pessarrodona-seaweed,habitat_type,Green algal beds | Rocky Reef,habitat,Kelp and macroalgal bed
+pessarrodona-seaweed,habitat_type,Green algal beds | Sand,habitat,Kelp and macroalgal bed
+pessarrodona-seaweed,habitat_type,Algal turfs | Rocky Reef,habitat,Rocky shore and reef
+pessarrodona-seaweed,habitat_type,Algal turfs | Coral Reef,habitat,Coral reef
+pessarrodona-seaweed,habitat_type,Marine forest | Coral Reef,habitat,Coral reef
+pessarrodona-seaweed,habitat_type,Brown algal beds | Coral Reef,habitat,Coral reef
+pessarrodona-seaweed,habitat_type,Red algal beds | Coral Reef,habitat,Coral reef
+pessarrodona-seaweed,habitat_type,Rhodolith beds & Coralline algae | Coral Reef,habitat,Coral reef
+pessarrodona-seaweed,habitat_type,Marine forest | Salt-marsh,habitat,
+pessarrodona-seaweed,habitat_type,Marine forest | Sand,habitat,
+pessarrodona-seaweed,habitat_type,Green algal beds | Salt-marsh,habitat,
+pessarrodona-seaweed,habitat_type,Red algal beds | Floating,habitat,
+pessarrodona-seaweed,habitat_type,Rhodolith beds & Coralline algae | Rhodolith beds,habitat,
+pessarrodona-seaweed,habitat_type,Rhodolith beds & Coralline algae | Rocky Reef,habitat,
+pessarrodona-seaweed,habitat_type,Floating Sargassum | Floating,habitat,
+pessarrodona-seaweed,habitat_type,Free floating algae | Floating,habitat,
+davis-calcification,habitat_type,reef flat,habitat,Coral reef
+davis-calcification,habitat_type,Reef flat,habitat,Coral reef
+davis-calcification,habitat_type,Lagoon,habitat,Coral reef
+davis-calcification,habitat_type,lagoon,habitat,Coral reef
+davis-calcification,habitat_type,reef flat and lagoon,habitat,Coral reef
+davis-calcification,habitat_type,backreef,habitat,Coral reef
+davis-calcification,habitat_type,back reef,habitat,Coral reef
+davis-calcification,habitat_type,knoll,habitat,Coral reef
+davis-calcification,habitat_type,reef flat - undisturbed,habitat,Coral reef
+davis-calcification,habitat_type,reef flat - disturbed,habitat,Coral reef
+davis-calcification,habitat_type,Reef Crest,habitat,Coral reef
+davis-calcification,habitat_type,Reef crest,habitat,Coral reef
+davis-calcification,habitat_type,reef terrace,habitat,Coral reef
+davis-calcification,habitat_type,fringing reef,habitat,Coral reef
+davis-calcification,habitat_type,reef flat - Site 4,habitat,Coral reef
+davis-calcification,habitat_type,reef flat - Site 5,habitat,Coral reef
+davis-calcification,habitat_type,reef flat - Site 6,habitat,Coral reef
+davis-calcification,habitat_type,reef flat - Site 7,habitat,Coral reef
+davis-calcification,habitat_type,rim reef,habitat,Coral reef
+davis-calcification,habitat_type,Soft Sediments,habitat,
