@@ -262,6 +262,13 @@ _j1("water_chl_a", "chlorophyll_a", {"fluor mg m-3", "mg m-2", "mg m-3", "mg-chl
 # Pessarrodona et al. seaweed NPP: the source's harmonised value (column Avg_NPP_kg_C_m2_y); the unit is the header's.
 ATTRIBUTES["pessarrodona_npp"] = _d("B6", {"seagrass_seaweed_npp"}, {"kg C m-2 y-1"})
 
+# Davis et al. reef calcification and production (SEANOE 80022): units are the sheet's header spellings. The sheet does not say
+# whether Pnet is on an O2 or a C basis.
+ATTRIBUTES["davis_gnet"] = _d("B7", {"net_ecosystem_calcification"}, {"mmol m-2 d-1"})
+ATTRIBUTES["davis_pnet"] = _d("B5", {"net_ecosystem_production"}, {"mmol m-2 d-1"})
+ATTRIBUTES["davis_coral_cover"] = _d("B4", {"live_hard_coral_cover"}, {"%"})
+ATTRIBUTES["davis_coralline_cover"] = _d("B4", {"turf_cca_invertebrate_cover"}, {"%"})
+
 
 def check_attribute_decls() -> None:
     """Self-consistency of the declarations above (run by the tests)."""
