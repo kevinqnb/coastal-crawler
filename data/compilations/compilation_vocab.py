@@ -240,6 +240,11 @@ _g4_declare_j1("water_chl_a_total", "chlorophyll_a", "mg m^-2")
 ATTRIBUTES["francesco_pp_volumetric"] = _d("B8", {"primary_production_per_volume"}, {"mg C m^-3 day^-1"})
 ATTRIBUTES["francesco_pp_integrated"] = _d("B8", {"depth_integrated_primary_production"}, {"mg C m^-2 day^-1"})
 ATTRIBUTES["francesco_pbopt"] = _d("B8", {"chlorophyll_specific_production"}, {"mg C mg Chla-1 h-1"})
+# Jorgensen et al. benthic O2 uptake (units: the file's header spelling; DOU's unit cell is blank and is taken from the
+# description text, see the extract's docstring)
+ATTRIBUTES["jorgensen_tou"] = _d("B5", {"total_o2_uptake"}, {"mmol m-2 d-1"})
+ATTRIBUTES["jorgensen_dou"] = _d("B5", {"diffusive_o2_uptake"}, {"mmol m-2 d-1"})
+ATTRIBUTES["jorgensen_opd"] = _d("C2", {"o2_penetration_depth"}, {"mm"})
 
 
 def check_attribute_decls() -> None:
@@ -352,6 +357,7 @@ SKIP_REASONS: dict[str, str] = {
     "not_measured": "value reported as not measured (NM)",
     "units_missing": "J1 value whose unit cell is blank (units are required)",
     "no_density": "density row with no density value",
+    "unparseable_value": "value cell is text that is not a number (e.g. a decimal comma); kept in the skip report",
 }
 
 
