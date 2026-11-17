@@ -33,7 +33,7 @@ data/compilations/
 
 Code: `src/coastal_crawler/compilations.py` (table contract, validation, key
 assignment, DuckDB write), `scripts/build_compilations.py` (CLI),
-`tests/test_compilations_{ccn,scoc,foster,strydom,bio,usgs,rosentreter,chang,ray}.py`, `tests/test_compilation_vocab.py`.
+`tests/test_compilations_*.py` (one per compilation, plus the contract tests), `tests/test_compilation_vocab.py`.
 
 ## Workflow
 
@@ -44,8 +44,13 @@ python data/compilations/smithsonian-coastal-carbon/extract.py \
 
 # 2. central build: validates every extracted dir, assigns global ids, writes the file
 python scripts/build_compilations.py --out data/compilations/compilations.duckdb \
-    data/compilations/smithsonian-coastal-carbon/extracted [other extracted dirs...]
+    --allow-factless ribeiro-mangrove data/compilations/*/extracted
 ```
+
+Every `extract.py` takes `--access-date`; a few need more (CCN `--max-dry-bulk-density`; Foster and Strydom `--sum-rel-tol` /
+`--sum-abs-tol`; MOSAIC `--pg-restore <binary>` and `--min-subtidal-depth-m`): each compilation's README gives the command it was
+built with. Run them with `python -I` from the repository (the editable `coastal_crawler` install must be the checkout whose
+contract code you mean to use; a git worktree needs `PYTHONPATH=<worktree>/src python -P`, because `-I` ignores `PYTHONPATH`).
 
 The build is a **full rebuild**, written to a temp file and atomically renamed; a
 rebuild from the same inputs gives the same table contents (ids are assigned in
@@ -63,23 +68,31 @@ in the dimensions:
 
 | Table | Grain | Holds |
 |---|---|---|
-| `measurement_fact` | one measurement | `attribute`, `measurement_type` (standard code or `other`), `subfield`, `value` (DOUBLE, exactly as reported), `units_raw`, `sd`, `se`, `n`, `flags` (VARCHAR[]), `source_row_ref`; FKs to the five dims below |
+| `measurement_fact` | one measurement | `attribute`, `measurement_type` (standard code or `other`), `subfield`, `value` (DOUBLE, exactly as reported), `value_comparator` (`<` or `>` when the source prints a censored value such as `<0.02`; `value` is then the printed number and the fact carries the flag `inequality`; NULL otherwise), `units_raw`, `sd`, `se`, `n`, `flags` (VARCHAR[]), `source_row_ref`; FKs to the five dims below |
 | `source_dim` | compilation | name, version, DOI, access date, license, notes |
 | `reference_dim` | contributing study | `reference_key` (the compilation's own study id) |
 | `citation_dim` | study x citation | bibliography id, publication type, DOI, title, authors, year, URL; `openalex_id`, `doi_resolved`, `doi_resolution_source` (NULL until a DOI-resolution job fills them) |
 | `study_screening_dim` | candidate study | citation string and the compilation's own screening labels (`screening_phase`, `eligibility_phase`, `database_status`); `reference_id` is NULL for studies that contributed no facts (the only nullable FK) |
 | `location_dim` | core / site | lat, lon, position accuracy and method, site name, country, `water_body`, `habitat_type`, `geomorphic_setting`, `bioregion`, `marine_ecoregion`, `salinity_class`, `vegetation_class`, `tidal_position` (each with a `*_level` of core vs site), `modification_status[]`, `dominant_species[]`, elevation + units + datum + method, `water_depth_m` (positive down), `distance_to_shore_km` (all raw labels); **standard labels derived from the raw ones by the label map:** `habitat`, `bottom_type`, `setting`, `salinity_zone`, `modification_class[]` |
 | `sample_dim` | depth interval | depth min/max (cm), representative depths, notes, sampling year/month, `taxon`, `taxon_rank` (what was sampled, raw label), `vegetated_or_bare`, `marsh_zone`, `sediment_type`, `photosynthetic_sediment` (raw), in-situ water context beside the value: `sample_depth_m`, `water_temperature_c`, `water_salinity` (+ units), `bottom_water_o2` (+ units) |
-| `method_dim` | (study, method id, attribute) | `technique`, coring method, carbon type, measured/modeled, carbon method, carbonate removal, `conversion_applied`, in-situ/ex-situ, light/dark, `incubation_type` and `experimental_status` (raw labels), `method_status`, `params` (JSON text) |
+| `method_dim` | (study, method id, attribute) | `technique`, coring method, carbon type, measured/modeled, carbon method, carbonate removal, `conversion_applied`, in-situ/ex-situ, light/dark, `incubation_type` and `experimental_status` (raw labels), `method_status`, `params` (JSON text: structured method details, original values and conversion factors, source column names), `notes` (free text: the source's own comments, verbatim) |
 
-*Planned (not built yet):* for sources whose fact carries the source's harmonised value
-(Pessarrodona, Fulweiler), `method_dim` will be per source row, so original value, unit and
-conversion factors sit in `params`; and `sample_dim` will be keyed by the source's natural
-sample grain, so water-column covariates (J1, below) attach to the sample and a repeated
-ambient value is stored once. Neither applies to the five compilations built so far.
-Likewise a `reference_dim` row with no facts (a reference-list-only source, Ribeiro) needs an
-explicit `--allow-factless` build flag that does not exist yet: today the build raises on an
-empty fact table.
+Three patterns that appear in the later compilations:
+
+- **Source's harmonised value, original in the method row.** Where a source reports one harmonised value and keeps the original
+  (Pessarrodona, Fulweiler), the fact carries the harmonised value and `method_dim` is **per source row**: the original value,
+  unit and conversion factors sit in `params`.
+- **Samples at the source's natural grain, with covariates attached once.** `sample_dim` is keyed by the source's own sample
+  grain (each README states the key). A water-chemistry value measured beside several rates (the `J1` fields, below) attaches
+  to the sample, so a repeated ambient value is stored once; repeats collapsed this way are counted in the compilation's
+  `extract_report.json`, and two different values for one sample and attribute are both kept with the flag `covariate_conflict`.
+- **Reference-list-only sources.** A source built with `--allow-factless <source_key>` (Ribeiro) may have `reference_dim` /
+  `citation_dim` rows that no fact refers to. The flag exempts only the named source from the empty-fact-table and
+  no-habitat-label-map checks and raises if that source has any fact.
+
+Contract columns added after the first compilations (`value_comparator`, `method.notes`) are nullable and listed in
+`OPTIONAL_COLUMNS` (`compilations.py`): an `extract.py` that does not supply one gets NULL when it writes its parquet, but the
+build demands the full schema, so parquet written before a column existed must be regenerated, never built silently.
 
 `incubation_type` / `experimental_status` record whether a value comes from a control,
 a natural site, an intact core or an in-situ incubation, or from a treatment or slurry;
@@ -145,9 +158,9 @@ bottom water); sediment-medium values are C2 (porewater) or `other`, and bottom-
 measured beside a benthic rate stays in the `bottom_water_o2` sample slot. Subfields:
 `nitrate`, `nitrite`, `ammonium`, `phosphate`, `silicate`, `nitrate_nitrite`, `din`, `ph`,
 `dissolved_oxygen`, `chlorophyll_a` (carbonate-chemistry subfields are added when a source
-reports them). Each J1 attribute is declared, with its source's verbatim unit strings, by the compilation that
-first emits it: `water_nitrate`, `water_ammonium` and `water_o2` (all `μM`) by Chang; later sources add their own unit
-spellings. Values from gridded model or satellite climatologies are never J1.
+reports them). J1 attributes are shared across compilations; each compilation adds its own verbatim unit strings to the shared
+attribute (pH is `unitless`). Equivalent spellings stay separate declared strings (`μM` U+03BC, `µM` U+00B5, `uM`):
+conversion is downstream. Values from gridded model or satellite climatologies are never J1.
 
 **Attribute declarations** (`ATTRIBUTES`): every fact attribute names its type, the
 subfields it may carry (`None` = no subfield, kept NULL rather than guessed) and the
@@ -200,6 +213,18 @@ Counts are as built; the extract's own `extract_report.json` has the authoritati
 | [rosentreter-ghg](rosentreter-ghg/README.md) | 738 | Rosentreter et al. (2023, figshare v1): CO2, CH4 and N2O fluxes of estuaries (water-air) and vegetated coasts |
 | [chang-denitrification](chang-denitrification/README.md) | 2,495 | Chang et al. (figshare v3): benthic denitrification, anammox and total N2 production, with sediment covariates and water nitrate, ammonium and oxygen (J1) |
 | [ray-oyster](ray-oyster/README.md) | 241 | Ray and Fulweiler (2020, figshare v1): sediment (control vs oyster) and oyster fluxes of N2, nutrients and GHGs |
+| [boynton-flux](boynton-flux/README.md) | 16,693 | World Flux Data Set 2016 v3 (Boynton and Ceballos): sediment-water O2 and nutrient fluxes (negative = into the sediment, per the Edit Notes), sediment chlorophyll, POC, PON, PP, with bottom-water covariates (J1) |
+| [fulweiler-nfix](fulweiler-nfix/README.md) | 9,940 | Fulweiler et al. (EDI edi.1759.2 v2): water-column and benthic N2 fixation rates (source-converted values, originals in per-row methods) with water chemistry (J1) |
+| [pessarrodona-seaweed](pessarrodona-seaweed/README.md) | 1,121 | Pessarrodona et al. (figshare v5): seaweed net primary production, harmonised to kg C m-2 y-1, originals in per-row methods |
+| [davis-calcification](davis-calcification/README.md) | 347 | Davis et al. (SEANOE 80022): reef net calcification and net production, with coral and coralline cover |
+| [tang-nitrification](tang-nitrification/README.md) | 9,890 | Tang et al. (Zenodo v1, 2023): ocean ammonia- and nitrite-oxidation rates (2,941) with water ammonium, nitrite, nitrate, pH and oxygen (J1, one fact per sample) |
+| [shao-nfix](shao-nfix/README.md) | 32,224 | Shao et al. (figshare v3, 2024-01-09): ocean N2 fixation rates by size fraction, light/dark and per cell for individual organisms, with nitrate, phosphate and chlorophyll a (J1) |
+| [mouw-carbon](mouw-carbon/README.md) | 57,045 | Mouw et al. (PANGAEA 855594, 2016): sediment-trap and 234Th fluxes of POC, PON, total mass, CaCO3 and silica |
+| [francesco-phytoplankton](francesco-phytoplankton/README.md) | 99,779 | Mattei and Scardi (PANGAEA 932417, 2021): depth-resolved and depth-integrated primary production and chlorophyll a (J1) |
+| [jorgensen-oxygen](jorgensen-oxygen/README.md) | 4,623 | Jorgensen et al. (2022): benthic total and diffusive O2 uptake and O2 penetration depth, in situ and ex situ |
+| [paradis-mosaic](paradis-mosaic/README.md) | 147,121 | MOSAIC v2.0 (Paradis et al., dump mosaic_2_ESSD of 2023-04-25): marine sediment cores, organic and inorganic carbon, nitrogen, CaCO3, grain size, bulk density and porosity (shelf to abyssal) |
+| [cloern-phytoplankton](cloern-phytoplankton/README.md) | 163 | Cloern et al. 2014 supplement Table S1 (Biogeosciences 11): median annual phytoplankton primary production for 131 estuarine-coastal ecosystems, no coordinates; n sums to 1,147 (the caption says 1,148) |
+| [ribeiro-mangrove](ribeiro-mangrove/README.md) | 0 | Ribeiro et al. 2019 Appendix S1 (Ecosphere 10(8) e02841): reference list only, 87 studies behind the neotropical litterfall model, no measurements (build with `--allow-factless ribeiro-mangrove`) |
 
 A source's own README, if it ships one, is a raw file kept beside ours as `README_<origin>.md`
 (for example `foster-seagrass/README_dryad.md`); only `README.md` is ours and tracked.
@@ -211,28 +236,29 @@ its meaning). The build raises on a fact flag that is not registered; every `ext
 raises on an unregistered skip reason. A flag is added deliberately, with a meaning, when a
 source needs it; the compilation's README says how that source applies it.
 
-- Used by the built compilations: `negative_value`, `zero_value`, `fraction_gt_1`,
-  `dbd_gt_max`, `depth_missing`, `depth_inverted`, `duplicate_source_row`,
-  `carbon_type_unknown`, `se_units_differ`, `coords_missing`, `coords_approximate`,
-  `lon_wrapped`, `lat_lon_zero`, `method_missing`, `flux_type_missing`,
-  `study_marked_excluded`, `year_missing`, `total_ne_sum_of_parts`, `converted_by_source` and `lat_beyond_pole`
-  (stratma-bio; the latter on 1 fact) and
-  `habitat_from_scope` (SCOC, Foster and Strydom: on all their facts, 3,907, 12,980 and 14,266; stratma-bio: on the facts
-  whose `Depth range` label is present, 21,659 of 63,350; Rosentreter: its 484 estuary facts),
-  `assigned_by_source` (USGS: the 46 salt-flat height and biomass zeros the authors assigned), `secondary_source`,
-  `method_missing` and `depth_missing` (USGS), `coords_integer_degree` and `pers_comm` (Rosentreter; USGS checks the first),
-  `potential_rate` and `negative_sd` (Ray: 4 facts and the one negative SD in the file).
-- Registered ahead of use, for compilations not yet built (names only; defined in each
-  source's README when it is built): `covariate_conflict`, `reference_inferred`,
-  `reference_unresolved`, `sd_converted_from_se`,
-  `calculated_by_source`, `source_site_averaged`, `source_time_averaged`,
-  `source_average_row`, `source_median`, and others listed in `FLAGS`. (`sd_converted_from_se`, `converted_by_source` and
-  `source_site_averaged` were considered for Ray and Rosentreter and not used: the files do not say which rows, or the flag's
-  meaning does not fit; see their READMEs.)
-- Skip reasons in use: `depthseries_core_not_in_cores`, `empty_row`,
-  `no_seagrass_measurement`, `no_density` (stratma-bio; its skip report entries carry a `file` key because the source has
-  two data files), `not_measured` (Chang: 2 cells coded `nm`; its entries carry `data_row` and `attribute`). Registered
-  ahead of use: `below_detection_limit`, `units_missing`.
+- **In use** (fact counts over all 21 sources, from the 695,589-fact build; each compilation's README says how it applies
+  its flags): `habitat_from_scope` 395,637; `secondary_compilation` 99,779 (Francesco: every fact); `depth_missing` 46,151;
+  `method_missing` 44,925; `year_missing` 30,308; `carbon_type_unknown` 23,290; `calculated_by_source` 22,392;
+  `reference_unresolved` 12,576 and `reference_inferred` 2,364 (Mouw IDs 2 and 14); `pers_comm` 10,524; `zero_value` 10,482;
+  `converted_by_source` 10,161; `coords_approximate` 5,055; `non_bulk_material` 4,577 (MOSAIC size or density fractions: filter
+  before comparing with bulk sediment); `duplicate_source_row` 2,176; `total_ne_sum_of_parts` 2,058; `source_site_averaged`
+  1,815; `salinity_units_missing` 1,796; `o2_units_ambiguous` 1,422; `error_type_missing` 1,379 (MOSAIC 1,140: the source never says SD or SE, so the error is stored as `sd` by assumption, noted
+  in `method.notes`; Fulweiler 237 and Davis 2: an error value with no stated type); `replicate` 1,143; `source_mean_reported` 1,052 (Shao `mean (sd)` cells,
+  value = the mean, sd = the bracket); `secondary_source` 782; `source_time_averaged` 659; `shallow_lt10m` 612;
+  `covariate_conflict` 580 (one sample with two different values of one J1 attribute; both kept); `source_average_row` 440;
+  `digitized_from_figure` 260; `coords_missing` 218; `source_median` 163; `dbd_gt_max` 148; `inequality` 114 (censored values
+  such as `<0.02`: `value` is the printed number and `value_comparator` the sign); `method_excluded` 95; `low_o2_bottom_water`
+  63; `coords_integer_degree` 58; `assigned_by_source` 46; `se_units_differ` 43; `cited_secondary` 43; `error_type_other` 41;
+  `outside_source_qc_range` 38; `negative_value` 37; `study_marked_excluded` 31; `error_propagated` 24; `flux_type_missing` 20;
+  `lon_wrapped` 16; `qc_rejected_by_source` 8 (Shao: the authors' own quality control rejected the value; loaded, flagged);
+  `negative_sd` 6; `potential_rate` 4; `depth_inverted` 4; `fraction_gt_1` 2; `lat_beyond_pole` 1.
+- **Registered, not used by any current compilation:** `sd_converted_from_se`, `lat_lon_zero` (considered and not used; see the
+  Ray and Rosentreter READMEs for why).
+- **Skip reasons in use:** `depthseries_core_not_in_cores`, `empty_row`, `no_seagrass_measurement`, `no_density`,
+  `not_measured` (Chang 2, Tang 166, Shao 185), `below_detection_limit` (Tang 772, Shao 646: results printed as `BDL`, `n.d.`
+  and the like; the detection limit is copied into the report where the source gives one), `units_missing` (Fulweiler 4),
+  `unparseable_value` (Jorgensen 1, Shao 9), and for MOSAIC `no_metadata_row` (172), `error_without_fact` (114) and
+  `material_unit_unclear` (108).
 
 ## Not yet built
 
@@ -241,18 +267,18 @@ The table structure already has room for each of these.
 - **DOI resolution.** `citation_dim` has `openalex_id`, `doi_resolved` and
   `doi_resolution_source` (NULL everywhere) for a separate script to fill via OpenAlex,
   so compiled and extracted values can be joined by DOI. `extract.py` never calls a
-  network service and the source's own DOI is never overwritten. DOI coverage now: CCN
-  959/1,012 citations, Foster 476/567, SCOC 17/231, Strydom 312/400, BenBioDen 43/777, USGS 185/267, Rosentreter 10/483,
-  Chang 0/69, Ray 0/52.
+  network service and the source's own DOI is never overwritten. DOI coverage now (citations with a DOI / citations): CCN
+  959/1,012, Foster 476/567, SCOC 17/231, Strydom 312/400, BenBioDen 43/777, USGS 185/267, Rosentreter 10/483,
+  Chang 0/69, Ray 0/52, Boynton 130/183, Fulweiler 262/267, Pessarrodona 7/229, Davis 0/53, Tang 0/72, Shao 154/280,
+  Mouw 23/43, Francesco 11/35, Jorgensen 0/319, MOSAIC 316/331, Cloern 33/159, Ribeiro 0/87.
 - **Coverage report.** A habitat x `measurement_type` count of facts, references and
   locations per source, answering what has been extracted and to what extent. Its
   inputs (`location_dim.habitat`, `measurement_fact.measurement_type`) are in place.
-- **More compilations.** Raw files for 12 more sit in `data/compilations/` with no
-  `extract.py`: boynton-flux, fulweiler-nfix, davis-calcification,
-  pessarrodona-seaweed, tang-nitrification, shao-nfix, jorgensen-oxygen, mouw-carbon,
-  francesco-phytoplankton, paradis-mosaic, cloern-phytoplankton (a PDF supplement) and
-  ribeiro-mangrove (a reference list only, no measurements). Expect overlap between
-  compilations (CCN/USGS, SCOC/Jorgensen/Boynton, Foster/Strydom, SCOC/BenBioDen); the layer never merges them.
+- **More compilations.** None are waiting: all 21 sources in `data/compilations/` are built. Phase-2 material that was
+  deliberately not loaded (isotopes, 14C and biomarkers in MOSAIC; gene and cell counts in Shao and Tang; PAR, light level and
+  other `other`-type columns) is counted in each compilation's `extract_report.json` and listed in its README. Expect overlap
+  between compilations (CCN/USGS, SCOC/Jorgensen/Boynton, Foster/Strydom, SCOC/BenBioDen, Fulweiler/Shao); the layer never merges
+  them.
 - **Open label questions.** CCN `saline`, `brackish`, `mixoeuhaline` have no Venice
   class; CCN has no rule yielding `artificial`; SCOC near-shore and slope have no
   setting.
