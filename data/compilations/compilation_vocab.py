@@ -228,6 +228,11 @@ _g4_declare_j1("water_nitrite", "nitrite", "μM")  # Tang (U+03BC, header spelli
 ATTRIBUTES["tang_ammonia_oxidation"] = _d("C5", {"ammonia_oxidation"}, {"nmol N L-1 d-1"})
 ATTRIBUTES["tang_nitrite_oxidation"] = _d("C5", {"nitrite_oxidation"}, {"nmol N L-1 d-1"})
 # Tang J1 values reuse water_ammonium / water_nitrate / water_o2 (same "μM" string as Chang)
+# Mouw et al. global ocean POC flux compilation (sediment traps and 234Th): one attribute per analyte, all mg/m**2/day
+for _a, _sub in (("poc", "poc_flux"), ("pon", "pon_flux"), ("total_mass", "total_mass_flux"),
+                 ("caco3", "biogenic_silica_carbonate_flux"), ("psi", "biogenic_silica_carbonate_flux"),
+                 ("psio2", "biogenic_silica_carbonate_flux"), ("psioh4", "biogenic_silica_carbonate_flux")):
+    ATTRIBUTES[f"mouw_{_a}_flux"] = _d("C6", {_sub}, {"mg/m**2/day"})
 
 
 def check_attribute_decls() -> None:
