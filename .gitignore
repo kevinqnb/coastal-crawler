@@ -237,6 +237,7 @@ out/*
 !/data/compilations/README.md
 !/data/compilations/compilation_vocab.py
 !/data/compilations/compilation_label_maps.csv
+!/data/compilations/FLAGS.md
 # helper modules shared by several extract.py files (group 3 / group 4 builds)
 !/data/compilations/_g3_common.py
 !/data/compilations/_g4_common.py

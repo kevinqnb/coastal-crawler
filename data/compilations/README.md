@@ -15,6 +15,7 @@ data/compilations/
   README.md                      this file
   compilation_vocab.py           standard vocabulary, attribute declarations, checks
   compilation_label_maps.csv     raw label -> standard label, per source
+  FLAGS.md                       glossary of every fact flag (generated from the registry and the build)
   compilations.duckdb            built output (ignored by git)
   <compilation>/
     README.md                    ours: citation, mapping, flags, things to know (tracked)
@@ -173,6 +174,8 @@ A source's own README, if it ships one, is a raw file kept as `README_<origin>.m
 
 Both are closed registries in `compilation_vocab.py` (`FLAGS`, `SKIP_REASONS`), each name with its meaning. The build raises on an unregistered fact
 flag, and every `extract.py` raises on an unregistered skip reason. A new one is added deliberately, with a meaning, when a source needs it.
+
+The full glossary, with every flag explained in plain words, its counts and what to do about it, is in [FLAGS.md](FLAGS.md).
 
 **Flags in use** (facts over all 21 sources). Each compilation's README says how it applies its flags. The commonest and most important:
 
