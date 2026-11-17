@@ -118,6 +118,7 @@ EXTENSION_SUBFIELDS: dict[tuple[str, str], str] = {
     ("C4", "total_n2_production"): "Chang total N2 production (denitrification + anammox, column P14); not one of the standard C4 processes",
     ("C1", "soil_carbon_density"): "USGS wetlands soil carbon density (g/cm3); standard C1 has carbon_stock and dry_bulk_density, not a carbon density",
     ("C1", "total_inorganic_carbon"): "MOSAIC total inorganic carbon; standard C1 has carbonate (CaCO3) only",
+    ("G1", "mode_grain_size"): "MOSAIC grain-size mode; standard G1 has median and mean grain size only",
 }
 
 
@@ -266,6 +267,42 @@ def check_facts(fact: pd.DataFrame) -> None:
 # every extract.py checks its skip reasons). Add a name here, with its meaning, when a source
 # needs it; the per-source README defines how that source applies it. Flags never change or
 # drop a value.
+# Paradis et al. MOSAIC v2.0 (paradis-mosaic): units are the dump's sample_analysis_units strings (middle dot U+00B7 in
+# g·cm-3, micro sign U+00B5 in µm). Ratios have a blank unit in the source: _MOSAIC_BLANK marks that. clay_%_2microm is
+# declared "%" although the source labels it µm (a percentage content; see paradis-mosaic/README.md).
+_MOSAIC_BLANK = "(blank in source)"
+_MOSAIC_OTHER = "MOSAIC sample_composition value with no standard measurement type"
+for _a, _t, _sub, _u, _note in (
+    ("mosaic_total_carbon", "C1", "total_carbon", "%", None),
+    ("mosaic_organic_carbon", "C1", "organic_carbon", "%", None),
+    ("mosaic_loi_organic_matter", "C1", "loi_organic_matter", "%", None),
+    ("mosaic_total_inorganic_carbon", "C1", "total_inorganic_carbon", "%", None),
+    ("mosaic_caco3", "C1", "carbonate", "%", None),
+    ("mosaic_total_nitrogen", "C1", "total_nitrogen", "%", None),
+    ("mosaic_oc_tn_ratio", "C1", "c_n_ratio", _MOSAIC_BLANK, None),
+    ("mosaic_dry_bulk_density", "C1", "dry_bulk_density", "g·cm-3", None),
+    ("mosaic_porosity", "C1", "porosity", "-", None),
+    ("mosaic_water_content", "C1", "water_content", "%", None),
+    ("mosaic_gravel_content", "G1", "gravel_content", "%", None),
+    ("mosaic_sand_content", "G1", "sand_content", "%", None),
+    ("mosaic_silt_content", "G1", "silt_content", "%", None),
+    ("mosaic_clay_lt4um", "G1", "clay_content", "%", None),
+    ("mosaic_clay_lt2um", "G1", "clay_content", "%", None),
+    ("mosaic_mud_content", "G1", "mud_content", "%", None),
+    ("mosaic_mean_grain_size", "G1", "mean_grain_size", "µm", None),
+    ("mosaic_median_grain_size", "G1", "median_grain_size", "µm", None),
+    ("mosaic_mode_grain_size", "G1", "mode_grain_size", "µm", None),
+    ("mosaic_organic_nitrogen", "other", None, "%", _MOSAIC_OTHER + " (organic nitrogen, % of sediment)"),
+    ("mosaic_inorganic_nitrogen", "other", None, "%", _MOSAIC_OTHER + " (inorganic nitrogen, % of sediment)"),
+    ("mosaic_oc_on_ratio", "other", None, _MOSAIC_BLANK, _MOSAIC_OTHER + " (organic carbon to organic nitrogen ratio)"),
+    ("mosaic_biogenic_silica", "other", None, "%", _MOSAIC_OTHER + " (SiO2_%, biogenic silicate / opal)"),
+    ("mosaic_total_phosphorus", "other", None, "%", _MOSAIC_OTHER + " (total phosphorus)"),
+    ("mosaic_organic_phosphorus", "other", None, "%", _MOSAIC_OTHER + " (biogenic phosphorus, P_org_%)"),
+    ("mosaic_total_sulphur", "other", None, "%", _MOSAIC_OTHER + " (total sulphur)"),
+):
+    ATTRIBUTES[_a] = _d(_t, {_sub}, {_u}, _note)
+
+
 FLAGS: dict[str, str] = {
     # used by the built compilations
     "negative_value": "value < 0 where the quantity cannot be negative",
@@ -319,6 +356,10 @@ FLAGS: dict[str, str] = {
     "method_excluded": "source selection code: methodological exclusion",
     "low_o2_bottom_water": "source selection code: bottom-water O2 < 25 uM",
     "o2_units_ambiguous": "bottom-water O2 column mixes uM and % saturation",
+    # paradis-mosaic
+    "non_bulk_material": "analysis was on a sediment fraction or separate (size or density class, TOC ...), not bulk sediment",
+    "error_type_missing": "source gives an error value but no error type",
+    "outside_source_qc_range": "value outside the min/max the source's own QC (DatasetS1) lists for the variable",
 }
 
 SKIP_REASONS: dict[str, str] = {
@@ -329,6 +370,10 @@ SKIP_REASONS: dict[str, str] = {
     "not_measured": "value reported as not measured (NM)",
     "units_missing": "J1 value whose unit cell is blank (units are required)",
     "no_density": "density row with no density value",
+    # paradis-mosaic
+    "no_metadata_row": "value cell with no sample_metadata row on (sample, material, analysis, replicate): no article or method can be attached",
+    "error_without_fact": "error cell whose value cell is blank or was itself skipped",
+    "material_unit_unclear": "value measured on a material whose quantity or unit is unclear (MOSAIC material 'surface_area')",
 }
 
 
