@@ -33,7 +33,7 @@ data/compilations/
 
 Code: `src/coastal_crawler/compilations.py` (table contract, validation, key
 assignment, DuckDB write), `scripts/build_compilations.py` (CLI),
-`tests/test_compilations_{ccn,scoc,foster}.py`, `tests/test_compilation_vocab.py`.
+`tests/test_compilations_{ccn,scoc,foster,strydom,bio}.py`, `tests/test_compilation_vocab.py`.
 
 ## Workflow
 
@@ -76,7 +76,7 @@ in the dimensions:
 (Pessarrodona, Fulweiler), `method_dim` will be per source row, so original value, unit and
 conversion factors sit in `params`; and `sample_dim` will be keyed by the source's natural
 sample grain, so water-column covariates (J1, below) attach to the sample and a repeated
-ambient value is stored once. Neither applies to the three compilations built so far.
+ambient value is stored once. Neither applies to the five compilations built so far.
 Likewise a `reference_dim` row with no facts (a reference-list-only source, Ribeiro) needs an
 explicit `--allow-factless` build flag that does not exist yet: today the build raises on an
 empty fact table.
@@ -192,6 +192,8 @@ Counts are as built; the extract's own `extract_report.json` has the authoritati
 | [smithsonian-coastal-carbon](smithsonian-coastal-carbon/README.md) | 217,181 | Coastal Carbon Network Data Library v1.7.0: tidal-wetland soil carbon profiles and 210Pb accretion rates |
 | [stratma-scoc](stratma-scoc/README.md) | 3,907 | SCOC database v1: marine sediment community oxygen consumption (and grain size) |
 | [foster-seagrass](foster-seagrass/README.md) | 12,980 | Foster et al. 2025: seagrass biomass, production and meadow structure |
+| [strydom-seagrass](strydom-seagrass/README.md) | 14,266 | Strydom et al. (PANGAEA 929968, last change 2025-05-06): the same seagrass measures as Foster, in PANGAEA's unit spellings |
+| [stratma-bio](stratma-bio/README.md) | 63,350 | BenBioDen (Stratmann et al., Dryad v4): meio-, macro- and megabenthic biomass (11,792) and density (51,558), shore to abyssal |
 
 A source's own README, if it ships one, is a raw file kept beside ours as `README_<origin>.md`
 (for example `foster-seagrass/README_dryad.md`); only `README.md` is ours and tracked.
@@ -207,16 +209,18 @@ source needs it; the compilation's README says how that source applies it.
   `dbd_gt_max`, `depth_missing`, `depth_inverted`, `duplicate_source_row`,
   `carbon_type_unknown`, `se_units_differ`, `coords_missing`, `coords_approximate`,
   `lon_wrapped`, `lat_lon_zero`, `method_missing`, `flux_type_missing`,
-  `study_marked_excluded`, `year_missing`, `total_ne_sum_of_parts`, and `habitat_from_scope` (SCOC and Foster: on all
-  their facts, 3,907 and 12,980).
+  `study_marked_excluded`, `year_missing`, `total_ne_sum_of_parts`, `converted_by_source` and `lat_beyond_pole`
+  (stratma-bio; the latter on 1 fact) and
+  `habitat_from_scope` (SCOC, Foster and Strydom: on all their facts, 3,907, 12,980 and 14,266; stratma-bio: on the facts
+  whose `Depth range` label is present, 21,659 of 63,350).
 - Registered ahead of use, for compilations not yet built (names only; defined in each
   source's README when it is built): `covariate_conflict`, `reference_inferred`,
-  `reference_unresolved`, `sd_converted_from_se`, `converted_by_source`,
+  `reference_unresolved`, `sd_converted_from_se`,
   `calculated_by_source`, `potential_rate`, `source_site_averaged`, `source_time_averaged`,
   `source_average_row`, `source_median`, and others listed in `FLAGS`.
 - Skip reasons in use: `depthseries_core_not_in_cores`, `empty_row`,
-  `no_seagrass_measurement`. Registered ahead of use: `below_detection_limit`,
-  `not_measured`, `units_missing`, `no_density`.
+  `no_seagrass_measurement`, `no_density` (stratma-bio; its skip report entries carry a `file` key because the source has
+  two data files). Registered ahead of use: `below_detection_limit`, `not_measured`, `units_missing`.
 
 ## Not yet built
 
@@ -226,17 +230,17 @@ The table structure already has room for each of these.
   `doi_resolution_source` (NULL everywhere) for a separate script to fill via OpenAlex,
   so compiled and extracted values can be joined by DOI. `extract.py` never calls a
   network service and the source's own DOI is never overwritten. DOI coverage now: CCN
-  959/1,012 citations, Foster 476/567, SCOC 17/231.
+  959/1,012 citations, Foster 476/567, SCOC 17/231, Strydom 312/400, BenBioDen 43/777.
 - **Coverage report.** A habitat x `measurement_type` count of facts, references and
   locations per source, answering what has been extracted and to what extent. Its
   inputs (`location_dim.habitat`, `measurement_fact.measurement_type`) are in place.
-- **More compilations.** Raw files for 18 more sit in `data/compilations/` with no
-  `extract.py`: strydom-seagrass, usgs-wetlands, rosentreter-ghg, ray-oyster,
-  chang-denitrification, stratma-bio, boynton-flux, fulweiler-nfix, davis-calcification,
+- **More compilations.** Raw files for 16 more sit in `data/compilations/` with no
+  `extract.py`: usgs-wetlands, rosentreter-ghg, ray-oyster,
+  chang-denitrification, boynton-flux, fulweiler-nfix, davis-calcification,
   pessarrodona-seaweed, tang-nitrification, shao-nfix, jorgensen-oxygen, mouw-carbon,
   francesco-phytoplankton, paradis-mosaic, cloern-phytoplankton (a PDF supplement) and
   ribeiro-mangrove (a reference list only, no measurements). Expect overlap between
-  compilations (CCN/USGS, SCOC/Jorgensen/Boynton, Foster/Strydom); the layer never merges them.
+  compilations (CCN/USGS, SCOC/Jorgensen/Boynton, Foster/Strydom, SCOC/BenBioDen); the layer never merges them.
 - **Open label questions.** CCN `saline`, `brackish`, `mixoeuhaline` have no Venice
   class; CCN has no rule yielding `artificial`; SCOC near-shore and slope have no
   setting.

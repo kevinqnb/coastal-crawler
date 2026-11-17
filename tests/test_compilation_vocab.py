@@ -186,7 +186,7 @@ def test_registries_known_answer():
              "depth_inverted", "duplicate_source_row", "carbon_type_unknown", "se_units_differ",
              "coords_missing", "coords_approximate", "lon_wrapped", "lat_lon_zero",
              "method_missing", "flux_type_missing", "study_marked_excluded", "year_missing",
-             "total_ne_sum_of_parts"}
+             "total_ne_sum_of_parts", "lat_beyond_pole"}
     c2 = {"habitat_from_scope", "covariate_conflict", "reference_inferred", "reference_unresolved",
           "sd_converted_from_se", "converted_by_source", "potential_rate", "calculated_by_source"}
     assert (built | c2) <= set(v.FLAGS)

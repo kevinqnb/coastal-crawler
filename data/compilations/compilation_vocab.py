@@ -156,18 +156,21 @@ ATTRIBUTES: dict[str, AttrDecl] = {
     "scoc_aou": _d("B5", {"advective_o2_uptake"}, {"mmol O2 m-2 d-1"}),
     "scoc_unspecified": _d("B5", {None}, {"mmol O2 m-2 d-1"}),
     "scoc_median_grain_size": _d("G1", {"median_grain_size"}, {"um"}),
-    # Foster seagrass
-    "seagrass_biomass_above": _d("B2", {"above_ground_biomass"}, {"g DW m-2"}),
-    "seagrass_biomass_below": _d("B2", {"below_ground_biomass"}, {"g DW m-2"}),
-    "seagrass_biomass_total": _d("B2", {"total_biomass"}, {"g DW m-2"}),
-    "seagrass_shoot_density": _d("B3", {"shoot_or_stem_density"}, {"shoots m-2"}),
-    "seagrass_leaf_density": _d("B3", {"leaf_density"}, {"leaves m-2"}),
+    # Foster seagrass (g DW m-2 ... spellings) and Strydom seagrass (PANGAEA spellings g/m**2 ...)
+    "seagrass_biomass_above": _d("B2", {"above_ground_biomass"}, {"g DW m-2", "g/m**2"}),
+    "seagrass_biomass_below": _d("B2", {"below_ground_biomass"}, {"g DW m-2", "g/m**2"}),
+    "seagrass_biomass_total": _d("B2", {"total_biomass"}, {"g DW m-2", "g/m**2"}),
+    "seagrass_shoot_density": _d("B3", {"shoot_or_stem_density"}, {"shoots m-2", "#/m**2"}),
+    "seagrass_leaf_density": _d("B3", {"leaf_density"}, {"leaves m-2", "#/m**2"}),
     "seagrass_percent_cover": _d("B3", {"percent_cover"}, {"%"}),
-    "seagrass_production_above": _d("B6", {"above_ground_npp"}, {"g DW m-2 d-1"}),
-    "seagrass_production_below": _d("B6", {"below_ground_npp"}, {"g DW m-2 d-1"}),
-    "seagrass_production_total": _d("B6", {"total_npp"}, {"g DW m-2 d-1"}),
-    "seagrass_production_shoot": _d("B6", {"shoot_production"}, {"g DW m-2 d-1"}),
-    "seagrass_production_leaf": _d("B6", {"leaf_production"}, {"g DW m-2 d-1"}),
+    "seagrass_production_above": _d("B6", {"above_ground_npp"}, {"g DW m-2 d-1", "g/m**2/day"}),
+    "seagrass_production_below": _d("B6", {"below_ground_npp"}, {"g DW m-2 d-1", "g/m**2/day"}),
+    "seagrass_production_total": _d("B6", {"total_npp"}, {"g DW m-2 d-1", "g/m**2/day"}),
+    "seagrass_production_shoot": _d("B6", {"shoot_production"}, {"g DW m-2 d-1", "g/m**2/day"}),
+    "seagrass_production_leaf": _d("B6", {"leaf_production"}, {"g DW m-2 d-1", "g/m**2/day"}),
+    # BenBioDen (stratma-bio): total biomass (four unit spellings, one per source row) and total density
+    "benbio_biomass": _d("B10", {"total_biomass"}, {"g WM/ m2", "g DM/ m2", "g C/ m2", "g AFDM/ m2"}),
+    "benden_density": _d("B10", {"total_density"}, {"ind/ m2"}),
 }
 
 
@@ -256,6 +259,7 @@ FLAGS: dict[str, str] = {
     "source_median": "source value is a median",
     "salinity_units_missing": "salinity value has no unit in the source",
     "coords_integer_degree": "coordinates are whole degrees",
+    "lat_beyond_pole": "latitude outside [-90, 90] in the source; the value is kept as reported",
     "pers_comm": "value is a personal communication",
     "secondary_source": "value was taken from a secondary compilation named by the source",
     "secondary_compilation": "reference is an aggregated database, not the original study",
