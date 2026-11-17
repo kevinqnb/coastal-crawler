@@ -23,9 +23,10 @@ units in the sheet), TA:DIC slope, ``Net dissolution at Night?``, ``Decade Studi
 
 Errors. ``Gnet error`` + its ``error type`` -> ``sd`` / ``se`` of the Gnet fact; ``Pnet error`` + its ``error type``
 -> the Pnet fact. Explicit table: ``SE``, ``se`` -> se; ``SD``, ``SD `` -> sd; ``EP-SE`` -> se plus flag
-``error_propagated`` (error-propagated SE); ``S`` -> NOT interpreted (could be SE or SD: no sd/se, flag
-``error_type_missing``, value in the method params). An error value with NO type also gets no sd/se,
-``error_type_missing`` and the value in params; an unlisted type raises. A negative error value is kept as given and
+``error_propagated`` (error-propagated SE). ``S`` (could be SE or SD) and an error value with NO type are treated as
+not stated: the user's rule (2026-11-17) is to default to SD, flag it, note it, so the value goes in ``sd``, the fact gets
+``error_type_missing`` and its method row carries ``notes`` = ``SD_ASSUMED_NOTE``, with the value also in params; an
+unlisted type raises. A negative error value is kept as given and
 flagged ``negative_sd`` (the Pnet errors of the Kinsey 1977 rows are signed). ``% Coral Error`` has no type column: its
 value goes to the params of the cover fact's method row, not to sd/se.
 
@@ -78,6 +79,8 @@ from compilation_vocab import check_skip_reasons  # noqa: E402
 from coastal_crawler.compilations import ContractError, empty_table, write_extracted  # noqa: E402
 
 SOURCE_KEY = "davis-calcification"
+SD_ASSUMED_NOTE = ("error type is not stated in the source (missing, or 'S': SE or SD); assumed to be a standard "
+                   "deviation (flag error_type_missing)")
 SOURCE_NAME = "Spatiotemporal drivers of hydrochemical ecosystem calcification and organic productivity: the meta-data (Davis et al.)"
 SOURCE_DOI = "10.17882/80022"
 SOURCE_VERSION = "SEANOE 80022 (2021-11-26), last version"
@@ -349,6 +352,7 @@ def build_tables(rows: list[dict], layout: dict, access_date: str) -> tuple[dict
             if year[i] is None:
                 fl.append("year_missing")
             sd = se = np.nan
+            sd_assumed = False
             if col in ERROR_COLUMNS:
                 ecol, tcol = ERROR_COLUMNS[col]
                 ev = num_cell(i, ecol, HEADERS[ecol])
@@ -369,6 +373,9 @@ def build_tables(rows: list[dict], layout: dict, access_date: str) -> tuple[dict
                     elif kind == "se":
                         se = ev
                     else:
+                        # type not stated (no type, or the ambiguous 'S'): assumed SD, flagged, noted (user rule 2026-11-17)
+                        sd = ev
+                        sd_assumed = True
                         fl.append("error_type_missing")
                         n_err_no_type += et is None
                     if propagated:
@@ -381,10 +388,11 @@ def build_tables(rows: list[dict], layout: dict, access_date: str) -> tuple[dict
                 params["error_type_raw"] = text(val(i, ERROR_COLUMNS[col][1]))
                 tech = text(val(i, "Q"))
                 pj = json.dumps(params, sort_keys=True, default=str)
-                mkey = f"{attr}|{tech}|{pj}"
+                mkey = f"{attr}|{tech}|{pj}" + ("|sd_assumed" if sd_assumed else "")
                 if mkey not in method_rows:
                     method_rows[mkey] = method_row(SOURCE_KEY, mkey, attr, status="matched" if tech else "method_id_null",
-                                                   technique=tech, params=pj)
+                                                   technique=tech, params=pj,
+                                                   notes=SD_ASSUMED_NOTE if sd_assumed else None)
             elif attr == "davis_coral_cover":
                 ce = num_cell(i, "AA", "% Coral Error")
                 pj = json.dumps({"coral_error_value": ce, "coral_error_type": None}, sort_keys=True)

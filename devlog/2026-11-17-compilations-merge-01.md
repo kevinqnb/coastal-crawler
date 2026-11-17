@@ -18,3 +18,6 @@ e157fb3 Compilations contract: fact.value_comparator and the inequality flag
 bf99dd6 Compilations contract: method.notes for the source's free-text comments
 7674427 Compilations: reconcile groups 3-6; top-level README, gitignore exceptions, pdfplumber
 (group branch merges f3f134a, b513398, 6fc4b9d, 24ab6b2; per-group devlogs g3 to g6 carry the compilation commits)
+
+### Follow-up (same day)
+Final review. Independent round trip of tang, francesco, shao, mouw and jorgensen against main's parquet and the built database: 0 mismatches. No skipped cell anywhere is an inequality. Applied the user's rule "default to SD, flag it, note it" to every source whose error type is not stated: Fulweiler (237 facts, the file's code `NA`) and Davis (2) now store the error in `sd`, keep `error_type_missing` and carry a `method.notes` sentence, as MOSAIC already did; the build stays at 695,589 facts. `_g3_common.method_row` takes an optional `notes`. Shao's `mean (sd)` brackets are stated SDs and need no assumption.

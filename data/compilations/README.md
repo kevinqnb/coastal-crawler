@@ -242,8 +242,8 @@ source needs it; the compilation's README says how that source applies it.
   `reference_unresolved` 12,576 and `reference_inferred` 2,364 (Mouw IDs 2 and 14); `pers_comm` 10,524; `zero_value` 10,482;
   `converted_by_source` 10,161; `coords_approximate` 5,055; `non_bulk_material` 4,577 (MOSAIC size or density fractions: filter
   before comparing with bulk sediment); `duplicate_source_row` 2,176; `total_ne_sum_of_parts` 2,058; `source_site_averaged`
-  1,815; `salinity_units_missing` 1,796; `o2_units_ambiguous` 1,422; `error_type_missing` 1,379 (MOSAIC 1,140: the source never says SD or SE, so the error is stored as `sd` by assumption, noted
-  in `method.notes`; Fulweiler 237 and Davis 2: an error value with no stated type); `replicate` 1,143; `source_mean_reported` 1,052 (Shao `mean (sd)` cells,
+  1,815; `salinity_units_missing` 1,796; `o2_units_ambiguous` 1,422; `error_type_missing` 1,379 (the source states no error type, so by the rule "default to SD, flag it, note it" the error is stored in
+  `sd` and the method row's `notes` says so: MOSAIC 1,140, Fulweiler 237 (the file's code `NA`), Davis 2; filter on this flag to avoid the assumption); `replicate` 1,143; `source_mean_reported` 1,052 (Shao `mean (sd)` cells,
   value = the mean, sd = the bracket); `secondary_source` 782; `source_time_averaged` 659; `shallow_lt10m` 612;
   `covariate_conflict` 580 (one sample with two different values of one J1 attribute; both kept); `source_average_row` 440;
   `digitized_from_figure` 260; `coords_missing` 218; `source_median` 163; `dbd_gt_max` 148; `inequality` 114 (censored values

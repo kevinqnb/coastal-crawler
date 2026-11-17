@@ -41,9 +41,11 @@ negative original rate (net N2 flux out of the sediment) are stored **positive**
 source); the extract asserts no converted rate is negative and counts these.
 
 **Error and n.** `nfix_error_type` `stdev.` (1,316 facts with a value) -> `sd`; `std. err` (975) -> `se`; `nfix_n` -> `n` (4,725; 68
-blank). Error values the file gives under `C.I.` (34), `range` (7 with a value) or **no type at all (237)** are not an SD or SE:
-no `sd`/`se`, the value and type are in `params`, and the fact carries `error_type_other` (41) or `error_type_missing` (237, a flag
-added to the registry for this).
+blank). Error values the file gives under `C.I.` (34) or `range` (7 with a value) are not an SD or SE: no `sd`/`se`, the value and type are in
+`params`, and the fact carries `error_type_other` (41). **Error values with no type at all (237; the file's code is the literal `NA`)
+are assumed to be a standard deviation**, by the user's rule of 2026-11-17 (default to SD, flag it, note it): the value is stored in `sd`,
+the fact carries `error_type_missing` (237), and its method row has `notes` saying so. Any other type string raises. Filter on
+`error_type_missing` if you do not want to rely on the assumption.
 
 ## Mapping
 

@@ -167,7 +167,11 @@ def test_rate_facts(built) -> None:
     assert f.loc["N1:fulweiler_n2fix_benthic", "value"] == 1.5 and f.loc["N3:fulweiler_n2fix_water", "value"] == 3e-6
     assert f.loc["N1:fulweiler_n2fix_benthic", "sd"] == 0.2 and pd.isna(f.loc["N1:fulweiler_n2fix_benthic", "se"])
     assert f.loc["N1:fulweiler_n2fix_benthic", "n"] == 3 and pd.isna(f.loc["N2:fulweiler_n2fix_benthic", "n"])
-    assert f.loc[["N3:fulweiler_n2fix_water", "N5:fulweiler_n2fix_benthic"], ["sd", "se"]].isna().all().all()  # range / no type
+    assert f.loc["N3:fulweiler_n2fix_water", ["sd", "se"]].isna().all()  # a range is neither an SD nor an SE
+    # no error type: assumed SD (user rule 2026-11-17): in sd, flagged error_type_missing, method.notes says so
+    assert f.loc["N5:fulweiler_n2fix_benthic", "sd"] == 0.5 and pd.isna(f.loc["N5:fulweiler_n2fix_benthic", "se"])
+    mm = built[0]["method"].set_index("method_key")
+    assert mm.loc["N5", "notes"] == fx.SD_ASSUMED_NOTE and mm["notes"].notna().sum() == 1
     assert f.loc["N1:fulweiler_n2fix_benthic", "source_row_ref"] == "aquatic_N2fix_rates.csv#data_row=0:fulweiler_n2fix_benthic"
     assert f.loc["N1:fulweiler_n2fix_benthic", "reference_key"] == "R1"
 

@@ -29,8 +29,10 @@ conversion question is downstream. Both `Gnet` and `Pnet` take negative values (
 
 - **Errors.** `Gnet error` with its `error type` -> `sd` / `se` of the `Gnet` fact; `Pnet error` with its `error type` -> the `Pnet` fact
   (explicit table, an unlisted type raises). `SE` and `se` -> `se`; `SD` and `SD ` -> `sd` (25 facts); `EP-SE` -> `se` plus flag
-  `error_propagated` (24); in all 104 facts carry an `se`. **`S` (one `Pnet` cell, Davis et al. 2019) is not interpreted** (it could be SE or
-  SD): no `sd`/`se`, flag `error_type_missing`, value in the params. One more error value has no type at all (same flag). **Five `Pnet`
+  `error_propagated` (24); in all 104 facts carry an `se`. **`S` (one `Pnet` cell, Davis et al. 2019) could be SE or SD, and one more error value has no
+  type at all: both are treated as not stated**, so by the user's rule of 2026-11-17 (default to SD, flag it, note it) the value is stored in
+  `sd` (27 facts carry an `sd` in all), the fact carries `error_type_missing` (2), the method row's `notes` says the type is assumed, and the
+  value is also in the params. **Five `Pnet`
   errors are negative** (the Kinsey 1977 rows, where `Pnet` is negative and the error is signed): kept as given, flag `negative_sd`.
   `% Coral Error` has no type column: its 22 values are in the params of the cover fact's method row, not in `sd`/`se`.
 - **Colour provenance (flags).** The legend in row 1 is a font colour code: purple text (`FF7030A0`) is "calculated from information

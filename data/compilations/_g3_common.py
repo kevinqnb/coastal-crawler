@@ -65,14 +65,14 @@ def classify(v: object, what: str, codes: dict[str, str]) -> tuple[str, float | 
 def method_row(source_key: str, method_key: str, attribute: str, *, status: str, technique: str | None = None,
                in_situ_ex_situ: str | None = None, light_dark: str | None = None,
                incubation_type: str | None = None, experimental_status: str | None = None,
-               conversion_applied: str | None = None, params: str = "{}") -> dict:
+               conversion_applied: str | None = None, params: str = "{}", notes: str | None = None) -> dict:
     return {
         "source_key": source_key, "method_key": method_key, "source_method_id": None, "attribute": attribute,
         "method_status": status, "technique": technique, "coring_method": None, "carbon_type": None,
         "carbon_measured_or_modeled": None, "fraction_carbon_method": None, "carbonates_removed": None,
         "carbonate_removal_method": None, "conversion_applied": conversion_applied,
         "in_situ_ex_situ": in_situ_ex_situ, "light_dark": light_dark, "incubation_type": incubation_type,
-        "experimental_status": experimental_status, "params": params,
+        "experimental_status": experimental_status, "params": params, "notes": notes,
     }
 
 

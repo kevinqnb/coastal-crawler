@@ -20,8 +20,10 @@ is negative are stored positive by the source (sign flipped); counted in the rep
 
 Attribute by ``substrate``: ``wc`` -> ``fulweiler_n2fix_water`` (C5 n2_fixation); ``benthos`` and ``other`` (plants,
 stems, epiphytes) -> ``fulweiler_n2fix_benthic`` (C7 n2_fixation). ``nfix_error_converted``: type ``stdev.`` -> ``sd``,
-``std. err`` -> ``se``; ``C.I.`` and ``range`` (and a value with NO type) are not an SD or SE: no sd/se, the value and
-type go to params and the fact gets ``error_type_other`` (C.I., range) or ``error_type_missing`` (no type);
+``std. err`` -> ``se``; ``C.I.`` and ``range`` are not an SD or SE: no sd/se, the value and type go to params and the
+fact gets ``error_type_other``. A value with NO type is assumed to be an SD (the user's rule, 2026-11-17: default to SD,
+flag it, note it): it goes in ``sd``, the fact gets ``error_type_missing`` and its method row carries
+``notes`` = ``SD_ASSUMED_NOTE``; any other type string raises;
 ``nfix_n`` -> ``n`` (blank 68).
 
 Habitat (D3). Raw ``habitat_type`` = the ``habitat`` column for ``benthos`` / ``other`` rows and ``<habitat> | wc``
@@ -81,6 +83,14 @@ from compilation_vocab import check_skip_reasons  # noqa: E402
 from coastal_crawler.compilations import ContractError, empty_table, write_extracted  # noqa: E402
 
 SOURCE_KEY = "fulweiler-nfix"
+ERROR_TYPES_STATED = ("stdev.", "std. err", "C.I.", "range")  # the types the source names; no type = not in this tuple
+NO_TYPE_CODES = ("NA",)  # the source's code for "no error type" (besides an empty cell)
+
+
+def _no_error_type(v: object) -> bool:
+    return v is None or v != v or v in NO_TYPE_CODES  # v != v: NaN
+SD_ASSUMED_NOTE = ("error value has no error type in the source; assumed to be a standard deviation "
+                   "(flag error_type_missing)")
 SOURCE_NAME = "Global dataset of nitrogen fixation rates across inland and coastal waters (Fulweiler et al.)"
 SOURCE_DOI = "10.6073/pasta/333f651ca721da657d5fd0c393d26cf8"
 SOURCE_VERSION = "EDI edi.1759.2 (ver 2)"
@@ -350,6 +360,8 @@ def build_tables(
     # ---- per-row methods (D1)
     refx = refs.set_index("reference_id")
     method_rows: list[dict] = []
+    # an error value with NO error type: assumed to be a standard deviation (user rule, 2026-11-17)
+    sd_assumed = [err[i] is not None and etype[i] not in ERROR_TYPES_STATED for i in range(n_rows)]
     converted = [False] * n_rows
     n_sign_flipped = 0
     for i in range(n_rows):
@@ -372,7 +384,7 @@ def build_tables(
         method_rows.append(method_row(
             SOURCE_KEY, rid[i], "fulweiler_n2fix_water" if sub[i] == "wc" else "fulweiler_n2fix_benthic",
             status="matched", technique=rates.nfix_method.iat[i], conversion_applied=conv,
-            params=json.dumps(params, sort_keys=True),
+            params=json.dumps(params, sort_keys=True), notes=SD_ASSUMED_NOTE if sd_assumed[i] else None,
         ))
     j1_attrs = sorted({a for a, _c in ANC_J1.values()})
     for a in j1_attrs:
@@ -413,6 +425,9 @@ def build_tables(
                 fl.append("error_type_other")
                 n_err_other += 1
             else:
+                if not _no_error_type(etype[i]):
+                    raise ContractError(f"{rid[i]}: unlisted error type {etype[i]!r}")
+                sd = err[i]  # assumed SD; flagged, and noted in method.notes
                 fl.append("error_type_missing")
                 n_err_missing += 1
         (sub_f,) = decl.subfields

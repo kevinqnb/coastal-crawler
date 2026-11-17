@@ -127,7 +127,11 @@ def test_errors(built) -> None:
     assert f.loc["row0:davis_gnet", "se"] == 58 and pd.isna(f.loc["row0:davis_gnet", "sd"])
     assert f.loc["row0:davis_pnet", "se"] == 20  # EP-SE -> se
     assert f.loc["row1:davis_gnet", "sd"] == 5 and pd.isna(f.loc["row1:davis_gnet", "se"])  # 'SD ' -> sd
-    assert f.loc[["row2:davis_gnet", "row2:davis_pnet"], ["sd", "se"]].isna().all().all()  # 'S' and no type: not interpreted
+    # 'S' (Gnet, error -2.0) and no type (Pnet, error 1.0): not stated -> assumed SD, flagged, noted (user rule 2026-11-17)
+    assert f.loc["row2:davis_gnet", "sd"] == -2.0 and f.loc["row2:davis_pnet", "sd"] == 1.0
+    assert f.loc[["row2:davis_gnet", "row2:davis_pnet"], "se"].isna().all()
+    mn = built[0]["method"]["notes"]
+    assert mn.notna().sum() == 2 and (mn.dropna() == dx.SD_ASSUMED_NOTE).all()
     assert f.loc[["row0:davis_coral_cover", "row0:davis_coralline_cover"], ["sd", "se"]].isna().all().all()  # no type column
 
 
