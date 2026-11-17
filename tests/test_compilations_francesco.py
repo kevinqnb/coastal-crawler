@@ -116,12 +116,10 @@ def test_samples(built) -> None:
     tables, _, rep = built
     s = tables["sample"].set_index("sample_key")
     a = s.loc["1|0|16/03/1979|10.5|-20.25"]
-    assert (a.sampling_year, a.sampling_month, a.sample_depth_m, a.water_temperature_c, a.source_sample_id) == (1979, 3, 0.0, 15.0, "Cruise1")
-    assert s.loc["1|10|16/03/1979|10.5|-20.25", "water_temperature_c"] == 15.5
-    assert pd.isna(s.loc["2|5|01/05/1990|20|-185.0", "water_temperature_c"])  # SST_flag 1: reconstructed, not loaded
+    assert (a.sampling_year, a.sampling_month, a.sample_depth_m, a.source_sample_id) == (1979, 3, 0.0, "Cruise1")
+    assert s["water_temperature_c"].isna().all()  # SST (a surface value) is not loaded
     assert pd.isna(s.loc["2|5|01/05/1990|20|-185.0", "source_sample_id"])  # blank Event
-    assert s.loc["2|15|02/05/1990|21|-184.0", "water_temperature_c"] == 21.0
-    assert rep["samples_with_temperature"] == 3 and rep["rows_with_in_situ_sst"] == 4
+    assert rep["samples_with_temperature"] == 0 and rep["rows_with_in_situ_sst"] == 4
     p = s.loc["profile2"]
     assert pd.isna(p.sample_depth_m) and p.depth_notes == "profile-level value; max sampling depth 80 m; profile spans 2 stations, located at the first row's"
     assert s.loc["profile1", "depth_notes"] == "profile-level value; max sampling depth 50 m"
@@ -169,7 +167,7 @@ def _with(i: int, **kw) -> list[dict]:
      (0, {"Year": "1980"}, "disagrees with Year"), (0, {"SST_flag": "2"}, "SST_flag values"),
      (0, {"Longitude": "-400"}, "wrappable range"),
      (0, {"Latitude": "95"}, "latitude out of range"), (0, {"Sampling depth (m)": "-1"}, "negative sampling depth"),
-     (2, {"SST (°C)": "16.0"}, "disagree on temperature or event"), (2, {"Event": "Other"}, "disagree on temperature or event")],
+     (2, {"Event": "Other"}, "disagree on temperature or event")],
 )
 def test_bad_input_raises(i, kw, msg) -> None:
     with pytest.raises(ContractError, match=msg):

@@ -12,7 +12,7 @@ Loaded (phase 1)
   ``volumetric nitrite oxidation``  (1,010 rows) -> ``tang_nitrite_oxidation``  C5 nitrite_oxidation, nmol N L-1 d-1
   (``sd`` = the sheet's ``Standard deviation of rate`` where it is a number), and from the same rows the J1 water values
   ``Ammonium+ammonia`` -> ``water_ammonium``, ``Nitrite`` -> ``water_nitrite``, ``Nitrate`` -> ``water_nitrate``,
-  ``O2`` -> ``water_o2`` (all ``μM``, U+03BC, from the headers).
+  ``O2`` -> ``water_o2`` (all ``μM``, U+03BC, from the headers), ``pH`` -> ``water_ph`` (``unitless``).
 Sheets ``rate metadata`` / ``rate metadata 2`` give the method row of each ``Data source`` (technique = ``Method``, every
 column in ``params``). Not loaded (listed in ``extract_report.json``): the gene-abundance sheets ``ammonia oxidizer`` and
 ``NOB`` and their qPCR metadata sheets (phase 2), and the rate sheets' ``PAR``, ``Light level`` and
@@ -34,8 +34,8 @@ J1 rules (INTEGRATION_PLAN 1.2)
   * Equal values (exactly, no tolerance) of one (sample, attribute) collapse into one fact and are counted. Different
     values are all loaded with the flag ``covariate_conflict``; nothing is averaged or dropped.
   * J1 values on a row whose rate is ``BDL`` / ``NM`` still load (the sample exists because they reference it).
-  * ``pH`` (66 numeric cells, Breider 2019 and Shiozaki 2019) has no unit anywhere in the sheet: rule 2 (units required)
-    skips them with ``units_missing``. The plan said the pH column was empty; it is not.
+  * ``pH`` (66 numeric cells, Breider 2019 and Shiozaki 2019; the plan said the column was empty) has no unit anywhere in the
+    sheet: J1 ``water_ph`` with units ``unitless`` (the user's decision; as for Fulweiler).
   * Sample slots: ``sample_depth_m`` = Depth, ``water_temperature_c``, ``water_salinity`` (+ ``psu``). One sample's rows must
     agree on a slot; ``SLOT_CONFLICT_SAMPLES`` names the one sample where two replicate casts disagree on temperature and
     salinity (-67.774 N, 80 m, 2011-01-17): its slots are NULL (not averaged) and the case is in the report. Any other
@@ -98,7 +98,7 @@ CITATION = (
     "https://doi.org/10.5281/zenodo.8355912 (paper: Earth System Science Data 15, 5039-5077, "
     "https://doi.org/10.5194/essd-15-5039-2023)"
 )
-ALLOWED_SKIP_REASONS = frozenset({"below_detection_limit", "not_measured", "units_missing"})
+ALLOWED_SKIP_REASONS = frozenset({"below_detection_limit", "not_measured"})
 check_skip_reasons(ALLOWED_SKIP_REASONS)
 
 SHEET_NAMES = [
@@ -125,8 +125,8 @@ J1_COLUMNS: dict[str, tuple[str, str]] = {
     "Nitrite (μM)": ("water_nitrite", "μM"),
     "Nitrate (μM)": ("water_nitrate", "μM"),
     "O2 (μM)": ("water_o2", "μM"),
+    "pH": ("water_ph", "unitless"),  # no unit anywhere in the sheet: `unitless`, as decided by the user
 }
-PH_COL = "pH"  # no unit anywhere: every numeric cell is a units_missing skip
 NOT_LOADED_COLUMNS = ["PAR (μmol Einstein m-2 s-1)", "Light level (%)", "Potential density (kg m-3)"]
 _META_COMMON = [
     "Data source", "Method", "Tracer", "Final tracer concentration (nM)", "Tracer enrichment (%)",
@@ -291,7 +291,6 @@ def read_rate_sheet(df: pd.DataFrame, sheet: str) -> list[dict]:
             "rate": code_of(r[RATE_COL], what + " rate"), "sd": code_of(r[SD_COL], what + " sd"),
             "temp": code_of(r[TEMP_COL], what + " temperature"), "sal": code_of(r[SAL_COL], what + " salinity"),
             "j1": {c: code_of(r[c], f"{what} {c}") for c in J1_COLUMNS},
-            "ph": code_of(r[PH_COL], what + " pH"),
             "not_loaded": {c: code_of(r[c], f"{what} {c}")[0] for c in NOT_LOADED_COLUMNS},
         })
         rows[-1]["sample_key"] = f"{_fkey(lat)}|{_fkey(lon)}|{_fkey(depth)}|{datekey}"
@@ -347,7 +346,7 @@ def build_tables(
     skips: list[dict] = []
     rate_facts: list[dict] = []
     j1_cells: list[J1Cell] = []
-    cell_counts = {"rate_num": 0, "rate_skipped": 0, "j1_num": 0, "j1_skipped": 0, "ph_skipped": 0}
+    cell_counts = {"rate_num": 0, "rate_skipped": 0, "j1_num": 0, "j1_skipped": 0}
     coded: dict[str, dict[str, int]] = {"NA": {}, "NM": {}, "BDL": {}}  # per column
 
     def tally(col: str, kind: str) -> None:
@@ -388,14 +387,6 @@ def build_tables(
                 cell_counts["j1_skipped"] += 1
                 skip_row(r, attr, "below_detection_limit" if kind == "BDL" else "not_measured", kind,
                          limit_info if kind == "BDL" else None)
-        kind, val = r["ph"]
-        tally(PH_COL, kind)
-        if kind in ("num", "BDL", "NM"):
-            cell_counts["ph_skipped"] += 1
-            if kind == "num":
-                skip_row(r, "water_ph", "units_missing", "num", {"value": val})
-            else:
-                skip_row(r, "water_ph", "below_detection_limit" if kind == "BDL" else "not_measured", kind)
         if r["rate"][0] in ("BDL", "NM") and any(r["j1"][c][0] == "num" for c in J1_COLUMNS):
             n_rows_rate_skipped_with_j1 += 1
 
@@ -460,7 +451,8 @@ def build_tables(
         attr = c.attribute
         decl = ATTRIBUTE_DECL[attr]
         units = next(u for col, (a, u) in J1_COLUMNS.items() if a == attr)
-        if units not in decl.units or not any(col.endswith(f"({units})") for col, (a, _u) in J1_COLUMNS.items() if a == attr):
+        if units not in decl.units or (attr != "water_ph" and not any(
+                col.endswith(f"({units})") for col, (a, _u) in J1_COLUMNS.items() if a == attr)):
             raise ContractError(f"{attr}: unit {units!r} not declared / not the header's")
         fl = sample_flags(r)
         if c.value == 0:
@@ -484,7 +476,7 @@ def build_tables(
 
     # ---- accounting
     n_cells_in = cell_counts["rate_num"] + cell_counts["rate_skipped"] + cell_counts["j1_num"] \
-        + cell_counts["j1_skipped"] + cell_counts["ph_skipped"]
+        + cell_counts["j1_skipped"]
     n_collapsed = j1_counts["collapsed_repeats"]
     if len(fact) + len(skips) + n_collapsed != n_cells_in:
         raise ContractError(f"cells {n_cells_in} != facts {len(fact)} + skipped {len(skips)} + collapsed {n_collapsed}")
@@ -594,7 +586,6 @@ def build_tables(
         "cells_rate_skipped": cell_counts["rate_skipped"],
         "cells_j1_numeric": cell_counts["j1_num"],
         "cells_j1_skipped_bdl_nm": cell_counts["j1_skipped"],
-        "cells_ph_skipped": cell_counts["ph_skipped"],
         "j1_collapse": j1_counts,
         "j1_collapsed_repeats_by_attribute": {
             a: int(sum(1 for c in j1_cells if c.attribute == a) - sum(1 for f in j1_facts if f.cell.attribute == a))

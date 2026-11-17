@@ -109,19 +109,19 @@ def built():
 def test_counts(built) -> None:
     tables, skips, rep = built
     f = tables["fact"]
-    assert len(f) == 13 == rep["facts"]
+    assert len(f) == 14 == rep["facts"]
     assert rep["facts_by_attribute"] == {
-        "tang_ammonia_oxidation": 3, "tang_nitrite_oxidation": 2, "water_ammonium": 4, "water_nitrate": 3, "water_o2": 1,
+        "tang_ammonia_oxidation": 3, "tang_nitrite_oxidation": 2, "water_ammonium": 4, "water_nitrate": 3, "water_o2": 1, "water_ph": 1,
     }
-    assert rep["j1_collapse"] == {"cells": 11, "facts": 8, "collapsed_repeats": 3, "conflict_groups": 2, "conflict_facts": 4}
-    assert rep["cells_in"] == 20 and rep["skipped"] == 4
+    assert rep["j1_collapse"] == {"cells": 12, "facts": 9, "collapsed_repeats": 3, "conflict_groups": 2, "conflict_facts": 4}
+    assert rep["cells_in"] == 20 and rep["skipped"] == 3
     assert sorted((s["sheet"][-9:], s["data_row"], s["attribute"], s["reason"]) for s in skips) == [
         ("oxidation", 1, "water_o2", "below_detection_limit"), ("oxidation", 2, "tang_ammonia_oxidation", "below_detection_limit"),
-        ("oxidation", 2, "water_nitrate", "not_measured"), ("oxidation", 2, "water_ph", "units_missing"),
+        ("oxidation", 2, "water_nitrate", "not_measured"),
     ]
     assert len(tables["sample"]) == 3 and len(tables["location"]) == 3 and len(tables["reference"]) == 3
-    assert len(tables["method"]) == 7 and rep["methods_by_status"] == {"matched": 2, "method_id_null": 3, "method_id_unmatched": 2}
-    assert rep["j1_facts_on_rows_whose_rate_was_skipped"] == 1  # S2 NH4
+    assert len(tables["method"]) == 8 and rep["methods_by_status"] == {"matched": 2, "method_id_null": 4, "method_id_unmatched": 2}
+    assert rep["j1_facts_on_rows_whose_rate_was_skipped"] == 2  # S2 NH4 and pH
     assert rep["float_nan_cells_read_as_blank"] == {}
     validate_tables(add_derived_labels(tables))
 
@@ -144,7 +144,7 @@ def test_j1_one_fact_per_sample(built) -> None:
     assert "negative_value" in g.iloc[0]["flags"] and "covariate_conflict" not in g.iloc[0]["flags"]
     # a J1 value beside a skipped rate still loads, with the sample's missing date/depth flags
     g = f[f.sample_key == "11.0|21.0||2008 Dec-2009 Jan"]
-    assert list(g.attribute) == ["water_ammonium"] and list(g["flags"].iloc[0]) == ["depth_missing", "habitat_from_scope", "year_missing"]
+    assert sorted(g.attribute) == ["water_ammonium", "water_ph"] and list(g["flags"].iloc[0]) == ["depth_missing", "habitat_from_scope", "year_missing"]
 
 
 def test_rate_facts_and_units(built) -> None:
@@ -157,9 +157,10 @@ def test_rate_facts_and_units(built) -> None:
     assert z.value == 0 and list(z["flags"]) == ["habitat_from_scope", "zero_value"]
     assert f.loc[k, "source_row_ref"] == f"{tg.DATA_FILE}[volumetric ammonia oxidation]#data_row=0:tang_ammonia_oxidation"
     assert "volumetric ammonia oxidation#2:tang_ammonia_oxidation" not in f.index  # BDL -> skip, no fact
-    assert not any(a == "water_ph" for a in f.attribute)
+    ph = f.loc["volumetric ammonia oxidation#2:water_ph"]
+    assert (ph.measurement_type, ph.subfield, ph.units_raw, ph.value) == ("J1", "ph", "unitless", 7.9)
     n = built[0]["fact"]
-    assert set(n[n.attribute.str.startswith("water_")].units_raw) == {"μM"}  # U+03BC
+    assert set(n[n.attribute.str.startswith("water_") & (n.attribute != "water_ph")].units_raw) == {"μM"}  # U+03BC
 
 
 def test_samples_locations_references(built) -> None:

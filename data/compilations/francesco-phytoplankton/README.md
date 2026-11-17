@@ -47,13 +47,11 @@ is not J1, so all 37,722 production facts load (the two duplicated samples give 
 
 - **Habitat** `Water column` for every location (raw `habitat_type` constant `water column`), from the dataset's scope: flag `habitat_from_scope` on all facts. 3,635 locations
   (`location_key` = latitude | longitude as written); no depth (`Bottom depth` is a GEBCO value: derived, not loaded).
-- **Temperature.** `SST` where `SST_flag` is 0 (in situ, 11,452 rows) -> the sample's `water_temperature_c`; flag 1 (reconstructed from MODIS / Copernicus, 26,270 rows)
-  is not loaded. **SST is a sea-surface temperature**: following the plan (1.3) it is written to the temperature slot of every in-situ row, including samples taken below the
-  surface, so for deep samples it is not the temperature at the sampling depth. Profile-level samples carry none.
+- **Temperature is not loaded** (the user's decision): `SST` (11,452 in-situ rows, flag 0, and 26,270 reconstructed rows, flag 1) is a sea-surface value, not the temperature at the sampling depth, so `water_temperature_c` stays NULL on every sample.
 - `Sampling depth` -> `sample_depth_m`; `Date` (dd/mm/yyyy, asserted equal to `Year` and `Month`) -> year and month; `Event` -> `sample.source_sample_id`.
 - **Longitude** below -180 (5 rows of one profile, down to -188.5) is wrapped by +360 and flagged `lon_wrapped` (14 facts: 10 row-level, 4 profile-level).
 - **Methods:** one `method_id_null` row per attribute (6): the file gives no method per row.
-- **Not loaded:** `surface PAR` (both flags; phase 2: 15,092 in-situ rows), `Day length`, `Day of the year`, `Mixed Layer Depth`, `Euphotic zone depth`, `Max production depth`,
+- **Not loaded:** `SST` (both flags), `surface PAR` (both flags; phase 2: 15,092 in-situ rows), `Day length`, `Day of the year`, `Mixed Layer Depth`, `Euphotic zone depth`, `Max production depth`,
   `Max sampling depth` (written into the profile samples' `depth_notes`), `Bottom depth` and its sd (GEBCO), `Distance from coastline` (NASA OBPG grid), `Production to biomass ratio`
   (derived, D7), `hemisphere`, `Northern hemisphere season` and every `* magnitude` category (Jenks classes).
 
@@ -73,8 +71,7 @@ of which short references are databases exists, so the flag is blanket (the whol
 ## Row accounting
 
 226,332 cells (75,444 row-level and 150,888 profile-level occurrences) = 99,779 facts + 126,553 collapsed repeats (1 J1 sample repeat + 126,552 profile repeats); 0 skips.
-After the central build every fact was checked against the raw file by an independent parse (value, unit, reference key, location, wrapped longitude, sample key and depth, temperature
-rule, year, month, flags), every row's production cell is a fact, every profile has its four profile-level facts at its first row, and the profile-level cells are constant within every
+After the central build every fact was checked against the raw file by an independent parse (value, unit, reference key, location, wrapped longitude, sample key and depth, year, month, flags), every row's production cell is a fact, every profile has its four profile-level facts at its first row, and the profile-level cells are constant within every
 profile: 99,779 of 99,779 agree. A one-study check (Imai et al. 2008, predicted by an independent parse as 2 x 24 rows + 4 x 4 profiles = 64 facts) matched. Adding this source left the other
 eleven sources' content unchanged. Two runs of `extract.py` give byte-identical parquet and report. `source_row_ref` is `<file>#data_row=<0-based row>:<attribute>`.
 

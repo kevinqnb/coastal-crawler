@@ -28,15 +28,13 @@ as written); equal values of one sample and attribute collapse and are counted, 
 ``covariate_conflict`` (one profile-depth pair of the file: 12.1 vs 10.4 mg m^-3 at 3 m in profile 1711; another pair, profile
 2282, is equal and collapses). The profile-level samples are keyed ``profile<n>``.
 
-Context. ``Sampling depth`` -> ``sample.sample_depth_m`` (row-level samples; NULL on profile-level samples). ``SST`` where its
-``SST_flag`` is 0 (in situ; flag 1 = reconstructed from MODIS / Copernicus and NOT loaded) -> ``water_temperature_c`` of that
-row's sample (11,452 rows). SST is a SURFACE temperature: the plan (1.3) puts it in the slot on every in-situ row, also below the
-surface, and so does this extract; the README says so. ``Date`` (dd/mm/yyyy; year and month asserted equal to the ``Year`` and
+Context. ``Sampling depth`` -> ``sample.sample_depth_m`` (row-level samples; NULL on profile-level samples). ``SST`` (all rows, both flags) is NOT loaded
+(the user's decision): it is a SURFACE temperature, not the temperature at the sampling depth, so ``water_temperature_c`` stays NULL. ``Date`` (dd/mm/yyyy; year and month asserted equal to the ``Year`` and
 ``Month`` columns) -> sampling_year / month. ``Event`` (the original cruise or programme, blank on 850 rows) ->
 ``sample.source_sample_id``. A longitude below -180 (one profile) is wrapped by +360 and the facts carry ``lon_wrapped``.
 Habitat ``Water column`` from the dataset's scope, flag ``habitat_from_scope`` on every fact.
 
-Not loaded (derived, reconstructed or categorical; counted in the report): flag-1 SST, ``surface PAR`` (phase 2, both flags),
+Not loaded (derived, reconstructed or categorical; counted in the report): ``SST`` (both flags), ``surface PAR`` (phase 2, both flags),
 ``Day length`` and ``Day of the year`` (computed), ``Mixed Layer Depth``, ``Euphotic zone depth``, ``Max production depth``,
 ``Max sampling depth``, ``Bottom depth`` and its sd (GEBCO), ``Distance from coastline`` (NASA OBPG grid),
 ``Production to biomass ratio`` (derived, D7), ``hemisphere``, ``Northern hemisphere season`` and every ``* magnitude``
@@ -290,7 +288,7 @@ def build_tables(raw: pd.DataFrame, access_date: str) -> tuple[dict[str, pd.Data
     slot_conflicts: list[str] = []
     for i in range(n):
         k = row_key[i]
-        temp = sst[i] if sst_flag[i] == "0" else None
+        temp = None  # SST is a surface value: not loaded
         ev = norm_ws(C["Event"][i]) or None
         if k not in sample_rows:
             sample_rows[k] = {"i": i, "temp": temp, "event": ev}

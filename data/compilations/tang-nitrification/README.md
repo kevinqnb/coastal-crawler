@@ -13,7 +13,7 @@ A literature compilation of volumetric ammonia-oxidation (2,417 rows) and nitrit
 column, each row with the ambient temperature, salinity, nutrients and oxygen of the sample, plus gene-abundance sheets for the
 nitrifiers and two sheets of method metadata. 72 reference strings; 2,589 distinct samples (latitude, longitude, depth, date).
 
-**Facts:** 9,824 = 2,941 rates + 6,883 J1 water values. Units are the header's (`nmol N L-1 d-1`; `μM`, U+03BC); nothing is
+**Facts:** 9,890 = 2,941 rates + 6,949 J1 water values (6,883 nutrient and oxygen facts + 66 pH). Units are the header's (`nmol N L-1 d-1`; `μM`, U+03BC); nothing is
 converted.
 
 | Attribute | Type / subfield | Facts | Units |
@@ -24,6 +24,7 @@ converted.
 | `water_nitrite` | J1 `nitrite` | 1,890 | μM |
 | `water_nitrate` | J1 `nitrate` | 2,062 | μM |
 | `water_o2` | J1 `dissolved_oxygen` | 1,107 | μM |
+| `water_ph` | J1 `ph` | 66 | unitless |
 
 `sd` is the sheet's `Standard deviation of rate` where it is a number (1,612 facts); `NA`, `NM` and blank give a NULL `sd`. 34 rows
 have an SD but no rate fact (the rate is `BDL`/`NM`): the SD is not loaded on its own.
@@ -32,8 +33,8 @@ have an SD but no rate fact (the rate is `BDL`/`NM`): the SD is not loaded on it
 
 Each row of a rate sheet carries the ambient nutrients and oxygen of its sample; the same sample is repeated on the ammonia and
 nitrite sheets. A J1 value therefore belongs to the **sample**: the sample key is latitude | longitude | depth | date (floats cast
-before the key is built, datetimes as ISO dates, text dates verbatim). 9,235 numeric J1 cells give **6,883 facts and 2,352
-collapsed repeats** (exactly equal values of one sample and attribute: ammonium 610, nitrate 637, nitrite 639, oxygen 466; counted in
+before the key is built, datetimes as ISO dates, text dates verbatim). 9,235 numeric nutrient and oxygen cells give **6,883 facts and 2,352
+collapsed repeats** (the 66 pH cells are 66 more facts, none collapsed) (exactly equal values of one sample and attribute: ammonium 610, nitrate 637, nitrite 639, oxygen 466; counted in
 `extract_report.json`). Where one sample carries two different values (57 sample-attribute pairs: ammonium 5, nitrate 17,
 nitrite 25, oxygen 10), every distinct value is loaded with the flag `covariate_conflict`: **141 facts**
 (ammonium 19, nitrate 43, nitrite 59, oxygen 20); nothing is averaged. 141 - 57 = 84 is the plan's "84 pairs". The first raw cell
@@ -46,12 +47,10 @@ are 1,542 collapsed and 7,694 facts). The two rate sheets write the same paper d
 reported under two papers (Beman 2012 on the ammonia sheet and Beman 2013 on the nitrite sheet: 63 samples; Wan 2018 and Wan 2022: 24).
 The reference stays on the fact. Reference strings are never merged by similarity.
 
-- **J1 beside a skipped rate still loads** (rule 3): 1,021 J1 facts sit on rows whose rate is `BDL` or `NM`.
+- **J1 beside a skipped rate still loads** (rule 3): 1,044 J1 facts sit on rows whose rate is `BDL` or `NM`.
 - **J1 cells coded `BDL`/`NM`** (452: ammonium 214 + 13, nitrite 103 + 14, nitrate 63 + 16, oxygen 7 + 22) are skips, like the
   rates (D6). `NA` gives nothing.
-- **pH.** The plan says the pH column is empty; it holds 66 numbers (Breider et al. 2019, rows 175-184, and Shiozaki et al. 2019).
-  The column has no unit anywhere in the file, so J1 rule 2 (units required) skips them with `units_missing`; the value is in the
-  skip report. **Open for the coordinator:** load as `unitless` (as for Fulweiler) if the paper confirms it.
+- **pH.** The plan says the pH column is empty; it holds 66 numbers (Breider et al. 2019, rows 175-184, and Shiozaki et al. 2019). The column has no unit anywhere in the file; by the user's decision they are J1 `water_ph` with units `unitless` (66 facts).
 - **One extra NaN cell.** The workbook holds one literal NaN in the oxygen column (ammonia sheet, data row 516); it is read as blank.
   This is the single cell that made a plain `isinstance(float)` count 9,236 instead of the plan's 9,235.
 - **Sample slots.** Depth -> `sample_depth_m` (13 ammonia-sheet and 14 nitrite-sheet rows have a blank or `NA` depth: 14 samples, flag `depth_missing`, 66 facts),
@@ -63,7 +62,7 @@ The reference stays on the fact. Reference strings are never merged by similarit
 ## Mapping
 
 - **Habitat** is `Water column` for every location (raw `habitat_type` constant `water column`, label map row), derived from the
-  dataset's scope and never stated by the source: flag `habitat_from_scope` on all 9,824 facts. Setting NULL. `bottom_type` NULL.
+  dataset's scope and never stated by the source: flag `habitat_from_scope` on all 9,890 facts. Setting NULL. `bottom_type` NULL.
 - `location_key` = latitude | longitude: **603 locations**; no names, no water depth. Latitudes and longitudes are all numeric and in range.
 - **Dates.** A datetime gives year and month (the day is only in the sample key). The 29 text forms are an explicit table in
   `extract.py` (`DATE_TEXT`): `YYYY Month` -> year and month; an in-year range (`1993 March to May`, `2008 May/June`) -> year, month
@@ -88,9 +87,8 @@ column -> a skip, reasons `not_measured` / `below_detection_limit`; an unrecogni
 |---|---|
 | rates `BDL` / `NM` | ammonia 266 / 86, nitrite 119 / 15 |
 | J1 `BDL` / `NM` | 387 / 65 |
-| pH `units_missing` | 66 |
 
-**1,004 skips.** Each `BDL` skip row carries `detection_limit_comments` (the `detection limit ...` comment lines of the reference's block, e.g.
+**938 skips.** Each `BDL` skip row carries `detection_limit_comments` (the `detection limit ...` comment lines of the reference's block, e.g.
 `detection limit of ammonium: 0.006 uM`) and `detection_limit_metadata` (the metadata sheet's limit). 155 of the 772 `BDL` skips have neither.
 
 ## The `Data source` column
@@ -109,17 +107,17 @@ can attach them). A collapsed value keeps the reference of its first raw cell.
 
 ## Flags
 
-`habitat_from_scope` 9,824, `year_missing` 419 (facts), `depth_missing` 66, `zero_value` 264 (18 rate zeros), `covariate_conflict` 141, `negative_value` 1 (a J1
+`habitat_from_scope` 9,890, `year_missing` 419 (facts), `depth_missing` 66, `zero_value` 264 (18 rate zeros), `covariate_conflict` 141, `negative_value` 1 (a J1
 nitrate of -0.000214 uM, Clark et al. 2008, data row 228 of the nitrite sheet; a slightly negative autoanalyser value, kept).
 
 ## Row accounting
 
-13,180 cells = 9,824 facts + 1,004 skips + 2,352 collapsed repeats: 3,427 source rows; rate cells 2,941 numeric + 486 skipped; J1 cells 9,235 numeric
-(6,883 facts + 2,352 collapsed) + 452 skipped; pH 66 skipped. The extract asserts the totals, and that the samples, locations, methods and
+13,180 cells = 9,890 facts + 938 skips + 2,352 collapsed repeats: 3,427 source rows; rate cells 2,941 numeric + 486 skipped; J1 cells 9,301 numeric (incl. 66 pH)
+(6,949 facts + 2,352 collapsed) + 452 skipped. The extract asserts the totals, and that the samples, locations, methods and
 references of the facts are exactly the rows written. After the central build every fact was checked against the raw cell it points to by code that
-does not use `extract.py` (value, unit from the header, sample key, location key, `sd`, sample depth): 9,824 of 9,824 agree. A one-study check (Baer et al. 2017
+does not use `extract.py` (value, unit from the header, sample key, location key, `sd`, sample depth): 9,890 of 9,890 agree. A one-study check (Baer et al. 2017
 plus the first two nitrite-sheet rows, predicted from the raw rows alone: 26 facts, 2 skips, 8 samples, 2 locations, 2 references) matched. Adding this
-source left the other nine sources' content unchanged (316,643 facts + 9,824 = 326,467). Two runs of `extract.py` give byte-identical parquet.
+source left the other nine sources' content unchanged (316,643 facts + 9,890). Two runs of `extract.py` give byte-identical parquet.
 `source_row_ref` is `<file>[<sheet>]#data_row=<0-based row>:<attribute>`.
 
 ## Overlap with other compilations
