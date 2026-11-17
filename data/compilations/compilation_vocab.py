@@ -213,6 +213,39 @@ for _sol, (_t, _sub) in _RAY_TYPES.items():
         ATTRIBUTES[f"ray_oyster_{_sol}"] = _d(_t, {_sub}, {"µmol ind−1 h−1"})
 
 
+# --- group 3 (boynton-flux, fulweiler-nfix, pessarrodona-seaweed, davis-calcification) -------------------------
+def _j1(attr: str, subfield: str, units: set[str]) -> None:
+    """Declare a shared J1 attribute, or add unit strings to it when another compilation declared it first."""
+    old = ATTRIBUTES.get(attr)
+    if old is not None:
+        if old.measurement_type != "J1" or old.subfields != frozenset({subfield}):
+            raise VocabError(f"{attr}: already declared differently")
+        units = set(old.units) | units
+    ATTRIBUTES[attr] = _d("J1", {subfield}, units)
+
+
+# Boynton World Flux Data Set: units are the header spellings (ASCII "u"); the element basis of each flux is in Table 2
+# of the workbook (O2, N, P, DSi), not in the header. pH has no header unit: "unitless" is Table 2's.
+ATTRIBUTES["boynton_soc"] = _d("B5", {"total_o2_uptake"}, {"umol/m2/hr"})
+ATTRIBUTES["boynton_nh4_flux"] = _d("C3", {"ammonium_flux"}, {"umol/m2/hr"})
+ATTRIBUTES["boynton_po4_flux"] = _d("C3", {"phosphate_flux"}, {"umol/m2/hr"})
+ATTRIBUTES["boynton_no2_flux"] = _d("C3", {"nitrite_flux"}, {"umol/m2/hr"})
+ATTRIBUTES["boynton_no3_flux"] = _d("C3", {"nitrate_flux"}, {"umol/m2/hr"})
+ATTRIBUTES["boynton_no23_flux"] = _d("C3", {"nitrate_nitrite_flux"}, {"umol/m2/hr"})
+ATTRIBUTES["boynton_dsi_flux"] = _d("C3", {"silicate_flux"}, {"umol/m2/hr"})
+ATTRIBUTES["boynton_water_respiration"] = _d("B9", {"community_respiration"}, {"gO2/m2/day"})
+ATTRIBUTES["boynton_sediment_chl_a"] = _d("B1", {"sediment_chlorophyll_a"}, {"mg/m2"})
+ATTRIBUTES["boynton_poc"] = _d("C1", {"organic_carbon"}, {"%DW"})
+ATTRIBUTES["boynton_pon"] = _d(OTHER, {None}, {"%DW"}, "particulate organic nitrogen, % of dry weight (Boynton Table 2: usually top 1 cm); not total N")
+ATTRIBUTES["boynton_pp"] = _d(OTHER, {None}, {"%DW"}, "particulate phosphorus, % of dry weight (Boynton Table 2: usually top 1 cm)")
+_j1("water_ammonium", "ammonium", {"uM"})
+_j1("water_phosphate", "phosphate", {"uM"})
+_j1("water_nitrate", "nitrate", {"uM"})
+_j1("water_nitrate_nitrite", "nitrate_nitrite", {"uM"})
+_j1("water_silicate", "silicate", {"uM"})
+_j1("water_ph", "ph", {"unitless"})
+
+
 def check_attribute_decls() -> None:
     """Self-consistency of the declarations above (run by the tests)."""
     for attr, d in ATTRIBUTES.items():
