@@ -318,18 +318,22 @@ def test_types_units_provenance(built) -> None:
     assert t("sample_sediment_properties:1:1:1:porosity")[2] == "-"
     assert t("sample_sediment_properties:1:1:1:mean_grain_size_microm")[:3] == ("G1", "mean_grain_size", "µm")
     r = f.loc["sample_composition:1:1:1:total_organic_carbon_%"]
-    assert r.value == 1.5 and pd.isna(r.sd) and pd.isna(r.se) and pd.isna(r.n)
+    assert r.value == 1.5 and r.sd == 0.2 and pd.isna(r.se) and pd.isna(r.n)
     assert r.source_row_ref == "mosaic_ESSD[sample_composition]#data_row=0:total_organic_carbon_%"
     assert f.loc["sample_composition:3:74:2:total_organic_carbon_%", "source_row_ref"].endswith("#data_row=2:total_organic_carbon_%")
     assert f.loc["sample_sediment_properties:1:1:1:porosity", "source_row_ref"] == "mosaic_ESSD[sample_sediment_properties]#data_row=0:porosity"
 
 
-def test_error_goes_to_params_not_sd(built) -> None:
+def test_error_goes_to_sd_with_flag_note_and_params(built) -> None:
     tables, _, _ = built
     f = tables["fact"].set_index("fact_key")
     m = tables["method"].set_index("method_key")
     r = f.loc["sample_composition:1:1:1:total_organic_carbon_%"]
     p = json.loads(m.loc[r.method_key, "params"])
+    assert f.loc["sample_composition:1:1:1:total_nitrogen_%", "sd"] != f.loc["sample_composition:1:1:1:total_nitrogen_%", "sd"]  # no error cell -> NULL
+    assert "error_type_missing" in r["flags"] and "error_type_missing" not in f.loc["sample_composition:1:1:1:total_nitrogen_%", "flags"]
+    assert m.loc[r.method_key, "notes"] == mx.SD_ASSUMPTION_NOTE and pd.isna(m.loc[f.loc["sample_composition:1:1:1:total_nitrogen_%", "method_key"], "notes"])
+    assert f.loc["sample_sediment_properties:1:1:1:mean_grain_size_microm", "sd"] == 5.0
     assert p["error_value"] == 0.2 and p["error_column"] == "total_organic_carbon_%_error" and "unstated" in p["error_meaning"]
     assert p["material_analyzed"] == "bulk" and p["replicate"] == 1 and p["table"] == "sample_composition"
     p2 = json.loads(m.loc[f.loc["sample_sediment_properties:1:1:1:clay_%_2microm", "method_key"], "params"])
@@ -340,7 +344,7 @@ def test_flags(built) -> None:
     tables, _, rep = built
     f = tables["fact"].set_index("fact_key")
     fl = lambda k: f.loc[k, "flags"]  # noqa: E731
-    assert fl("sample_composition:1:1:1:total_organic_carbon_%") == ["habitat_from_scope"]  # core 1: 50 m >= 1 m
+    assert fl("sample_composition:1:1:1:total_organic_carbon_%") == ["error_type_missing", "habitat_from_scope"]  # core 1: 50 m >= 1 m; error 0.2 stored as sd
     assert fl("sample_composition:2:1:1:total_organic_carbon_%") == ["calculated_by_source", "habitat_from_scope", "zero_value"]
     # sample 3: core 2, 0.5 m < 1 m: no habitat; replicate 2; material 74; no depth; core 2 has no year
     assert fl("sample_composition:3:74:2:total_organic_carbon_%") == ["depth_missing", "non_bulk_material", "replicate", "year_missing"]

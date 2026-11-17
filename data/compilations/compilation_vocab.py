@@ -354,6 +354,7 @@ FLAGS: dict[str, str] = {
     "o2_units_ambiguous": "bottom-water O2 column mixes uM and % saturation",
     # paradis-mosaic
     "non_bulk_material": "analysis was on a sediment fraction or separate (size or density class, TOC ...), not bulk sediment",
+    "error_type_missing": "source gives an error value but no error type",
     "outside_source_qc_range": "value outside the min/max the source's own QC (DatasetS1) lists for the variable",
 }
 

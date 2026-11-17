@@ -89,16 +89,19 @@ treated like ON), from `sample_sediment_properties` the listed columns. The coun
 the skips and attached errors below (e.g. OC 33,193 cells -> 33,073 facts; TN 10,699 -> 10,658; OC:TN 10,019 -> 9,998;
 mean grain size 2,141 -> 2,139).
 
-### The `*_error` columns (SD or SE?)
+### The `*_error` columns: assumed to be SD
 
-**The source never says.** `DatasetS2.csv` and the Excel template README describe every `*_error` column only as "Error of
-..." (e.g. "Error of the total organic carbon content, if available"); the tutorial and the authors' code are silent. So the
-error is **not** stored in `sd` or `se` (both NULL for every fact). It sits in the `method_dim.params` JSON of the fact's own
-method row: `error_value`, `error_column` and `error_meaning` ("unstated ... SD or SE not given"). 1,140 error cells (1,107
-composition, 33 sediment) are attached this way. 220 of the attached error values are exactly 0 (likely a placeholder for "no
-error"); they are carried as given. **114 error cells are skipped** (`error_without_fact`, all in `sample_sediment_properties`:
-`mean_grain_size_microm_error` 114 of 147 and none other) because their value cell is blank (there is no mean to attach them
-to); the skip report lists each. Error columns exist for OC, TC, TIC, CaCO3, LOI, ON, IN, TN, OC:ON, OC:TN, SiO2, P (not S) and mean grain size.
+**The source never says whether an error is a standard deviation or a standard error.** `DatasetS2.csv` and the Excel template
+README describe every `*_error` column only as "Error of ..." (e.g. "Error of the total organic carbon content, if available");
+the tutorial and the authors' code are silent. Owner decision: **default to SD.** Each attached error is stored in `fact.sd`
+(`se` stays NULL for every fact), the fact carries the flag **`error_type_missing`** ("source gives an error value but no error
+type"), and its method row's `notes` reads "error column assumed to be a standard deviation; the source does not state SD or
+SE". Treat these `sd` values as unverified: filter on `error_type_missing` before using them as SDs. The raw details stay in
+`method_dim.params` (`error_value`, `error_column`, `error_meaning` = unstated). 1,140 error cells (1,107 composition, 33
+sediment) became `sd` values this way; 220 of them are exactly 0 (likely a placeholder for "no error"), carried as given.
+**114 error cells are skipped** (`error_without_fact`, all `mean_grain_size_microm_error`, of 147) because their value cell is
+blank, so there is no mean to attach them to; the skip report lists each. Error columns exist for OC, TC, TIC, CaCO3, LOI, ON, IN,
+TN, OC:ON, OC:TN, SiO2, P (not S) and mean grain size.
 
 ### Method, calculated and replicate
 
@@ -137,9 +140,9 @@ Code points: micro sign U+00B5 (`µm`), middle dot U+00B7 (`g·cm-3`); the Chang
 
 `zero_value` 4,171; `negative_value` 18 (CaCO3 8, TIC 10); `outside_source_qc_range` 38 (value outside the min/max DatasetS1
 lists for the column: CaCO3 below 0 / above 100, OC:TN above 55, TIC, median grain size); `calculated_by_source` 22,290;
-`replicate` 1,143; `non_bulk_material` 4,577; `habitat_from_scope` 133,775; `year_missing` 29,082. (`depth_missing`
+`replicate` 1,143; `non_bulk_material` 4,577; `habitat_from_scope` 133,775; `year_missing` 29,082; `error_type_missing` 1,140. (`depth_missing`
 is registered but is not on any fact.) Nothing is changed or dropped because of a flag. New vocabulary added for this source:
-flags `non_bulk_material`, `outside_source_qc_range`; skip reasons `no_metadata_row`, `error_without_fact`,
+flags `non_bulk_material`, `outside_source_qc_range`, `error_type_missing`; skip reasons `no_metadata_row`, `error_without_fact`,
 `material_unit_unclear`; extension subfield `G1 mode_grain_size`; 26 `mosaic_*` attributes.
 
 ## Locations, depth and habitat
@@ -213,7 +216,7 @@ analysis), so no article, method or calculated flag can be attached without gues
 |---|---|
 | non-null cells in the 13 value tables | 205,313 |
 | facts | 147,121 |
-| error cells attached to facts (params) | 1,140 |
+| error cells attached to facts (as `sd`, flag `error_type_missing`) | 1,140 |
 | skipped: `no_metadata_row` / `material_unit_unclear` / `error_without_fact` | 172 / 108 / 114 (394) |
 | not loaded: 11 other families | 55,104 |
 | not loaded: surface area (+error) / cumulative mass | 1,461 / 93 |
@@ -226,7 +229,7 @@ By family: `sample_composition` 108,126 = 106,787 facts + 1,107 errors + 124 + 1
 
 Every fact's `source_row_ref` (`mosaic_ESSD[<table>]#data_row=<0-based row of that table's COPY block>:<column>`) was joined to
 the raw cell by an independent parse of the dump (not `extract.py`'s): all 147,121 values, table keys and `fact_key`s match,
-and all 1,140 `error_value`s match their raw cells. Two `extract.py` runs gave identical tables and skip report. Staged
+and all 1,140 `error_value`s in params and all 1,140 `sd` values match their raw error cells (and no other fact has an `sd`). Two `extract.py` runs gave identical tables and skip report. Staged
 gate: a one-article subset (articles 1 and 62) predicted from SQL on the raw tables as 147 facts and 67 attached errors;
 the extract produced 147 and 67. The full prediction (147,121 value cells with metadata, non-surface-area material) matched
 as well. The full central build adds these facts to the existing 316,643 (463,764 in total).
@@ -238,7 +241,7 @@ the future join.
 
 ## Things to know
 
-* The error columns are of unknown type (see above).
+* The error columns are of unknown type: stored as `sd` by assumption, flagged `error_type_missing` (see above).
 * `OC:TN` and `OC:ON` have no unit and the source does not say mass or molar.
 * `calculated_by_source` and `non_bulk_material` should be filtered on before analysis; so should `outside_source_qc_range`.
 * The dump is the April 2023 one, not necessarily Zenodo v2.0.

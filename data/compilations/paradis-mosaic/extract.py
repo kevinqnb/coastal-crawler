@@ -34,8 +34,10 @@ replicate). They give the article(s), ``method``, ``method_details`` and ``sampl
 ``ambiguous_duplicate_method_id`` (above). ``technique`` = ``method``; ``method_details`` is in ``params``.
 
 ERRORS. Each ``*_error`` column has its own analysis id and metadata, and the source's descriptions (``DatasetS2.csv``,
-the Excel template README) say only "Error of ..." - never SD or SE. So the error is NOT stored in ``sd`` or ``se``; it is
-in ``method.params`` (``error_value``, ``error_column``, ``error_meaning`` = unstated) of the fact's own method row. An error
+the Excel template README) say only "Error of ..." - never SD or SE. Decision (owner): DEFAULT TO SD. The error is stored in
+``fact.sd`` (``se`` stays NULL), the fact gets the flag ``error_type_missing``, ``method.notes`` says "error column assumed to
+be a standard deviation; the source does not state SD or SE", and ``method.params`` keeps ``error_value``, ``error_column``,
+``error_meaning`` (unstated) of the fact's own method row. An error
 cell whose value cell is blank or skipped is skipped, reason ``error_without_fact``.
 
 ATTRIBUTES. ``mosaic_*`` (see ``compilation_vocab.ATTRIBUTES``): organic carbon, total carbon, TIC, CaCO3, LOI organic matter,
@@ -213,6 +215,7 @@ SKIP_MATERIAL_LABELS = frozenset({"surface_area"})
 BULK_MATERIAL = "bulk"
 NA = "blank in source"
 ERROR_MEANING = "unstated: the source only says 'Error of ...' (SD or SE not given)"
+SD_ASSUMPTION_NOTE = "error column assumed to be a standard deviation; the source does not state SD or SE"
 
 # ------------------------------------------------------------------ pg_restore wrapper and COPY parser
 
@@ -554,7 +557,7 @@ def build_tables(
                 assert value is not None
                 outcome[col] = "fact"
                 # error (value cell exists, error attached in params)
-                err_val = None
+                err_val = None  # (stored as fact.sd, see ERRORS above)
                 if spec.error_column and r[ci[spec.error_column]] is not None:
                     err_val = _num(r[ci[spec.error_column]], f"{tbl} row {row_no} {spec.error_column}")
                 # metadata combination
@@ -595,6 +598,7 @@ def build_tables(
                         "carbon_measured_or_modeled": None, "fraction_carbon_method": None, "carbonates_removed": None,
                         "carbonate_removal_method": None, "conversion_applied": None, "in_situ_ex_situ": None,
                         "light_dark": None, "incubation_type": None, "experimental_status": None,
+                        "notes": SD_ASSUMPTION_NOTE if err_val is not None else None,
                         "params": json.dumps(params, sort_keys=True),
                     }
                 cid = samples[sid][si["core_id"]]
@@ -613,6 +617,8 @@ def build_tables(
                 lim = s1_lim.get(col)
                 if lim is not None and ((lim[0] is not None and value < lim[0]) or (lim[1] is not None and value > lim[1])):
                     flags.append("outside_source_qc_range")
+                if err_val is not None:
+                    flags.append("error_type_missing")
                 if calculated:
                     flags.append("calculated_by_source")
                 if int(rep) > 1:
@@ -635,7 +641,7 @@ def build_tables(
                     "source_key": SOURCE_KEY, "fact_key": f"{tbl}:{sid}:{mat}:{rep}:{col}", "reference_key": rkey,
                     "location_key": f"core:{cid}", "sample_key": f"sample:{sid}", "method_key": mkey,
                     "attribute": spec.attribute, "measurement_type": decl.measurement_type,
-                    "subfield": next(iter(decl.subfields)), "value": value, "units_raw": units, "sd": np.nan, "se": np.nan,
+                    "subfield": next(iter(decl.subfields)), "value": value, "units_raw": units, "sd": np.nan if err_val is None else err_val, "se": np.nan,
                     "n": None, "flags": sorted(flags), "source_row_ref": ref,
                 })
                 counts[(tbl, col)]["fact"] += 1
