@@ -242,9 +242,23 @@ out/*
 !/data/compilations/_g3_common.py
 !/data/compilations/_g4_common.py
 !/data/compilations/_j1_collapse.py
+# DOI-resolution scripts (README "DOI resolution"); their sidecar *.parquet/*.json and _openalex_cache/ stay ignored
+!/data/compilations/_citation_common.py
+!/data/compilations/openalex_verify_dois.py
+!/data/compilations/build_doi_check.py
+!/data/compilations/resolve_citations.py
+!/data/compilations/resolve_from_bibliography.py
+!/data/compilations/francesco_source_list.py
+!/data/compilations/apply_doi_resolution.py
+!/data/compilations/find_paper_for_datasets.py
+!/data/compilations/build_source_status.py
+!/data/compilations/eval_resolver.py
+!/data/compilations/eval_citation_parser.py
 !/data/compilations/*/
 /data/compilations/*/*
 !/data/compilations/*/extract.py
+# provenance of the PANGAEA source list that Francesco's DOI cross-check uses
+!/data/compilations/francesco-phytoplankton/pangaea_sources.json
 # per-compilation README (our own); a source's own README is a raw file, renamed README_<origin>.md
 !/data/compilations/*/README.md
 # hand-verification artifacts of the two PDF-derived compilations (reviewed by eye; checked in)

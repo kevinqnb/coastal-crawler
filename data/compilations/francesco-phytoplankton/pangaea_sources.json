@@ -1,0 +1,523 @@
+{
+ "url": "https://doi.pangaea.de/10.1594/PANGAEA.932417",
+ "sources": [
+  {
+   "identifier": "https://doi.org/10.4319/lo.1997.42.1.0001",
+   "type": null,
+   "first_author": "Behrenfeld",
+   "year": "1997",
+   "title": "Photosynthetic rates derived from satellite-based chlorophyll concentration"
+  },
+  {
+   "identifier": "https://doi.org/10.1594/PANGAEA.885413",
+   "type": "dataset",
+   "first_author": "Bode",
+   "year": "2018",
+   "title": "Time series of hydrographic, chemical and primary production variables for a shelf station off A Coru\u00f1a (NW Spain): 1989-2016"
+  },
+  {
+   "identifier": "https://doi.org/10.1007/s10236-019-01278-y",
+   "type": "journal article",
+   "first_author": "Bode",
+   "year": "2019",
+   "title": "Changes in phytoplankton production and upwelling intensity off A Coru\u00f1a (NW Spain) for the last 28 years"
+  },
+  {
+   "identifier": "https://doi.org/10.1126/science.1131669",
+   "type": "journal article",
+   "first_author": "Boyd",
+   "year": "2007",
+   "title": "Mesoscale Iron Enrichment Experiments 1993-2005: Synthesis and Future Directions"
+  },
+  {
+   "identifier": "https://doi.org/10.1594/PANGAEA.206658",
+   "type": "dataset",
+   "first_author": "Boyd",
+   "year": "2004",
+   "title": "C14 uptake rates and chlorophyll content from incubation experiment A2C001 at station DI191_12056#1"
+  },
+  {
+   "identifier": "https://doi.org/10.1594/PANGAEA.206623",
+   "type": "dataset",
+   "first_author": "Boyd",
+   "year": "2004",
+   "title": "C14 uptake rates and chlorophyll content from incubation experiment L1C001 at station DI182_11857#1"
+  },
+  {
+   "identifier": "https://doi.org/10.1594/PANGAEA.206624",
+   "type": "dataset",
+   "first_author": "Boyd",
+   "year": "2004",
+   "title": "C14 uptake rates and chlorophyll content from incubation experiment L1C002 at station DI182_11857#7"
+  },
+  {
+   "identifier": "https://doi.org/10.1594/PANGAEA.206625",
+   "type": "dataset",
+   "first_author": "Boyd",
+   "year": "2004",
+   "title": "C14 uptake rates and chlorophyll content from incubation experiment L1C003 at station DI182_11858#2"
+  },
+  {
+   "identifier": "https://doi.org/10.1594/PANGAEA.206626",
+   "type": "dataset",
+   "first_author": "Boyd",
+   "year": "2004",
+   "title": "C14 uptake rates and chlorophyll content from incubation experiment L1C005 at station DI182_11859#22"
+  },
+  {
+   "identifier": "https://doi.org/10.1594/PANGAEA.206627",
+   "type": "dataset",
+   "first_author": "Boyd",
+   "year": "2004",
+   "title": "C14 uptake rates and chlorophyll content from incubation experiment L1C006 at station DI182_11859#27"
+  },
+  {
+   "identifier": "https://doi.org/10.1594/PANGAEA.206628",
+   "type": "dataset",
+   "first_author": "Boyd",
+   "year": "2004",
+   "title": "C14 uptake rates and chlorophyll content from incubation experiment L1C007 at station DI182_11859#32"
+  },
+  {
+   "identifier": "https://doi.org/10.1594/PANGAEA.206631",
+   "type": "dataset",
+   "first_author": "Boyd",
+   "year": "2004",
+   "title": "C14 uptake rates and chlorophyll content from incubation experiment L1C010 at station DI182_11862#1"
+  },
+  {
+   "identifier": "https://doi.org/10.1594/PANGAEA.206632",
+   "type": "dataset",
+   "first_author": "Boyd",
+   "year": "2004",
+   "title": "C14 uptake rates and chlorophyll content from incubation experiment L1C011 at station DI182_11863#5"
+  },
+  {
+   "identifier": "https://doi.org/10.1594/PANGAEA.206636",
+   "type": "dataset",
+   "first_author": "Boyd",
+   "year": "2004",
+   "title": "C14 uptake rates and chlorophyll content from incubation experiment L1C012 at station DI182_11864#3"
+  },
+  {
+   "identifier": "https://doi.org/10.1594/PANGAEA.206633",
+   "type": "dataset",
+   "first_author": "Boyd",
+   "year": "2004",
+   "title": "C14 uptake rates and chlorophyll content from incubation experiment L1C013 at station DI182_11864#17"
+  },
+  {
+   "identifier": "https://doi.org/10.1594/PANGAEA.206634",
+   "type": "dataset",
+   "first_author": "Boyd",
+   "year": "2004",
+   "title": "C14 uptake rates and chlorophyll content from incubation experiment L1C014 at station DI182_11864#27"
+  },
+  {
+   "identifier": "https://doi.org/10.1594/PANGAEA.206635",
+   "type": "dataset",
+   "first_author": "Boyd",
+   "year": "2004",
+   "title": "C14 uptake rates and chlorophyll content from incubation experiment L1C015 at station DI182_11864#27"
+  },
+  {
+   "identifier": "https://doi.org/10.1594/PANGAEA.206637",
+   "type": "dataset",
+   "first_author": "Boyd",
+   "year": "2004",
+   "title": "C14 uptake rates and chlorophyll content from incubation experiment L1C016 at station DI182_11864#41"
+  },
+  {
+   "identifier": "https://doi.org/10.1594/PANGAEA.206638",
+   "type": "dataset",
+   "first_author": "Boyd",
+   "year": "2004",
+   "title": "C14 uptake rates and chlorophyll content from incubation experiment L1C017 at station DI182_11864#43"
+  },
+  {
+   "identifier": "https://doi.org/10.1029/2007JC004702",
+   "type": "journal article",
+   "first_author": "Bruland",
+   "year": "2008",
+   "title": "Factors influencing the chemistry of the near-field Columbia River plume: Nitrate, silicic acid, dissolved Fe, and dissolved Mn"
+  },
+  {
+   "identifier": "https://www.bco-dmo.org/dataset-deployment/517842",
+   "type": "dataset",
+   "first_author": "Carlson",
+   "year": "2012",
+   "title": "Experimental and survey biogeochemical and microbial data from SBDOM cruises in the Santa Barbara Channel 2010-2011"
+  },
+  {
+   "identifier": "https://doi.org/10.5065/D6S75DF5",
+   "type": "dataset",
+   "first_author": "Cota",
+   "year": "2007",
+   "title": "HLY-02-01 Primary Production (ASCII). Version 1.0"
+  },
+  {
+   "identifier": "https://doi.org/10.1594/PANGAEA.846021",
+   "type": "dataset",
+   "first_author": "Giani",
+   "year": "2015",
+   "title": "Biogeochemical variations in the gulf of Trieste, Italy (2011-2013)"
+  },
+  {
+   "identifier": "https://doi.org/10.1016/j.dsr2.2005.10.001",
+   "type": "journal article",
+   "first_author": "Hill",
+   "year": "2005",
+   "title": "Spatial patterns of primary production on the shelf, slope and basin of the Western Arctic in 2002"
+  },
+  {
+   "identifier": "https://www.bco-dmo.org/dataset/2909",
+   "type": "dataset",
+   "first_author": "Imai",
+   "year": "2008",
+   "title": "Primary Production from R/V Kaiyo-Maru cruises KY0103-01 and KY0103-02 in the Northwestern Sub-Arctic Pacific in 2001 (SEEDS I project)"
+  },
+  {
+   "identifier": "https://doi.org/10.1016/j.jmarsys.2015.10.013",
+   "type": "journal article",
+   "first_author": "Ingrosso",
+   "year": "2016",
+   "title": "Carbonate chemistry dynamics and biological processes along a river-sea gradient (Gulf of Trieste, northern Adriatic Sea)"
+  },
+  {
+   "identifier": "https://doi.org/10.1594/PANGAEA.816698",
+   "type": "dataset",
+   "first_author": "Irwin",
+   "year": "2013",
+   "title": "Primary production (in situ carbon) data measured on water bottle samples during BAFFIN cruise BAF90/1"
+  },
+  {
+   "identifier": "https://doi.org/10.1594/PANGAEA.816683",
+   "type": "dataset",
+   "first_author": "Irwin",
+   "year": "2013",
+   "title": "Primary production (in situ carbon) data measured on water bottle samples during HUDSON cruise HUD92/37"
+  },
+  {
+   "identifier": "https://doi.org/10.1594/PANGAEA.816686",
+   "type": "dataset",
+   "first_author": "Irwin",
+   "year": "2013",
+   "title": "Primary production (in situ carbon) data measured on water bottle samples during HUDSON cruise HUD93/2"
+  },
+  {
+   "identifier": "https://doi.org/10.1594/PANGAEA.807471",
+   "type": "dataset",
+   "first_author": "JGOFS-INDIA",
+   "year": "2013",
+   "title": "Primary production and chlorophyll a measured on water bottle samples during Sagar Kanya cruise SK87"
+  },
+  {
+   "identifier": "https://doi.org/10.1594/PANGAEA.807472",
+   "type": "dataset",
+   "first_author": "JGOFS-INDIA",
+   "year": "2013",
+   "title": "Primary production and chlorophyll a measured on water bottle samples during Sagar Kanya cruise SK91"
+  },
+  {
+   "identifier": "https://doi.org/10.1594/PANGAEA.807473",
+   "type": "dataset",
+   "first_author": "JGOFS-INDIA",
+   "year": "2013",
+   "title": "Primary production and chlorophyll a measured on water bottle samples during Sagar Kanya cruise SK99"
+  },
+  {
+   "identifier": "https://doi.org/10.1594/PANGAEA.807474",
+   "type": "dataset",
+   "first_author": "JGOFS-INDIA",
+   "year": "2013",
+   "title": "Primary production and chlorophyll a measured on water bottle samples during Sagar Kanya cruise SK104"
+  },
+  {
+   "identifier": "https://doi.org/10.1594/PANGAEA.807475",
+   "type": "dataset",
+   "first_author": "JGOFS-INDIA",
+   "year": "2013",
+   "title": "Primary production and chlorophyll a measured on water bottle samples during Sagar Kanya cruise SK115"
+  },
+  {
+   "identifier": "https://doi.org/10.1594/PANGAEA.807476",
+   "type": "dataset",
+   "first_author": "JGOFS-INDIA",
+   "year": "2013",
+   "title": "Primary production and chlorophyll a measured on water bottle samples during Sagar Kanya cruise SK121"
+  },
+  {
+   "identifier": "https://doi.org/10.1594/PANGAEA.206592",
+   "type": "dataset",
+   "first_author": "Joint",
+   "year": "2004",
+   "title": "C14 uptake rates and chlorophyll content from incubation experiment B2C003 at station CD47_0106G#2"
+  },
+  {
+   "identifier": "https://doi.org/10.1594/PANGAEA.206611",
+   "type": "dataset",
+   "first_author": "Joint",
+   "year": "2004",
+   "title": "C14 uptake rates and chlorophyll content from incubation experiment D2C001 at station CD61_195#1"
+  },
+  {
+   "identifier": "https://doi.org/10.1594/PANGAEA.206612",
+   "type": "dataset",
+   "first_author": "Joint",
+   "year": "2004",
+   "title": "C14 uptake rates and chlorophyll content from incubation experiment D2C002 at station CD61_196#2"
+  },
+  {
+   "identifier": "https://doi.org/10.1594/PANGAEA.206615",
+   "type": "dataset",
+   "first_author": "Joint",
+   "year": "2004",
+   "title": "C14 uptake rates and chlorophyll content from incubation experiment D2C005 at station CD61_199#2"
+  },
+  {
+   "identifier": "https://doi.org/10.1594/PANGAEA.206616",
+   "type": "dataset",
+   "first_author": "Joint",
+   "year": "2004",
+   "title": "C14 uptake rates and chlorophyll content from incubation experiment D2C006 at station CD61_200#2"
+  },
+  {
+   "identifier": "https://doi.org/10.1594/PANGAEA.206618",
+   "type": "dataset",
+   "first_author": "Joint",
+   "year": "2004",
+   "title": "C14 uptake rates and chlorophyll content from incubation experiment D2C008 at station CD61_202#2"
+  },
+  {
+   "identifier": "https://doi.org/10.1594/PANGAEA.206619",
+   "type": "dataset",
+   "first_author": "Joint",
+   "year": "2004",
+   "title": "C14 uptake rates and chlorophyll content from incubation experiment D2C009 at station CD61_203#4"
+  },
+  {
+   "identifier": "https://doi.org/10.1594/PANGAEA.206622",
+   "type": "dataset",
+   "first_author": "Joint",
+   "year": "2004",
+   "title": "C14 uptake rates and chlorophyll content from incubation experiment D2C011 at station CD61_205#1"
+  },
+  {
+   "identifier": "https://doi.org/10.1594/PANGAEA.206621",
+   "type": "dataset",
+   "first_author": "Joint",
+   "year": "2004",
+   "title": "C14 uptake rates and chlorophyll content from incubation experiment D2C012 at station CD61_205#15"
+  },
+  {
+   "identifier": "https://www.bco-dmo.org/dataset/3248",
+   "type": "dataset",
+   "first_author": "Kudela",
+   "year": "2015",
+   "title": "Vertical profiles of primary productivity from R/V Wecoma multiple cruises in the Northeast Pacific coastal waters off states of Washington and Oregon from 2004 to 2006 (RISE project)"
+  },
+  {
+   "identifier": "https://doi.org/10.1029/2006GL026772",
+   "type": "journal article",
+   "first_author": "Kudela",
+   "year": "2006",
+   "title": "Impacts on phytoplankton biomass and productivity in the Pacific Northwest during the warm ocean conditions of 2005"
+  },
+  {
+   "identifier": "https://www.bco-dmo.org/dataset/3612/data",
+   "type": "dataset",
+   "first_author": "Kudela",
+   "year": "2012",
+   "title": "Vertical profiles of primary productivity from R/V Thomas G. Thompson cruise TN210 in the Gulf of Alaska, North Pacific in 2007 (Northern Gulf of Alaska Phytoplankton project)"
+  },
+  {
+   "identifier": "https://doi.org/10.1594/PANGAEA.816766",
+   "type": "dataset",
+   "first_author": "Legendre",
+   "year": "2013",
+   "title": "Biochemistry measured on water bottle samples during Fogo Isle cruise FL92/2"
+  },
+  {
+   "identifier": "https://doi.org/10.1594/PANGAEA.816767",
+   "type": "dataset",
+   "first_author": "Legendre",
+   "year": "2013",
+   "title": "Biochemistry measured on water bottle samples during Fogo Isle cruise FL92/3"
+  },
+  {
+   "identifier": "https://doi.org/10.1594/PANGAEA.816673",
+   "type": "dataset",
+   "first_author": "Legendre",
+   "year": "2013",
+   "title": "Biochemistry measured on water bottle samples during HUDSON cruise HUD92/1"
+  },
+  {
+   "identifier": "https://doi.org/10.1594/PANGAEA.816771",
+   "type": "dataset",
+   "first_author": "Legendre",
+   "year": "2013",
+   "title": "Biochemistry measured on water bottle samples during Sir W. Laurier cruise LU94/9"
+  },
+  {
+   "identifier": "https://doi.org/10.1594/PANGAEA.816768",
+   "type": "dataset",
+   "first_author": "Legendre",
+   "year": "2013",
+   "title": "Biochemistry measured on water bottle samples during Fogo Isle cruise FL93/1"
+  },
+  {
+   "identifier": "https://doi.org/10.1594/PANGAEA.816769",
+   "type": "dataset",
+   "first_author": "Legendre",
+   "year": "2013",
+   "title": "Biochemistry measured on water bottle samples during Fogo Isle cruise FL93/2"
+  },
+  {
+   "identifier": "https://doi.org/10.1594/PANGAEA.816770",
+   "type": "dataset",
+   "first_author": "Legendre",
+   "year": "2013",
+   "title": "Biochemistry measured on water bottle samples during Sir W. Laurier cruise LU94/1"
+  },
+  {
+   "identifier": "https://doi.org/10.5065/D6SN06ZN",
+   "type": "dataset",
+   "first_author": "Lomas",
+   "year": "2010",
+   "title": "Chlorophyll and Primary Production. Version 1.0"
+  },
+  {
+   "identifier": "https://doi.org/10.1594/PANGAEA.857027",
+   "type": "dataset",
+   "first_author": "Matishov",
+   "year": "2016",
+   "title": "Hydrochemistry measured on water bottle samples during Dalniye Zelentsy cruise 90BYB880"
+  },
+  {
+   "identifier": "https://www.ncei.noaa.gov/access/metadata/landing-page/bin/iso?id=gov.noaa.nodc:0063065",
+   "type": "dataset",
+   "first_author": "Matrai",
+   "year": "2011",
+   "title": "Productivity, chlorophyll a, Photosynthetically Active Radiation (PAR) and other phytoplankton data from the Arctic Ocean, Bering Sea, Chukchi Sea, Beaufort Sea, East Siberian Sea, Kara Sea, Barents Sea, and Arctic Archipelago measured between 17 April, 1954 and 30 May, 2006 compiled as part of the Arctic System Science Primary Production (ARCSS-PP) observational synthesis project (NCEI Accession 0063065)"
+  },
+  {
+   "identifier": "https://doi.org/10.1594/PANGAEA.716104",
+   "type": "dataset",
+   "first_author": "Moll",
+   "year": "2009",
+   "title": "Primary production, phytoplankton, diatoms, and chlorophyll a concentrations measured on water samples during VALDIVIA cruise VA44"
+  },
+  {
+   "identifier": "https://doi.org/10.1575/1912/bco-dmo.3093.1",
+   "type": "dataset",
+   "first_author": "Muller-Karger",
+   "year": "2019",
+   "title": "Time-series Niskin-bottle sample data from R/V Hermano Gines cruises in the Cariaco Basin from 1995 through 2017 (CARIACO Ocean Time-Series Program)"
+  },
+  {
+   "identifier": "https://doi.org/10.1594/PANGAEA.897335",
+   "type": "dataset",
+   "first_author": "N\u00f6thig",
+   "year": "2019",
+   "title": "Nutrients, biochemical parameters and primary production during POLARSTERN cruise ANT-III/3 (PS06) - Part 2"
+  },
+  {
+   "identifier": "https://doi.org/10.1007/BF00239021",
+   "type": "journal article",
+   "first_author": "N\u00f6thig",
+   "year": "1991",
+   "title": "Phyto- and protozooplankton biomass during austral summer in surface waters of the Weddell Sea and vicinity"
+  },
+  {
+   "identifier": "https://www.bco-dmo.org/dataset/3320",
+   "type": "dataset",
+   "first_author": "Peloquin",
+   "year": "2010",
+   "title": "Discrete primary production and Chlorophyl-A (Chl_a) measurements from CTD casts from R/V Tangaroa cruise VDT0410 in the South East of New Zealand, S.W. Bounty Trough in 2004 (SAGE project)"
+  },
+  {
+   "identifier": "https://doi.org/10.1594/PANGAEA.756636",
+   "type": "dataset",
+   "first_author": "Piontkovski",
+   "year": "2011",
+   "title": "Physical oceanography, phytoplankton, and primary production in surface water during Professor Vodyanitskiy cruise PV24"
+  },
+  {
+   "identifier": "https://doi.org/10.1594/PANGAEA.756641",
+   "type": "dataset",
+   "first_author": "Piontkovski",
+   "year": "2011",
+   "title": "Chlorophyll a, zooplankton, microzooplankton, and primary production in surface water during Professor Vodyanitskiy cruise PV8"
+  },
+  {
+   "identifier": "https://doi.org/10.1594/PANGAEA.682296",
+   "type": "dataset",
+   "first_author": "Piontkovski",
+   "year": "2008",
+   "title": "Chlorophyll a and primary production in surface water during Akademik Vernadsky cruise AV22"
+  },
+  {
+   "identifier": "https://doi.org/10.1594/PANGAEA.756634",
+   "type": "dataset",
+   "first_author": "Piontkovski",
+   "year": "2011",
+   "title": "Chlorophyll a and primary production in surface water during Professor Vodyanitskiy cruise PV14"
+  },
+  {
+   "identifier": "https://doi.org/10.1594/PANGAEA.756637",
+   "type": "dataset",
+   "first_author": "Piontkovski",
+   "year": "2011",
+   "title": "Pigments and primary production in surface water during Professor Vodyanitskiy cruise PV30_1"
+  },
+  {
+   "identifier": "https://accession.nodc.noaa.gov/9400146",
+   "type": "dataset",
+   "first_author": "Sarumpria",
+   "year": "2010",
+   "title": "WATER TEMPERATURE and Other Data From Indian Ocean from 1976-02-22 to 1991-04-07 (NCEI Accession 9400146)"
+  },
+  {
+   "identifier": "https://doi.org/10.1594/PANGAEA.206604",
+   "type": "dataset",
+   "first_author": "Savidge",
+   "year": "2004",
+   "title": "C14 uptake rates and chlorophyll content from incubation experiment D1C001 at station CD60_1606#G01"
+  },
+  {
+   "identifier": "https://doi.org/10.1016/S0422-9894(03)80136-8",
+   "type": "book chapter",
+   "first_author": "Scardi",
+   "year": "2003",
+   "title": "Chapter 19 Neural network applications in coastal ecological modeling"
+  },
+  {
+   "identifier": "https://doi.org/10.5065/D68050P8",
+   "type": "dataset",
+   "first_author": "Service Group, Scripps Institution of Oceanography, University of California - S",
+   "year": "2007",
+   "title": "HLY-04-02 Service Group Bottle Data (WHP Format). Version 1.0"
+  },
+  {
+   "identifier": "https://doi.org/10.1016/S0079-6611(00)00013-6",
+   "type": "journal article",
+   "first_author": "Tselepides",
+   "year": "2000",
+   "title": "The CINCS project: introduction"
+  },
+  {
+   "identifier": "https://doi.org/10.1594/PANGAEA.728763",
+   "type": "dataset publication series",
+   "first_author": "Tselepides",
+   "year": "2008",
+   "title": "Compilation of the scientific primary data of the CINCS project from the Eastern Mediterranean"
+  },
+  {
+   "identifier": "https://doi.org/10.1594/PANGAEA.78624",
+   "type": "dataset",
+   "first_author": "Whitney",
+   "year": "2002",
+   "title": "Primary production and chlorophyll of station P26 (Papa)"
+  }
+ ]
+}

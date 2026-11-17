@@ -57,7 +57,7 @@ One **fact** is one measured variable at one core and depth interval. A source r
 | `measurement_fact` | one measurement | `attribute`, `measurement_type` (standard code or `other`), `subfield`, `value` (as reported), `value_comparator` (`<` or `>` for a censored value such as `<0.02`, with the flag `inequality`), `units_raw`, `sd`, `se`, `n`, `flags`, `source_row_ref` |
 | `source_dim` | compilation | name, version, DOI, access date, license, notes |
 | `reference_dim` | contributing study | `reference_key`, the compilation's own study id |
-| `citation_dim` | study and citation | bibliography id, publication type, DOI, title, authors, year, URL, and `openalex_id`, `doi_resolved`, `doi_resolution_source` (empty until a DOI-resolution job fills them) |
+| `citation_dim` | study and citation | bibliography id, publication type, DOI, title, authors, year, URL, and `openalex_id`, `doi_resolved`, `doi_resolution_source` (empty after the build; filled by the scripts in "DOI resolution" below) |
 | `study_screening_dim` | candidate study | citation string and the compilation's own screening labels. `reference_id` is NULL for studies with no facts |
 | `location_dim` | core or site | coordinates, names, raw labels (`habitat_type`, `geomorphic_setting`, `salinity_class`, ...), water depth, and the **standard labels** derived from them: `habitat`, `bottom_type`, `setting`, `salinity_zone`, `modification_class[]` |
 | `sample_dim` | depth interval or sample | depths, sampling year and month, `taxon` and `taxon_rank` (what was sampled), sediment descriptors, and water context measured beside the value: `sample_depth_m`, `water_temperature_c`, `water_salinity`, `bottom_water_o2` |
@@ -207,13 +207,58 @@ Others (counts in each README): `zero_value`, `negative_value`, `negative_sd`, `
 Shao 185), `below_detection_limit` (Tang 772, Shao 646), `units_missing` (Fulweiler 4), `unparseable_value` (Jorgensen 1, Shao 9), and for MOSAIC
 `no_metadata_row` (172), `error_without_fact` (114) and `material_unit_unclear` (108).
 
+## DOI resolution
+
+The goal of a DOI here is a pointer to the original **paper**, so a dataset DOI or a website is not enough, and "no DOI because it is not a paper"
+is kept apart from "no DOI because we are missing information". The central build leaves the DOI columns empty. These scripts fill them, and
+every one is **re-run after each rebuild** (the sidecar `*.parquet` files next to them are derived and ignored by git):
+
+```bash
+python data/compilations/openalex_verify_dois.py                 # look up every stored DOI in OpenAlex (cached in _openalex_cache/)
+python data/compilations/build_doi_check.py                      # verdict per stored DOI, checked against the citation's own text
+python data/compilations/resolve_citations.py --per-page 5       # title search for citations with no / failed DOI
+python data/compilations/resolve_from_bibliography.py            # author-year labels via the introducing paper's bibliography
+python data/compilations/francesco_source_list.py                # Francesco: the file's own `Data doi/data link` column
+python data/compilations/apply_doi_resolution.py --apply         # write doi_resolved (dry run without --apply; backs up first)
+python data/compilations/find_paper_for_datasets.py              # companion paper of dataset citations (candidates only)
+python data/compilations/build_source_status.py --apply          # write the three status tables below
+```
+
+`apply_doi_resolution.py` checks every row's `source_key` and `citation_key` first and aborts if ids drifted. `eval_resolver.py` and
+`eval_citation_parser.py` score the matching on citations whose DOI is already verified.
+
+**`doi_resolved` is the one trusted DOI.** Never key on the raw `doi`: about 200 stored DOIs failed verification. Only strong evidence is
+written, and `doi_resolution_source` says which:
+`stored_doi:verified_title` / `stored_doi:verified_author_year` (a stored DOI that agrees with the citation text; author+year is weaker),
+`openalex_title_search:full|trimmed` and `bibliography:doi|title` (title, first author and year agree with exactly one non-dataset work),
+`source_file_data_doi` (Francesco's own data DOIs; datasets, no `openalex_id`). A DOI found only in a compilation's own source list
+(`source_attested`), weak, ambiguous and author-year-only matches are not written.
+
+**`doi_resolved` is not always a paper.** Use the status tables, which are added to the file by `build_source_status.py`:
+
+| Object | Grain | Use |
+|---|---|---|
+| `citation_source_status` | citation | `reference_kind` (paper, thesis, report, book_or_chapter, dataset, website_or_database, personal_or_unpublished, unknown) with its evidence in `kind_basis`, `doi_status`, and companion-paper candidates |
+| `reference_source_status` | reference | `best_status` over the reference's citations, `paper_dois`, `dataset_dois` |
+| `measurement_source_status` (view) | measurement | the same, one row per fact: filter `best_status = 'paper_doi'` for papers you can download |
+
+`doi_status` values: `paper_doi`, `paper_openalex_only` (a real paper whose record has no DOI), `dataset_doi` (the DOI is a dataset), `not_a_paper`
+(a website, database, personal communication or unpublished work, or a dataset with no DOI), `paper_doi_missing` (evidence says it is a paper but
+no DOI was found), `unidentified` (cannot tell what it is), `doi_kind_unknown`, and for references with no citation row `no_citation_record`.
+The kind comes from the strongest evidence available: OpenAlex's work type, then the source's own `publication_type`, then a data-repository DOI
+prefix, then narrow wording in the label. It stays `unknown` when none applies. Companion-paper candidates (`paper_candidate_*`) are only shown when
+the title, an author and the year all agree. They are never in `doi_resolved`.
+
+Facts by `best_status` (2026-11-17): `paper_doi` 352,418 (50.7%), `not_a_paper` 126,869 (18.2%), `dataset_doi` 97,041 (14.0%),
+`unidentified` 89,397 (12.9%), `no_citation_record` 12,576 (1.8%), `paper_openalex_only` 11,922 (1.7%), `paper_doi_missing` 5,330 (0.8%),
+`doi_kind_unknown` 36.
+
 ## Still to do
 
-- **DOI resolution.** `citation_dim` has `openalex_id`, `doi_resolved` and `doi_resolution_source` (empty) for a separate script to fill via OpenAlex,
-  so values can be joined by DOI. `extract.py` never calls a network service, and a source's own DOI is never overwritten. Citations with a DOI:
-  CCN 959/1,012, Foster 476/567, SCOC 17/231, Strydom 312/400, BenBioDen 43/777, USGS 185/267, Rosentreter 10/483, Chang 0/69, Ray 0/52, Boynton
-  130/183, Fulweiler 262/267, Pessarrodona 7/229, Davis 0/53, Tang 0/72, Shao 154/280, Mouw 23/43, Francesco 11/35, Jorgensen 0/319, MOSAIC
-  316/331, Cloern 33/159, Ribeiro 0/87.
+- **DOI resolution, open items.** 89,397 facts (12.9%) are `unidentified` (mostly author-year labels with no text: Mouw, Francesco, Paradis,
+  Shao, all of Strydom), and 12,576 facts (Mouw ID 2) have no citation row. Francesco has seven labels with several data DOIs each (about 4,400
+  facts); giving them one reference per data DOI needs an extractor change. 516 dataset citations have a companion paper that a title match cannot
+  find.
 - **Coverage report.** A habitat by `measurement_type` count of facts, references and locations per source, showing what has been extracted and how
   much. The inputs are in place.
 - **Phase 2 material** that was deliberately not loaded (isotopes, 14C and biomarkers in MOSAIC; gene and cell counts in Shao and Tang; PAR, light
