@@ -131,3 +131,23 @@ fulweiler-nfix,habitat_type,lakes | wc,setting,
 fulweiler-nfix,habitat_type,rivers | wc,setting,
 fulweiler-nfix,habitat_type,freshwater wetlands | wc,setting,
 fulweiler-nfix,habitat_type,seagrasses | wc,setting,
+pessarrodona-seaweed,habitat_type,Marine forest | Rocky Reef,habitat,Kelp and macroalgal bed
+pessarrodona-seaweed,habitat_type,Brown algal beds | Rocky Reef,habitat,Kelp and macroalgal bed
+pessarrodona-seaweed,habitat_type,Red algal beds | Rocky Reef,habitat,Kelp and macroalgal bed
+pessarrodona-seaweed,habitat_type,Red algal beds | Sand,habitat,Kelp and macroalgal bed
+pessarrodona-seaweed,habitat_type,Green algal beds | Rocky Reef,habitat,Kelp and macroalgal bed
+pessarrodona-seaweed,habitat_type,Green algal beds | Sand,habitat,Kelp and macroalgal bed
+pessarrodona-seaweed,habitat_type,Algal turfs | Rocky Reef,habitat,Rocky shore and reef
+pessarrodona-seaweed,habitat_type,Algal turfs | Coral Reef,habitat,Coral reef
+pessarrodona-seaweed,habitat_type,Marine forest | Coral Reef,habitat,Coral reef
+pessarrodona-seaweed,habitat_type,Brown algal beds | Coral Reef,habitat,Coral reef
+pessarrodona-seaweed,habitat_type,Red algal beds | Coral Reef,habitat,Coral reef
+pessarrodona-seaweed,habitat_type,Rhodolith beds & Coralline algae | Coral Reef,habitat,Coral reef
+pessarrodona-seaweed,habitat_type,Marine forest | Salt-marsh,habitat,
+pessarrodona-seaweed,habitat_type,Marine forest | Sand,habitat,
+pessarrodona-seaweed,habitat_type,Green algal beds | Salt-marsh,habitat,
+pessarrodona-seaweed,habitat_type,Red algal beds | Floating,habitat,
+pessarrodona-seaweed,habitat_type,Rhodolith beds & Coralline algae | Rhodolith beds,habitat,
+pessarrodona-seaweed,habitat_type,Rhodolith beds & Coralline algae | Rocky Reef,habitat,
+pessarrodona-seaweed,habitat_type,Floating Sargassum | Floating,habitat,
+pessarrodona-seaweed,habitat_type,Free floating algae | Floating,habitat,

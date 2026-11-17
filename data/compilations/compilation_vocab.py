@@ -259,6 +259,9 @@ _j1("water_phosphate", "phosphate", {"mg l-1", "mg m-3", "mg-p l-1", "mmol m-2",
 _j1("water_o2", "dissolved_oxygen", {"%", "% sat", "mg l-1", "mg o2/l", "ml l-1", "um", "umol kg-1", "umol l-1"})
 _j1("water_chl_a", "chlorophyll_a", {"fluor mg m-3", "mg m-2", "mg m-3", "mg-chla m-3", "ug cm-2", "ug l-1", "ug ml-1", "ug-chla l-1"})
 
+# Pessarrodona et al. seaweed NPP: the source's harmonised value (column Avg_NPP_kg_C_m2_y); the unit is the header's.
+ATTRIBUTES["pessarrodona_npp"] = _d("B6", {"seagrass_seaweed_npp"}, {"kg C m-2 y-1"})
+
 
 def check_attribute_decls() -> None:
     """Self-consistency of the declarations above (run by the tests)."""
