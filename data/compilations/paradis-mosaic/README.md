@@ -1,248 +1,155 @@
-# paradis-mosaic: MOSAIC v2.0 (Modern Ocean Sediment Archive and Inventory of Carbon)
+# paradis-mosaic (MOSAIC v2.0: Modern Ocean Sediment Archive and Inventory of Carbon)
 
-Numbers below are from `extracted/extract_report.json` of the build (access date 2026-11-15, `--min-subtidal-depth-m 1`).
+Paradis, S. et al. (2023). *Modern Ocean Sediment Archive and Inventory of Carbon (MOSAIC), v2.0.* Zenodo, DOI 10.5281/zenodo.8322094 (ESSD
+preprint essd-2023-158).
 
-**Citation.** Paradis, S. et al. (2023): Modern Ocean Sediment Archive and Inventory of Carbon (MOSAIC), v2.0 [Dataset].
-Zenodo, doi:10.5281/zenodo.8322094 (ESSD preprint essd-2023-158). License CC BY 4.0 (`docs/README.md`; Zenodo's own
-license field says "other-open").
-
-**Version.** The file we hold is the PostgreSQL dump `Datasets/mosaic_ESSD` of the database `mosaic_2_ESSD`, archive
-created 2023-04-25 (dumped from PostgreSQL 13.4, archive format 1.14). The Zenodo v2.0 release is dated 2023-09-06, so the
-dump **predates** the release and may differ from it; `source.version` says both.
+- **License:** CC BY 4.0 (from the project docs; Zenodo's own field says "other-open"). **Access date:** 2026-11-15.
+- **Version:** the file is the PostgreSQL dump `mosaic_ESSD` of the database `mosaic_2_ESSD`, created 2023-04-25. The Zenodo v2.0 release is
+  dated 2023-09-06, so the dump **predates** it and may differ. `source.version` says both.
+- Counts below come from `extracted/extract_report.json`, built with `--min-subtidal-depth-m 1`.
 
 ## What it holds
 
-368 articles (343 DOIs), 20,851 cores (`geopoints`), 39,487 samples (depth intervals of those cores), 199,429
-`sample_metadata` rows (sample x material x analysis x replicate x article, giving the reference, `method`,
-`method_details` and a "calculated" flag; `sample_exclusivity_clause` is 0 everywhere, so no restricted data), and 13 value
-tables (`sample_composition` 35,218 rows, `sample_sediment_properties` 14,520, `sample_isotopes` 12,955, `sample_14C`
-3,141, biomarker tables, ...). `spatial_ref_sys` is empty. All of this is a marine-margin sediment archive: shelf to abyssal,
-no tidal wetlands.
+A marine-margin sediment archive, from shelf to abyss, with no tidal wetlands: 368 articles (343 DOIs), 20,851 cores, 39,487 samples (depth
+intervals) and 199,429 metadata rows. Value tables hold composition (35,218 rows), sediment properties (14,520), isotopes, 14C and biomarkers.
 
-**Loaded (147,121 facts):** every non-null value cell of `sample_composition` and (selected columns of)
-`sample_sediment_properties`. **Not loaded:** see "Not loaded" below.
+**Loaded:** 147,121 facts, from `sample_composition` and selected columns of `sample_sediment_properties`.
 
-## Files and how to run
-
-| File | What |
-|---|---|
-| `Datasets/mosaic_ESSD` | the pg_restore archive (raw, ignored by git) |
-| `Datasets/DatasetS1.csv`, `DatasetS2.csv` | authors' QC thresholds and variable descriptions (raw) |
-| `src/`, `Excel_templates/`, `docs/` | authors' QC/population code, input templates, docs (raw) |
-| `extract.py` | dump -> contract tables (tracked) |
-| `extracted/` | output: eight parquet tables, `skip_report.jsonl`, `extract_report.json` (ignored) |
+## How to run
 
 ```bash
 python -I data/compilations/paradis-mosaic/extract.py --access-date 2026-11-15 \
     --pg-restore /opt/homebrew/bin/pg_restore --min-subtidal-depth-m 1
 ```
 
-Both `--pg-restore` and `--min-subtidal-depth-m` are required (no defaults). `--article-ids ...` is a debug subset used for the
-staged-gate check (other cells are counted as `outside_subset`).
+Both `--pg-restore` and `--min-subtidal-depth-m` are required, with no defaults. `--article-ids ...` is a debug subset.
 
-### The dump format and `pg_restore`
-
-`mosaic_ESSD` is a PostgreSQL **custom-format** archive (version 1.14), not text. It can only be read with `pg_restore`.
-The plan recorded that the cluster's system `pg_restore` (v10) refuses it ("unsupported version (1.14)") and that the
-PostgreSQL 18.1 module's binary works; on the machine used for this build `/opt/homebrew/bin/pg_restore` is **16.14** and
-reads it. So `extract.py` does **not** gate on a version number: it takes the binary path as an argument and runs
-
-1. `pg_restore --version` (recorded in the report),
-2. `pg_restore --list` (the header must say `dbname: mosaic_2_ESSD` and `Archive created at 2023-04-25`),
-3. `pg_restore --data-only -f <temp file>` (plain-text `COPY` blocks, about 23 MB, no server needed),
-
-and raises if any step exits non-zero or writes to stderr. The COPY blocks must then be **exactly the 27 expected tables
-with the expected row counts** (`EXPECTED_ROWS`; all counts above are checked) and the expected column lists of the tables read
-by name. The COPY text format is decoded completely (`\N` is NULL only as a whole field; `\\ \n \t \r \b \f \v`, octal and
-hex escapes; unit-tested). The report stores the `pg_restore` version string, the archive header and the SHA-256 of the
-dump (`4be8aa4f...`). Reading the whole dump takes seconds; writing the parquet takes a few minutes.
+**The dump format.** `mosaic_ESSD` is a PostgreSQL custom-format archive (version 1.14), readable only with `pg_restore`. The plan recorded that
+an old system `pg_restore` (v10) refuses it. Here `/opt/homebrew/bin/pg_restore` (16.14) reads it, so the extract does not gate on a version. It takes
+the binary path, runs `--version`, `--list` (the header must say `mosaic_2_ESSD` and 2023-04-25) and `--data-only` (plain `COPY` text, about
+23 MB, no server), and raises on any non-zero exit or stderr output. The result must be exactly the 27 expected tables with the expected row counts
+and columns. The report records the `pg_restore` version, the header and the dump's SHA-256. Reading takes seconds and writing the parquet a few
+minutes.
 
 ## Facts
 
-One fact = one non-null value cell, identified by (table, `sample_id`, `material_analyzed_id`, `replicate`, column).
+One fact per non-null value cell. Units are the source's own.
 
-| Attribute | Type / subfield | Source column | Facts | Units (source's) |
-|---|---|---|---|---|
-| `mosaic_organic_carbon` | C1 organic_carbon | `total_organic_carbon_%` | 33,073 | % |
-| `mosaic_total_carbon` | C1 total_carbon | `total_carbon_%` | 13,900 | % |
-| `mosaic_total_inorganic_carbon` | C1 total_inorganic_carbon | `total_inorganic_carbon_%` | 12,300 | % |
-| `mosaic_caco3` | C1 carbonate | `CaCO3_%` | 14,880 | % |
-| `mosaic_loi_organic_matter` | C1 loi_organic_matter | `OM_LOI_%` | 2,730 | % |
-| `mosaic_total_nitrogen` | C1 total_nitrogen | `total_nitrogen_%` | 10,658 | % |
-| `mosaic_oc_tn_ratio` | C1 c_n_ratio | `OC:TN_ratio` | 9,998 | `(blank in source)` |
-| `mosaic_dry_bulk_density` | C1 dry_bulk_density | `dry_bulk_density_g_cm3` | 2,067 | g·cm-3 (U+00B7) |
-| `mosaic_porosity` | C1 porosity | `porosity` | 2,186 | `-` |
-| `mosaic_water_content` | C1 water_content | `water_content_%` | 1,445 | % |
-| `mosaic_gravel_content` / `sand` / `silt` | G1 gravel/sand/silt_content | `gravel_%`, `sand_%`, `silt_%` | 5,503 / 8,333 / 7,366 | % |
-| `mosaic_clay_lt4um`, `mosaic_clay_lt2um` | G1 clay_content | `clay_%_4microm`, `clay_%_2microm` | 4,334 / 3,012 | % |
-| `mosaic_mud_content` | G1 mud_content | `mud_silt_clay_%` | 3,165 | % |
-| `mosaic_mean_grain_size` / `median` / `mode` | G1 mean/median/mode_grain_size | `*_grain_size_microm` | 2,139 / 708 / 76 | µm (U+00B5) |
-| `mosaic_organic_nitrogen`, `inorganic_nitrogen` | other | `organic_nitrogen_%`, `inorganic_nitrogen_%` | 1,235 / 158 | % |
-| `mosaic_oc_on_ratio` | other | `OC:ON_ratio` | 2,289 | `(blank in source)` |
-| `mosaic_total_phosphorus`, `organic_phosphorus` | other | `P_total_%`, `P_org_%` | 930 / 21 | % |
-| `mosaic_total_sulphur` | other | `S_total_%` | 3,181 | % |
-| `mosaic_biogenic_silica` | other | `SiO2_%` (opal) | 1,434 | % |
+| Attribute | Type / subfield | Facts | Units |
+|---|---|---|---|
+| `mosaic_organic_carbon` | C1 `organic_carbon` | 33,073 | % |
+| `mosaic_total_carbon` | C1 `total_carbon` | 13,900 | % |
+| `mosaic_total_inorganic_carbon` | C1 `total_inorganic_carbon` | 12,300 | % |
+| `mosaic_caco3` | C1 `carbonate` | 14,880 | % |
+| `mosaic_loi_organic_matter` | C1 `loi_organic_matter` | 2,730 | % |
+| `mosaic_total_nitrogen` | C1 `total_nitrogen` | 10,658 | % |
+| `mosaic_oc_tn_ratio` | C1 `c_n_ratio` | 9,998 | `(blank in source)` |
+| `mosaic_dry_bulk_density` | C1 `dry_bulk_density` | 2,067 | g·cm-3 |
+| `mosaic_porosity`, `_water_content` | C1 `porosity`, `water_content` | 2,186 / 1,445 | `-`, % |
+| `mosaic_gravel_content`, `_sand_`, `_silt_` | G1 content | 5,503 / 8,333 / 7,366 | % |
+| `mosaic_clay_lt4um`, `_clay_lt2um`, `_mud_content` | G1 clay and mud content | 4,334 / 3,012 / 3,165 | % |
+| `mosaic_mean_`, `_median_`, `_mode_grain_size` | G1 grain size | 2,139 / 708 / 76 | µm |
+| organic and inorganic N, OC:ON, total and organic P, total S, biogenic silica | `other` | 1,235 / 158 / 2,289 / 930 / 21 / 3,181 / 1,434 | % (OC:ON blank) |
 
-Phase 1 follows the plan: from `sample_composition` all value columns (OC, TC, TIC, CaCO3, LOI, TN, OC:TN as C1;
-organic and inorganic N, OC:ON, P, S and SiO2 as `other`, as the plan's "ON/IN/P/S/SiO2"; OC:ON is not named by the plan and is
-treated like ON), from `sample_sediment_properties` the listed columns. The counts are smaller than the raw non-null counts by
-the skips and attached errors below (e.g. OC 33,193 cells -> 33,073 facts; TN 10,699 -> 10,658; OC:TN 10,019 -> 9,998;
-mean grain size 2,141 -> 2,139).
+The counts are a little below the raw non-null counts because of the skips and attached errors below.
 
-### The `*_error` columns: assumed to be SD
+**Units** are verbatim from the dump. Two exceptions: OC:TN and OC:ON have a blank unit (the source does not say mass or molar), so they carry
+`(blank in source)`. `clay_%_2microm` has unit `µm` in the dump but is described as a percentage content, so it is declared `%` with the raw unit in
+`params`. The micro sign is U+00B5 and the middle dot U+00B7 (Chang uses U+03BC).
 
-**The source never says whether an error is a standard deviation or a standard error.** `DatasetS2.csv` and the Excel template
-README describe every `*_error` column only as "Error of ..." (e.g. "Error of the total organic carbon content, if available");
-the tutorial and the authors' code are silent. Owner decision: **default to SD.** Each attached error is stored in `fact.sd`
-(`se` stays NULL for every fact), the fact carries the flag **`error_type_missing`** ("source gives an error value but no error
-type"), and its method row's `notes` reads "error column assumed to be a standard deviation; the source does not state SD or
-SE". Treat these `sd` values as unverified: filter on `error_type_missing` before using them as SDs. The raw details stay in
-`method_dim.params` (`error_value`, `error_column`, `error_meaning` = unstated). 1,140 error cells (1,107 composition, 33
-sediment) became `sd` values this way; 220 of them are exactly 0 (likely a placeholder for "no error"), carried as given.
-**114 error cells are skipped** (`error_without_fact`, all `mean_grain_size_microm_error`, of 147) because their value cell is
-blank, so there is no mean to attach them to; the skip report lists each. Error columns exist for OC, TC, TIC, CaCO3, LOI, ON, IN,
-TN, OC:ON, OC:TN, SiO2, P (not S) and mean grain size.
+### Error columns: assumed to be SD
 
-### Method, calculated and replicate
+**The source never says whether an error is a standard deviation or a standard error.** Its descriptions say only "Error of ...". By your decision
+the default is SD. Each attached error is stored in `sd` (`se` stays NULL), the fact carries `error_type_missing`, and its method row's `notes` says
+the type is assumed. Treat these `sd` values as unverified and filter on the flag. 1,140 errors became `sd` (1,107 composition, 33 sediment), and 220
+are exactly 0. **114 error cells are skipped** (`error_without_fact`), because their mean grain size is blank.
 
-* `sample_metadata.method` -> `method_dim.technique` (`elemental analyzer`, `sieving`, `laser`, `titration`, ...);
-  `method_details` and all metadata rows are in `params`. `method` = `_unknown` (75% of the metadata rows) gives technique NULL
-  and `method_status` = `method_id_null` (329 of 884 method rows); otherwise `matched` (552). There is deliberately **no
-  `method_missing` flag** for these (it would sit on most facts; use `method_status`).
-* **`sample_analysis_calculated`** is 1 on 30,061 of the 199,429 metadata rows (all tables, including unloaded ones). On loaded
-  facts it gives the flag `calculated_by_source` on **22,290 facts** ("we calculated the value from other parameters", e.g.
-  OC from TOC fractions, or the sum of grain-size classes).
-* **`replicate`** is part of the cell key and in `params`; replicate > 1 gives the flag `replicate` (1,143 facts). Replicate 1 is
-  unflagged even when a replicate 2 exists.
-* A cell can be backed by several metadata rows (different articles): **355 facts** have a composite `reference_key`
-  (`article:a+article:b`, one citation row per article). Where those rows also disagree on method (7 facts) or "calculated"
-  (3 facts) the method row is `ambiguous_duplicate_method_id`, technique NULL, and every metadata row is in `params`
-  (the flag `calculated_by_source` is set if any row says calculated).
+### Methods, calculated values and replicates
 
-### Material analysed (non-bulk fractions)
+- `sample_metadata.method` is `technique` (`elemental analyzer`, `sieving`, `laser`, `titration`). The value `_unknown` (75% of rows) gives a NULL
+  technique and `method_id_null` (329 of 884 method rows). There is no `method_missing` flag, since it would sit on most facts.
+- `sample_analysis_calculated` = 1 on 30,061 metadata rows. On loaded facts it gives `calculated_by_source` (22,290 facts): the authors
+  calculated the value from other parameters.
+- `replicate` above 1 gives the flag `replicate` (1,143 facts).
+- A cell backed by several articles gives a combined `reference_key` (355 facts). Where those rows disagree on method (7) or calculated (3), the
+  method is `ambiguous_duplicate_method_id` with every row in `params`.
 
-`material_analyzed_id` 1 (`bulk`) holds 142,544 facts. The other 4,577 are analyses of a size or density fraction (`<2 mm`
-2,860, `<0.063 mm` 1,056, density classes, ...): they are loaded with the flag **`non_bulk_material`**, the material label is
-in `params` and in the method key and `fact_key`. **Filter on this flag before comparing OC/N values with bulk sediment.**
-Material `surface_area` (108 organic-carbon values between 0.009 and 0.073 in a `%` column; evidently not a bulk percentage) is
-**skipped** (`material_unit_unclear`).
+### Size and density fractions
 
-### Units
-
-Verbatim from the dump's `sample_analysis_units` (checked against the declared units at run time). Two exceptions, both
-documented: (1) blank source unit (OC:TN, OC:ON ratios; the source does not say mass or molar) -> the literal `(blank in
-source)`; (2) `clay_%_2microm` has unit `µm` in the dump **and** DatasetS2, although its description is "Content of clay
-(< 2 µm) in the sample" and DatasetS1 sums it with the other percentage classes to 100: it is declared `%`, and the source's
-`µm` is in `params` (`unit_in_source`, `unit_note`). `surface_area_m2_g` carries the odd unit `m2·g` in the source (not loaded).
-Code points: micro sign U+00B5 (`µm`), middle dot U+00B7 (`g·cm-3`); the Chang compilation uses U+03BC for `μM`/`μmol`.
-
-### Flags used
-
-`zero_value` 4,171; `negative_value` 18 (CaCO3 8, TIC 10); `outside_source_qc_range` 38 (value outside the min/max DatasetS1
-lists for the column: CaCO3 below 0 / above 100, OC:TN above 55, TIC, median grain size); `calculated_by_source` 22,290;
-`replicate` 1,143; `non_bulk_material` 4,577; `habitat_from_scope` 133,775; `year_missing` 29,082; `error_type_missing` 1,140. (`depth_missing`
-is registered but is not on any fact.) Nothing is changed or dropped because of a flag. New vocabulary added for this source:
-flags `non_bulk_material`, `outside_source_qc_range`, `error_type_missing`; skip reasons `no_metadata_row`, `error_without_fact`,
-`material_unit_unclear`; extension subfield `G1 mode_grain_size`; 26 `mosaic_*` attributes.
+142,544 facts are on bulk sediment. 4,577 are on a size or density fraction (`<2 mm` 2,860, `<0.063 mm` 1,056, density classes). They carry
+`non_bulk_material`, and the material is in `params`. **Filter on it before comparing with bulk sediment.** Material `surface_area` (108 organic
+carbon values between 0.009 and 0.073 in a `%` column) is skipped (`material_unit_unclear`).
 
 ## Locations, depth and habitat
 
-17,311 of the 20,851 cores have at least one fact and are loaded (one location per core; `location_key` = `core:<core_id>`).
-`site_name` = `core_name`; `water_body` = `seas`; `bioregion` = the Longhurst province; `country` is NULL in the whole dump;
-`position_method` says whether `georeferenced_coordinates` = 1 (coordinates obtained by georeferencing a map; 1,264 loaded
-cores) or 0 (from the source). Not loaded from `geopoints`: core length, sampling method and campaign, EEZ, `ocean` (22 cores,
-always with `seas` also set), comments, user name, MARCATS, sampling day.
+- **Locations:** 17,311 cores have a fact and are loaded, one location each. `water_body` is `seas`, `bioregion` is the Longhurst province, and
+  `country` is NULL throughout. `position_method` records whether coordinates came from georeferencing a map (1,264 cores).
+- **Depth:** the dump says whether each depth came from the manuscript (17,608 cores) or was extracted from GEBCO 2020 (3,243 cores; 2,833 have
+  facts). The GEBCO depth is a derived layer, not a measurement, so it is **not loaded**. Only manuscript depths are (0 to 10,677 m, positive down).
+- **Habitat:** the dataset is marine sediment cores, so every core with a loaded depth at or above the threshold gets "Subtidal soft sediment"
+  from the dataset's scope (flag `habitat_from_scope`). Very shallow cores may be intertidal, so the threshold `--min-subtidal-depth-m` decides
+  which cores get the label. **This build uses 1 m**, the plan's proposal (changing it means re-running and rebuilding).
 
-**Depth source.** `water_depth_source_id` 1 = "Water depth provided in manuscript" (17,608 cores); 2 = "Water depth
-extracted from GEBCO 2020" (3,243 cores; 2,833 of them have facts). The GEBCO depth is a derived layer, not a measurement
-beside the sample, so it is **not loaded** (`water_depth_m` NULL, plan rule 3.5). Only manuscript depths are loaded (positive
-down, 0 to 10,677 m).
-
-**Habitat and the shallow-core threshold.** The dataset is marine sediment cores, so habitat comes from the dataset's scope,
-not from a label: raw `habitat_type` = `marine sediment core` -> `Subtidal soft sediment`, with the fact flag
-`habitat_from_scope`. Very shallow cores may be intertidal, so this is applied **only to cores whose loaded depth is >=
-`--min-subtidal-depth-m`**; the value is a parameter with no default and is recorded in `extract_report.json` (and `source.notes`).
-**This build uses 1 m**, the value proposed in the plan (a decision for the owner to confirm; changing it means re-running
-`extract.py` and rebuilding). Counts of cores by water depth:
-
-| depth <= | 0 m | 1 m | 5 m | 10 m | 200 m |
+| Cores with depth up to | 0 m | 1 m | 5 m | 10 m | 200 m |
 |---|---|---|---|---|---|
-| all cores (manuscript + GEBCO depths; the plan's numbers) | 83 | 113 | 335 | 774 | 13,144 |
+| all cores (manuscript and GEBCO depths; the plan's numbers) | 83 | 113 | 335 | 774 | 13,144 |
 | manuscript depths only (the ones loaded) | 58 | 64 | 165 | 444 | 10,426 |
 
-With the threshold at 1 m, 58 cores (all at exactly 0 m) are below it; 17,550 cores have habitat from scope. Cores with no
-loaded depth (GEBCO-only) also get NULL habitat. In the loaded set: 14,448 of 17,311 cores have a habitat label (2,833 GEBCO +
-30 shallow cores have none), and 133,775 of 147,121 facts carry `habitat_from_scope`; the other 13,346 facts have NULL habitat.
-`setting` comes from `geomorphological_site` (91% blank in the dump): raw -> `geomorphic_setting`; only `shelf`, `estuary`, `fjord`
-map to a setting; `canyon`, `glacial_trough`, `slope`, `basin`, `pro-delta`, `abyss`, `trough`, `trench`, `loch`, `plateau`,
-`ridge`, `rise`, `fans`, `shelf_valley` stay blank (all 17 raw labels have a label-map row; `loch` is a Scottish sea inlet
-but is not mapped because the plan lists the three settings only).
+At 1 m, 58 cores (all at exactly 0 m) get no habitat. Cores with only a GEBCO depth also get none. In all, 133,775 of 147,121 facts carry
+`habitat_from_scope` and 13,346 have a NULL habitat.
+- **Setting** comes from `geomorphological_site` (91% blank). Only `shelf`, `estuary` and `fjord` map to a setting. All 17 labels have a row in the
+  label map.
 
-## Samples, dates, references
+## Samples, dates and references
 
-* `sample_dim` (34,913 samples with facts): depth min/max = `sample_depth_upper_cm` / `bottom`; representative depth = the
-  source's `sample_depth_average_cm`, kept as given (138 samples have an average that is not the interval midpoint).
-  13,467 samples have only an average depth, which is loaded as the representative depth with min/max NULL; every loaded sample has at least one depth value.
-* Sampling year and month are core attributes in the dump: `sampling_year` / `sampling_month`; where those are NULL and
-  `sampling_date` exists, the date is used (16 cores). 20 cores have a date that disagrees with the year or month columns: the
-  columns win and the cores are listed in the report. 29,082 facts have no year (flag `year_missing`).
-* References: `reference_key` = `article:<article_id>` (the dump's own id). 293 of 368 articles are cited by a loaded fact
-  (312 reference rows including composites; 331 citation rows). DOI as stored for 316 of 331 citations (15 without, e.g. two MAREANO data
-  releases and several older regional reports). The dump has no author-order column, so `authors` is ordered
-  by `author_id` (population order) and may not be the paper's author order. The journal has no contract column.
+- **Samples (34,913):** depth min and max are the sample's upper and bottom depths. The source's average depth is the representative depth.
+  13,467 samples have only an average depth, loaded with min and max NULL.
+- **Dates:** year and month are core attributes. Where they are NULL and a full date exists, the date is used (16 cores). 20 cores have a date that
+  disagrees with the year or month columns, and the columns win (listed in the report). 29,082 facts have no year (`year_missing`).
+- **References:** `article:<article_id>`, the dump's own id. 293 of 368 articles are cited by a loaded fact (331 citations, 316 with a DOI). The
+  dump has no author-order column, so authors are ordered by `author_id` and may not match the paper.
 
-## Not loaded (and why)
+## Not loaded
 
 | What | Cells | Reason |
 |---|---|---|
-| Isotopes (`sample_isotopes`), 14C (`sample_14C`), biomarker tables (CuO, CuO grouped, alkanes, alkenones, alcohols, fatty acids, amino acids, sterols), `sample_rock_eval_pyrolysis` | 55,104 | phase 2 of the plan: not loaded here (the 14C and isotope families need their own attribute design; sample 10544's 14C rows even have a core id that disagrees with `samples`, asserted as the only such case) |
-| `surface_area_m2_g` and `_error` (sediment properties) | 1,461 | not in the plan's phase-1 list |
-| `cumulative_dry_mass_g_cm2` | 93 | no `sample_analysis_description` row (no analysis id, hence no metadata link) |
-| GEBCO-derived water depths | 3,243 cores | derived layer (rule 3.5) |
-| value cells with no metadata row | 172 skipped | see below |
-| surface-area-material OC cells | 108 skipped | see above |
+| isotopes, 14C, biomarker tables, rock-eval | 55,104 | phase 2 of the plan, which needs its own attribute design |
+| `surface_area_m2_g` and its error | 1,461 | not in the plan's phase-1 list |
+| `cumulative_dry_mass_g_cm2` | 93 | no analysis row, so no metadata link |
+| GEBCO-derived water depths | 3,243 cores | derived layer |
 
-**Value cells with no metadata row (172 cells; composition 124, sediment 48).** The replicate numbering of the value table and of
-`sample_metadata` disagree for these cells (169 of them have metadata only under a different replicate; 3 have none for that
-analysis), so no article, method or calculated flag can be attached without guessing. They are skipped with reason
-`no_metadata_row` (full detail per cell in `skip_report.jsonl`); nothing is borrowed from another replicate.
+**172 value cells have no metadata row** (composition 124, sediment 48). The replicate numbering of the value table and the metadata disagree
+(169 have metadata only under another replicate, 3 have none), so no article or method can be attached without guessing. They are skipped
+(`no_metadata_row`) and nothing is borrowed.
+
+## Flags
+
+`zero_value` 4,171, `negative_value` 18, `outside_source_qc_range` 38 (outside the authors' own min and max thresholds), `calculated_by_source`
+22,290, `replicate` 1,143, `non_bulk_material` 4,577, `habitat_from_scope` 133,775, `year_missing` 29,082, `error_type_missing` 1,140.
+Filter on `calculated_by_source`, `non_bulk_material` and `outside_source_qc_range` before analysis.
 
 ## Row accounting
-
-`non_null_cells = facts + attached errors + skipped + not loaded` per column, per table family and overall (asserted in
-`extract.py`, counted independently from the classification; every column of all 13 value tables):
 
 | | Cells |
 |---|---|
 | non-null cells in the 13 value tables | 205,313 |
 | facts | 147,121 |
-| error cells attached to facts (as `sd`, flag `error_type_missing`) | 1,140 |
-| skipped: `no_metadata_row` / `material_unit_unclear` / `error_without_fact` | 172 / 108 / 114 (394) |
+| error cells attached as `sd` | 1,140 |
+| skipped (`no_metadata_row` 172, `material_unit_unclear` 108, `error_without_fact` 114) | 394 |
 | not loaded: 11 other families | 55,104 |
-| not loaded: surface area (+error) / cumulative mass | 1,461 / 93 |
-| sum | 205,313 |
+| not loaded: surface area and error / cumulative mass | 1,461 / 93 |
+| **sum** | 205,313 |
 
-By family: `sample_composition` 108,126 = 106,787 facts + 1,107 errors + 124 + 108 skipped; `sample_sediment_properties`
-42,083 = 40,334 facts + 33 errors + 48 + 114 skipped + 1,461 + 93 not loaded.
+This closes per column and per table family, asserted in `extract.py`.
 
-## Round trip and determinism
+## Verification
 
-Every fact's `source_row_ref` (`mosaic_ESSD[<table>]#data_row=<0-based row of that table's COPY block>:<column>`) was joined to
-the raw cell by an independent parse of the dump (not `extract.py`'s): all 147,121 values, table keys and `fact_key`s match,
-and all 1,140 `error_value`s in params and all 1,140 `sd` values match their raw error cells (and no other fact has an `sd`). Two `extract.py` runs gave identical tables and skip report. Staged
-gate: a one-article subset (articles 1 and 62) predicted from SQL on the raw tables as 147 facts and 67 attached errors;
-the extract produced 147 and 67. The full prediction (147,121 value cells with metadata, non-surface-area material) matched
-as well. The full central build adds these facts to the existing 316,643 (463,764 in total).
+An independent parse of the dump (not `extract.py`'s) matches all 147,121 values, keys and fact keys, and all 1,140 `sd` values. Two runs give
+identical tables. A one-article subset (articles 1 and 62) predicted 147 facts and 67 attached errors by SQL, and the extract produced 147 and 67.
+The full-run prediction also matched.
 
 ## Overlap
 
-None by design with SCOC / CCN (marine margins, not wetlands). Possibly overlaps dbSEABED (future) and SCOC's shelf sites in
-the future join.
+None by design with SCOC or CCN (marine margins, not wetlands). Possible overlap with dbSEABED and SCOC shelf sites in a future join.
 
-## Things to know
-
-* The error columns are of unknown type: stored as `sd` by assumption, flagged `error_type_missing` (see above).
-* `OC:TN` and `OC:ON` have no unit and the source does not say mass or molar.
-* `calculated_by_source` and `non_bulk_material` should be filtered on before analysis; so should `outside_source_qc_range`.
-* The dump is the April 2023 one, not necessarily Zenodo v2.0.
-* Habitat depends on the required threshold (1 m here).
+Back to the [compilations index](../README.md).

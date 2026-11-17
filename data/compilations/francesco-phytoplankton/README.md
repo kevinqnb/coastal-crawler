@@ -1,19 +1,16 @@
 # francesco-phytoplankton (global marine phytoplankton production and chlorophyll profiles)
 
-Mattei, F., Scardi, M. (2021). *Global marine phytoplankton production dataset* [Dataset]. PANGAEA,
-https://doi.org/10.1594/PANGAEA.932417 (paper: *Earth System Science Data* 13, 4967-4985, https://doi.org/10.5194/essd-13-4967-2021).
+Mattei, F., Scardi, M. (2021). *Global marine phytoplankton production dataset.* PANGAEA, DOI 10.1594/PANGAEA.932417 (paper: *Earth System
+Science Data* 13, 4967-4985, DOI 10.5194/essd-13-4967-2021).
 
-- **Version:** `PANGAEA 932417 (published 2021-06-09; no version number)`: the file has no PANGAEA header, so version and license are copied
-  from the dataset page (INTEGRATION_PLAN 1.4).
-- **Access date:** 2026-11-15. **License:** CC-BY-4.0 (PANGAEA page).
-- **Raw file:** `Global_marine_phytoplankton_production_dataset.txt` (tab-separated, 37,722 data rows x 49 columns, quoted fields; the
-  `Short reference` of 14,300 rows carries a CR LF inside its quotes).
+- **Version:** `PANGAEA 932417 (published 2021-06-09)`, copied from the dataset page along with the license, since the file has no PANGAEA
+  header. **Access date:** 2026-11-15. **License:** CC-BY-4.0.
+- **Raw file:** `Global_marine_phytoplankton_production_dataset.txt` (tab-separated, 37,722 rows, 49 columns).
 
-A compilation of depth-resolved primary production and chlorophyll a profiles, 1958-2017, 6,084 profiles (the file's `Profile number` is
-unique, asserted), 204 distinct `Event` labels after whitespace normalisation (original cruises or programmes; blank on 850 rows), 34 `Short reference` strings. One data row is one
-sampling depth of a profile.
+Depth-resolved primary production and chlorophyll a profiles, 1958 to 2017: 6,084 profiles, 204 `Event` labels (original cruises or programmes)
+and 34 `Short reference` strings. One row is one sampling depth of a profile.
 
-**Facts:** 99,779.
+## Facts (99,779)
 
 | Attribute | Type / subfield | Facts | Units |
 |---|---|---|---|
@@ -21,62 +18,49 @@ sampling depth of a profile.
 | `water_chl_a` | J1 `chlorophyll_a` | 37,721 | mg m^-3 |
 | `francesco_pp_integrated` | B8 `depth_integrated_primary_production` | 6,084 | mg C m^-2 day^-1 |
 | `francesco_pbopt` | B8 `chlorophyll_specific_production` | 6,084 | mg C mg Chla-1 h-1 |
-| `water_chl_a_integrated` (Depth-integrated chl a) | J1 `chlorophyll_a` | 6,084 | mg m^-2 |
-| `water_chl_a_total` (Total Chl a) | J1 `chlorophyll_a` | 6,084 | mg m^-2 |
+| `water_chl_a_integrated` | J1 `chlorophyll_a` | 6,084 | mg m^-2 |
+| `water_chl_a_total` | J1 `chlorophyll_a` | 6,084 | mg m^-2 |
 
-Units are the header spellings; nothing is converted. Every numeric column holds numbers (no missing codes occur; anything else raises).
-
-**Two chlorophyll integrals, two attributes.** The plan puts `Depth-integrated chl a` and `Total Chl a` under one attribute. They differ on every profile (none of
-the 6,084 is equal), so under one attribute each profile would carry a meaningless `covariate_conflict`. They are `water_chl_a_integrated` and `water_chl_a_total`.
+Units are the header spellings. The plan put the two chlorophyll integrals under one attribute, but they differ on every profile, so one attribute
+would give 6,084 false conflicts. They are separate attributes.
 
 ## Profile-level values are loaded once per profile
 
-`Depth-integrated primary production`, `Pbopt`, `Depth-integrated chl a` and `Total Chl a` repeat on every row of a profile. They are loaded once per profile
-(24,336 facts) and the extract asserts they are exactly constant within the profile (it raises otherwise); the 126,552 repeated cells are counted as collapsed.
-The profile-level facts sit on a `profile<n>` sample (no sampling depth; `depth_notes` = `profile-level value; max sampling depth <x> m`) at the station of the profile's
-**first row**; their `source_row_ref` points at that row. **Eight profile numbers span two stations** (different latitude, longitude or date): 2279, 2797, 4487, 4488,
-5084, 5123, 5136, 5137: the profile-level facts of these sit at the first row's station, and `depth_notes` says so.
+Four columns (integrated production, `Pbopt` and the two chlorophyll integrals) repeat on every row of a profile. They are loaded once per
+profile (24,336 facts), and the extract asserts they are constant within the profile. The 126,552 repeats are counted as collapsed. These facts
+sit on a profile sample (no depth) at the station of the profile's first row. Eight profiles span two stations, and `depth_notes` says so.
 
-## J1: one fact per sample and attribute
+## How it maps
 
-The row-level sample key is profile | sampling depth | date | latitude | longitude (as written). Two pairs of rows share a key: profile 1711 at 3 m has two chlorophyll values (12.1 and
-10.4 mg m^-3) and both are loaded with `covariate_conflict` (2 facts); profile 2282 at 25 m has equal values (0.78), collapsed into one fact (1 collapsed). Primary production
-is not J1, so all 37,722 production facts load (the two duplicated samples give two production facts each). 49,890 J1 cells = 49,889 facts + 1 collapsed.
+- **Habitat** is Water column for every location (from scope, `habitat_from_scope` on all facts). 3,635 locations, keyed on coordinates, with no
+  depth.
+- **Water chemistry (J1):** the sample is profile, depth, date and coordinates. Profile 1711 at 3 m has two different chlorophyll values (12.1 and
+  10.4), both loaded with `covariate_conflict`. Profile 2282 at 25 m has equal values, collapsed into one.
+- **Temperature is not loaded.** The file's `SST` is a sea-surface value, not the temperature at the sampling depth, so `water_temperature_c`
+  stays NULL.
+- **Samples:** `Sampling depth` is `sample_depth_m`. The date gives year and month. `Event` is `source_sample_id`.
+- **Longitude** below -180 (one profile, down to -188.5) is wrapped by +360 and flagged `lon_wrapped` (14 facts).
+- **Methods:** none stated, so one `method_id_null` row per attribute (6).
+- **References:** `Short reference` names the source the compilers took a profile from, and many are databases, not papers. The key is
+  `doi:<doi>` where `Paper doi` is given, otherwise `ref:<string>`: 34 references and 35 citations. `Kudela et al. 2015` carries two DOIs and
+  becomes a combined key with two citations. **Every fact carries `secondary_compilation`**, because no per-string list of databases exists.
 
-## Context and mapping
+## Not loaded
 
-- **Habitat** `Water column` for every location (raw `habitat_type` constant `water column`), from the dataset's scope: flag `habitat_from_scope` on all facts. 3,635 locations
-  (`location_key` = latitude | longitude as written); no depth (`Bottom depth` is a GEBCO value: derived, not loaded).
-- **Temperature is not loaded** (the user's decision): `SST` (11,452 in-situ rows, flag 0, and 26,270 reconstructed rows, flag 1) is a sea-surface value, not the temperature at the sampling depth, so `water_temperature_c` stays NULL on every sample.
-- `Sampling depth` -> `sample_depth_m`; `Date` (dd/mm/yyyy, asserted equal to `Year` and `Month`) -> year and month; `Event` -> `sample.source_sample_id`.
-- **Longitude** below -180 (5 rows of one profile, down to -188.5) is wrapped by +360 and flagged `lon_wrapped` (14 facts: 10 row-level, 4 profile-level).
-- **Methods:** one `method_id_null` row per attribute (6): the file gives no method per row.
-- **Not loaded:** `SST` (both flags), `surface PAR` (both flags; phase 2: 15,092 in-situ rows), `Day length`, `Day of the year`, `Mixed Layer Depth`, `Euphotic zone depth`, `Max production depth`,
-  `Max sampling depth` (written into the profile samples' `depth_notes`), `Bottom depth` and its sd (GEBCO), `Distance from coastline` (NASA OBPG grid), `Production to biomass ratio`
-  (derived, D7), `hemisphere`, `Northern hemisphere season` and every `* magnitude` category (Jenks classes).
-
-## References
-
-`Short reference` names the source the compilers took a profile from (many are databases, not papers: `calcofi.org`, `hahana.soest.hawaii.edu`, `Behrenfeld and Falkowski 1997`);
-the original cruise is `Event`. `reference_key` = `doi:<lower-case doi>` where `Paper doi` is given (17,484 rows), else `ref:<short reference>`; **34 references, 35 citations**.
-The 311 rows of `Kudela et al. 2015` carry two DOIs (`a; b`): composite key `doi:a+doi:b` and one citation per DOI. One DOI (`10.1029/2006gl026772`) is shared by `Kudela and Edwards 2012` and
-`Kudela et al. 2012`: one reference, both strings in the citation's `bibliography_id`; the 24 `Kudela and Edwards 2012` rows with no DOI keep `ref:Kudela and Edwards 2012`. 11 citations carry a
-DOI (`url` = the link). The file's mojibake in one string (`NÃ¶thig and Cornils 2019`) is kept as written. **Every fact carries `secondary_compilation`**: no per-string list
-of which short references are databases exists, so the flag is blanket (the whole file is a compilation of compilations).
+`SST`, `surface PAR`, `Day length`, `Mixed Layer Depth`, `Euphotic zone depth`, `Bottom depth` (GEBCO), `Distance from coastline` (a grid),
+`Production to biomass ratio` (derived), the hemisphere and season labels, and every `* magnitude` class.
 
 ## Flags
 
-`habitat_from_scope` and `secondary_compilation` 99,779, `zero_value` 1,455 (zero chlorophyll or production in a profile), `lon_wrapped` 14, `covariate_conflict` 2.
+`habitat_from_scope` and `secondary_compilation` 99,779, `zero_value` 1,455, `lon_wrapped` 14, `covariate_conflict` 2.
 
 ## Row accounting
 
-226,332 cells (75,444 row-level and 150,888 profile-level occurrences) = 99,779 facts + 126,553 collapsed repeats (1 J1 sample repeat + 126,552 profile repeats); 0 skips.
-After the central build every fact was checked against the raw file by an independent parse (value, unit, reference key, location, wrapped longitude, sample key and depth, year, month, flags), every row's production cell is a fact, every profile has its four profile-level facts at its first row, and the profile-level cells are constant within every
-profile: 99,779 of 99,779 agree. A one-study check (Imai et al. 2008, predicted by an independent parse as 2 x 24 rows + 4 x 4 profiles = 64 facts) matched. Adding this source left the other
-eleven sources' content unchanged. Two runs of `extract.py` give byte-identical parquet and report. `source_row_ref` is `<file>#data_row=<0-based row>:<attribute>`.
+226,332 cells = 99,779 facts + 126,553 collapsed repeats, nothing skipped. All facts were checked back to the raw file by an independent
+parse. A one-study check (Imai 2008) predicted 64 facts and matched, and two runs give identical output.
 
-## Overlap with other compilations
+## Overlap
 
-Estuarine production may overlap `cloern-phytoplankton` through regional studies; none checked. Never merged.
+Estuarine production may overlap `cloern-phytoplankton` through regional studies. None checked.
 
-Back to the [compilations index](../README.md) for the table contract, conventions and vocabulary.
+Back to the [compilations index](../README.md).

@@ -1,21 +1,18 @@
 # chang-denitrification (benthic nitrogen loss: denitrification and anammox)
 
-Chang, Y., Tan, E., Gao, D., Liu, C., Zhang, Z., Huang, Z., et al. (2024). *Global database of actual nitrogen loss
-rates in coastal and marine sediments* [Dataset]. figshare, https://doi.org/10.6084/m9.figshare.27745770.v3
-(paper: *Earth System Science Data* 17, 3521, 2025).
+Chang, Y., Tan, E., Gao, D., Liu, C., Zhang, Z., Huang, Z., et al. (2024). *Global database of actual nitrogen loss rates in coastal and
+marine sediments.* figshare, DOI 10.6084/m9.figshare.27745770.v3 (paper: *Earth System Science Data* 17, 3521, 2025).
 
-- **Version:** `v3 (2024-11-15)`, read from the figshare record by the integration plan; the workbook states no version.
-- **Access date:** 2026-11-15. **License:** CC BY 4.0 (figshare record).
-- **Raw files:** `Upload_data.xlsx` (sheets `Raw_data` and `Experiment information`, 473 rows each, aligned by position;
-  the extract asserts reference number, location and site agree row by row) and `Raw_data references.docx` (69 numbered
-  references).
+- **Version:** `v3 (2024-11-15)`, from the figshare record. **Access date:** 2026-11-15. **License:** CC BY 4.0.
+- **Raw files:** `Upload_data.xlsx` (sheets `Raw_data` and `Experiment information`, 473 rows each, aligned by position and asserted to
+  agree on reference, location and site) and `Raw_data references.docx` (69 numbered references).
 
-A literature compilation of rates of nitrogen loss from coastal and marine sediments, 1996 to 2024 studies. Per the paper
-(ESSD 17, 3521) the rates are from intact-core incubations in the dark, with the 15N isotope-pairing family of methods;
-the workbook does not state this per row (see Methods). 473 rows, 69 studies, 71 distinct location names.
+Rates of nitrogen loss from coastal and marine sediments: 473 rows, 69 studies, 71 location names. Per the paper the rates come from
+dark, intact-core incubations with 15N isotope pairing, but the workbook does not say this per row.
 
-**Facts:** 2,495, one per numeric cell of nine value columns. Units are the header's, with thin and no-break spaces read as
-plain spaces; nothing is converted.
+## Facts (2,495)
+
+Units are the header's, with thin and no-break spaces read as plain spaces. Nothing is converted.
 
 | Attribute | Type / subfield | Facts | Units |
 |---|---|---|---|
@@ -29,82 +26,49 @@ plain spaces; nothing is converted.
 | `water_ammonium` | J1 `ammonium` | 246 | μM |
 | `water_o2` | J1 `dissolved_oxygen` | 268 | μM |
 
-`P14` is total N2 production: on all 255 rows with both rates it equals denitrification + anammox to rounding (largest
-difference 0.042, asserted within 0.05), and on the other rows it equals denitrification. Seven rows have `P14` only
-(blank denitrification and `Process`): these are why `P14` has 473 facts and denitrification 466. The anammox cell is
-filled exactly when `Process` is `Denitrification and anammox` (asserted). 41 facts are zeros, mostly anammox (34
-measured zeros).
+- `P14` is total N2 production. Where both rates exist it equals denitrification + anammox to rounding (asserted within 0.05), and
+  otherwise it equals denitrification. Seven rows have `P14` only, which is why it has 473 facts and denitrification 466.
+- Nitrate, ammonium and oxygen are J1 water values, because the paper does not say which water layer. The plan had oxygen in the
+  `bottom_water_o2` slot, but nothing says bottom water.
+- Temperature and salinity are sample slots. Water depth is the depth over the sediment, so it is `location.water_depth_m`.
 
-**J1 and the oxygen choice.** The paper calls nitrate, ammonium, dissolved oxygen, temperature, salinity and depth "water
-physicochemical factors" but does not say which water layer. They are water-medium values, so nitrate, ammonium and
-dissolved oxygen are J1 (one sample per source row, so one fact per sample and attribute, no collapsing needed). **The plan
-put dissolved oxygen in the `bottom_water_o2` sample slot; it is J1 `water_o2` here** because nothing in the source says
-bottom water. Temperature and salinity (units `psu` from the header) are sample slots (`water_temperature_c`,
-`water_salinity`). **Water depth** is the depth of the water over the sediment, so it is `location.water_depth_m` (as in
-SCOC and BenBioDen) and not the water-column `sample_depth_m` the plan named; it is part of `location_key`.
+## How it maps
 
-## Mapping
-
-- `location_key` = reference no | Locations | Site | lat | lon | water depth: **367 locations** (21 without coordinates, 66
-  without depth). `site_name` = `Locations`, `source_site_id` = `Site` (a number is written as text). 27 rows have no
-  coordinates (both blank, asserted): their facts carry `coords_missing`. No row is flagged for a missing depth.
-- **Habitat is NULL** for every location: the source gives no habitat label and states no scope for the whole dataset
-  (D3), so there is no `habitat_from_scope` flag either. The label map declares the habitat column with one empty-label
-  row (`chang-denitrification,habitat_type,,habitat,`), because the build requires every source to declare it; there is no
-  raw label to map.
-- `sample`: one per source row (`row<n>`), `sampling_year` = `Year` (20 rows blank: `year_missing`), `sampling_month` =
-  `Month_1` (`Month` names asserted to agree; 31 rows blank, no flag). No sediment depth interval.
-- **Methods.** For the three rate attributes one `method_dim` row per distinct (attribute, 15NO3 addition concentration,
-  incubation environment, incubation temperature, incubation time, termination, rate calculation) from the aligned
-  `Experiment information` row: 83 + 42 + 87 rows. `technique` = the rate-calculation string (e.g. `(Nielsen, 1992)`;
-  blank -> `method_id_null`), `light_dark` = `dark` where the incubation environment says so (387 rows; 86 blank), and
-  all six strings go to `params` as written (`~100`, `25, 50, 100, 150`, `every 24 h for 4 days` ...). `incubation_type` is
-  NULL: the intact-core, dark-only statement is the paper's, for the whole dataset, not a per-row field. Covariates (organic
-  carbon, C/N, O2 penetration, J1) have no method information: one `method_id_null` row each.
-- `ra (%)` (anammox share of total N2 production) is derived by the authors, does not equal anammox / P14 on every row, and
-  is **not loaded** (D7). `sd`, `se`, `n` are NULL.
+- **Locations:** 367 (the key includes reference, location, site, coordinates and depth). 27 rows have no coordinates and carry
+  `coords_missing`.
+- **Habitat is NULL** for every location. The source gives no label and states no scope for the whole dataset, so there is no
+  `habitat_from_scope` flag either. The label map declares the column with one empty-label row because the build requires it.
+- **Samples:** one per row, with year (20 blank, `year_missing`) and month. No sediment depth.
+- **Methods:** for the three rates, one per distinct combination of 15NO3 concentration, incubation environment, temperature, time,
+  termination and rate calculation (212 rows in all). `technique` is the rate-calculation string, `light_dark` is `dark` where stated,
+  and all six strings are in `params`. `incubation_type` is NULL, since the intact-core statement is the paper's, not a per-row field.
+- `sd`, `se` and `n` are NULL.
+- **References:** `References No.` 1 to 69 gives `ref_no:<n>`, with the docx text as the citation title and the year parsed. The file has
+  no DOIs.
 
 ## Missing codes
 
-The paper: "NM represents parameters that were not measured, and empty or NA indicates data not available." Blank cells
-give no fact. `na` and `n/a` give no fact and are counted in the report (organic carbon 9, C/N 4, O2 penetration 3,
-dissolved oxygen 1, nitrate 2, ammonium 20). `nm` in a fact-bearing column is a skip with reason `not_measured`: two cells, both
-in data row 269 (organic carbon and C/N). Any other text in a value column raises. (The integration plan expected `na` and
-`nm` to be NULL; `nm` is a skip so that it enters the row accounting, following the cross-cutting rule 3.3.)
-
-## References
-
-`References No.` 1 to 69 is the study id: `reference_key` = `ref_no:<n>`, one `reference_dim` and one `citation_dim` row each
-(69 of 69 numbers used in the data and present in the docx, asserted). `bibliography_id` = the number, `title` = the whole
-docx entry (authors, title, journal, year, pages, not parsed), `year` = the `, YYYY.` that ends the journal part (parsed for
-all 69). The file has no DOIs; the DOI-resolution job can attach them from the entry text.
-
-## Flags
-
-(Facts; `extract_report.json` has the rest.) `coords_missing`: 117 (27 rows), `year_missing`: 75 (20 rows), `zero_value`: 41.
-Not used: `duplicate_source_row` (no two rows identical across both sheets), `negative_value`. Temperature is below zero on 17
-rows (polar water; a slot, not flagged); water depth is 0 on 4 rows (kept).
+The paper says NM means not measured and blank or NA means not available. Blanks, `na` and `n/a` give no fact and are counted in the
+report. `nm` in a value column is a skip with reason `not_measured` (2 cells, both in data row 269). Any other text raises.
 
 ## Not loaded
 
-`ra (%)` (derived), `Process` (a label, used for a consistency check), the `Month` text (checked against `Month_1`). Nothing else
-is dropped. The coastal-wetland link of a site (marsh, mangrove, shelf, open sea) is not in the file.
+`ra (%)` (the anammox share, derived by the authors and not always consistent), `Process` (used for a consistency check) and the `Month`
+text. The marsh, mangrove or shelf setting of a site is not in the file.
+
+## Flags
+
+`coords_missing` 117, `year_missing` 75, `zero_value` 41. Temperature is below zero on 17 rows (polar water) and water depth is 0 on 4;
+neither is flagged.
 
 ## Row accounting
 
-473 source rows; 2,495 numeric value cells = 2,495 facts; 2 `nm` cells = 2 skips; the `na` cells give neither. 473 samples, 367
-locations, 218 methods, 69 references and citations. After the central build every fact was checked against the raw cell it points to
-by code that does not use `extract.py` (value, unit, subfield and type, reference, coordinates, site, depth, year, month,
-temperature, salinity, the six experiment strings, technique, light/dark, and every flag recomputed): 2,495 of 2,495 agree; the set of
-numeric cells equals the set of facts and the set of `nm` cells the set of skips. A one-study check (reference 24, predicted from the raw
-sheet alone: 5 denitrification + 5 anammox + 5 P14 + 3 dissolved oxygen = 18) matched. Adding this source left the other seven
-sources' content in `compilations.duckdb` unchanged (316,402 facts = 313,907 + 2,495). Two runs of `extract.py` give identical
-tables. `source_row_ref` is `Upload_data.xlsx[Raw_data]#data_row=<0-based row>:<attribute>`.
+2,495 numeric cells = 2,495 facts, and 2 `nm` cells = 2 skips. All facts were checked back to their raw cells by independent code, a
+one-study check (reference 24) predicted 18 facts and gave 18, and two runs give identical tables.
 
-## Overlap with other compilations
+## Overlap
 
-Never merged. The file has no DOIs, so overlap is found downstream. Benthic N removal also appears in `ray-oyster` (oyster
-sites) and, for nitrate and ammonium fluxes, `boynton-flux`; a few studies may be shared. The J1 values here sit beside a rate so
-they can be set beside, or replaced by, the joined WOD/GLODAP layers.
+The file has no DOIs, so overlap is found downstream. Benthic N removal also appears in `ray-oyster` and nutrient fluxes in
+`boynton-flux`; a few studies may be shared.
 
-Back to the [compilations index](../README.md) for the table contract, conventions and vocabulary.
+Back to the [compilations index](../README.md).

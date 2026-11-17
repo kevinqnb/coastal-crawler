@@ -1,57 +1,56 @@
 # smithsonian-coastal-carbon (Coastal Carbon Network Data Library v1.7.0)
 
-Smithsonian Coastal Carbon Network, DOI 10.25573/serc.21565671. Tidal-wetland soil
-carbon profiles: 16,715 cores, 117,518 depth intervals, ~550 studies; mostly marsh
-and mangrove, some seagrass. No in-situ water data and no geomorphic setting.
+Smithsonian Coastal Carbon Network, DOI 10.25573/serc.21565671. Tidal-wetland soil carbon profiles:
+16,715 cores, 117,518 depth intervals, about 550 studies. Mostly marsh and mangrove, some seagrass.
+It has no in-situ water data and no geomorphic setting.
 
-**Facts:** 217,181.
-- C1, 217,099 facts: `dry_bulk_density` (g/cm3), `fraction_organic_matter` and
-  `fraction_carbon` (dimensionless).
-- G2, 82 core-level facts: `pb210_cic_accretion_rate` (`centimeterPerYear`) for the
-  cores that report one. No depth interval; one method row per core (`technique` =
-  210Pb constant-initial-concentration model, `method_status` = `method_id_null`; max
-  depth, r2 and notes in `method.params`). Its SE column is documented in a different
-  unit (`millimetersPerYear`): carried unconverted in `fact.se` with flag
-  `se_units_differ` (43 facts). Other radiometric/dating columns and compaction are not
-  loaded.
+## Facts (217,181)
 
-Things to know:
+| Type | Attribute | Units | Facts |
+|---|---|---|---|
+| C1 | `dry_bulk_density` | g/cm3 | part of 217,099 |
+| C1 | `fraction_organic_matter`, `fraction_carbon` | fraction | part of 217,099 |
+| G2 | `pb210_cic_accretion_rate` | `centimeterPerYear` | 82 |
 
-- **`fraction_carbon` mixes quantities:** organic vs total carbon, measured vs modeled
-  from loss on ignition. `fact.subfield` separates them by the method row's
-  `carbon_type` (`organic_carbon`, `total_carbon`, else `carbon_unspecified`, which
-  also covers "not specified" and unmatched methods). Check `method_dim.carbon_type`,
-  `carbon_measured_or_modeled`, `conversion_applied`; 46% of carbon facts have unknown
-  type (`carbon_type_unknown`).
-- **Method info is partial:** only 69% of facts have a matched methods row. The rest
-  have NULL technique fields (see `method_status`).
-- **Filter on `flags` before analysis:** values include bulk density from -81 to 11.3
-  and organic matter above 1. Flags: `negative_value`, `fraction_gt_1`, `dbd_gt_max`
-  (`--max-dry-bulk-density`, 3.0), `depth_missing`, `depth_inverted`,
-  `duplicate_source_row`, `carbon_type_unknown`, `se_units_differ`.
-- **185 depth rows (277 measurements) excluded:** their (study, site, core) matches no
-  core, mostly key typos (e.g. Osland_2016 site-name case). Suggested matches are in
-  `skip_report.jsonl` and deliberately not applied.
-- **Raw labels are CCN's own.** Salinity/vegetation/tidal position use the core value,
-  falling back to the site value only when unambiguous (`*_level` columns say which).
-  `tidal_position` is CCN `inundation_class`; `marsh_zone` and `vegetated_or_bare` are
-  derived by the rules in `extract.py`.
-- **Sparse context:** month is 42% filled, elevation 17%. `sd`, `se`, `n` are NULL.
-- **Provenance:** `reference_dim` = CCN `study_id`; studies can have several citations
-  (see `citation_dim.publication_type`).
+- The accretion rate is one fact per core, with no depth interval. Its method is the 210Pb
+  constant-initial-concentration model (`method_status` = `method_id_null`); max depth, r2 and notes are in `params`.
+- Its SE column is documented in `millimetersPerYear`. It is carried unconverted in `se` with the flag
+  `se_units_differ` (43 facts).
+
+## How it maps
+
+- **Locations and samples:** salinity, vegetation and tidal position use the core value, falling back to the site value
+  when unambiguous (the `*_level` columns say which). `tidal_position` is CCN's `inundation_class`.
+- **References:** `reference_dim` is CCN's `study_id`. A study can have several citations.
 - **Standard labels:**
-  - Habitat: `marsh`, `mangrove`, `seagrass`, `mudflat` map to tidal marsh, mangrove
-    forest, seagrass meadow, tidal flat. `swamp`, `scrub/shrub`, `upland`, `sabkha`,
-    mats and `unvegetated` have none (blank, raw kept).
-  - Salinity zone: `fresh`, `oligohaline`, `mesohaline`, `polyhaline`, `brine` map to
-    limnetic through hyperhaline. `saline`, `brackish`, `mixoeuhaline` and ranges are
-    blank.
-  - Setting: `estuarine` and `deltaic` (from `salinity_class`) map to estuary and river
-    delta.
-  - Modification: `natural`; `restored`, `tidally restored`, `revegetated` -> restored;
-    `wetlands built` -> created; everything else (ditched, impounded, farmed,
-    degraded, ...) is blank, since no rule yields `artificial`.
-- `modification_status` omits blank `impact_class` rows (they would otherwise become
-  the string `nan`).
+  - Habitat: `marsh`, `mangrove`, `seagrass`, `mudflat` map to tidal marsh, mangrove forest, seagrass meadow, tidal flat.
+    `swamp`, `scrub/shrub`, `upland`, `sabkha`, mats and `unvegetated` stay blank.
+  - Salinity zone: `fresh` to `brine` map to limnetic to hyperhaline. `saline`, `brackish`, `mixoeuhaline` and ranges stay blank.
+  - Setting: `estuarine` and `deltaic` map to estuary and river delta.
+  - Modification: `natural`; `restored`, `tidally restored`, `revegetated` map to restored; `wetlands built` to created;
+    everything else is blank (no rule gives `artificial`).
 
-Back to the [compilations index](../README.md) for the table contract, conventions and vocabulary.
+## Not loaded
+
+Other radiometric and dating columns, and compaction.
+
+## Flags
+
+`negative_value`, `fraction_gt_1`, `dbd_gt_max` (above 3.0 g/cm3), `depth_missing`, `depth_inverted`,
+`duplicate_source_row`, `carbon_type_unknown` (46% of carbon facts), `se_units_differ`.
+Bulk density runs from -81 to 11.3 and organic matter goes above 1, so filter on `flags` before analysis.
+
+## Row accounting
+
+185 depth rows (277 measurements) are excluded because their (study, site, core) matches no core, mostly key typos.
+Suggested matches are in `skip_report.jsonl` and were not applied.
+
+## Things to know
+
+- **`fraction_carbon` mixes quantities** (organic vs total carbon, measured vs modeled from loss on ignition).
+  The subfield follows the method row's `carbon_type`; otherwise it is `carbon_unspecified`.
+- **Method information is partial:** 69% of facts have a matched method row. The others have NULL technique fields.
+- **Sparse context:** month is 42% filled and elevation 17%. `sd`, `se` and `n` are NULL.
+- `modification_status` leaves out blank `impact_class` rows.
+
+Back to the [compilations index](../README.md).
