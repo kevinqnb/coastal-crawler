@@ -190,3 +190,29 @@ davis-calcification,habitat_type,reef flat - Site 6,habitat,Coral reef
 davis-calcification,habitat_type,reef flat - Site 7,habitat,Coral reef
 davis-calcification,habitat_type,rim reef,habitat,Coral reef
 davis-calcification,habitat_type,Soft Sediments,habitat,
+tang-nitrification,habitat_type,water column,habitat,Water column
+mouw-carbon,habitat_type,water column,habitat,Water column
+francesco-phytoplankton,habitat_type,water column,habitat,Water column
+jorgensen-oxygen,habitat_type,Outer shelf (50-200m),habitat,Subtidal soft sediment
+jorgensen-oxygen,habitat_type,outer shelf (50-200m),habitat,Subtidal soft sediment
+jorgensen-oxygen,habitat_type,Inner shelf (10-50m),habitat,Subtidal soft sediment
+jorgensen-oxygen,habitat_type,Inner shelf (0-10m),habitat,Subtidal soft sediment
+jorgensen-oxygen,habitat_type,continental shelf (>50-200m),habitat,Subtidal soft sediment
+jorgensen-oxygen,habitat_type,near-shore (0-50m),habitat,Subtidal soft sediment
+jorgensen-oxygen,habitat_type,Slope (200-1000m),habitat,Subtidal soft sediment
+jorgensen-oxygen,habitat_type,Slope (1000-2000m),habitat,Subtidal soft sediment
+jorgensen-oxygen,habitat_type,Rise (2000-4000m),habitat,Subtidal soft sediment
+jorgensen-oxygen,habitat_type,Abyss (4000-6500m),habitat,Subtidal soft sediment
+jorgensen-oxygen,habitat_type,Hadal (>6500m),habitat,Subtidal soft sediment
+jorgensen-oxygen,habitat_type,Outer shelf (50-200m),setting,shelf
+jorgensen-oxygen,habitat_type,outer shelf (50-200m),setting,shelf
+jorgensen-oxygen,habitat_type,Inner shelf (10-50m),setting,shelf
+jorgensen-oxygen,habitat_type,Inner shelf (0-10m),setting,shelf
+jorgensen-oxygen,habitat_type,continental shelf (>50-200m),setting,shelf
+jorgensen-oxygen,habitat_type,near-shore (0-50m),setting,
+jorgensen-oxygen,habitat_type,Slope (200-1000m),setting,
+jorgensen-oxygen,habitat_type,Slope (1000-2000m),setting,
+jorgensen-oxygen,habitat_type,Rise (2000-4000m),setting,open ocean
+jorgensen-oxygen,habitat_type,Abyss (4000-6500m),setting,open ocean
+jorgensen-oxygen,habitat_type,Hadal (>6500m),setting,open ocean
+shao-nfix,habitat_type,water column,habitat,Water column

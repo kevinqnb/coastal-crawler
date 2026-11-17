@@ -275,6 +275,53 @@ ATTRIBUTES["davis_coral_cover"] = _d("B4", {"live_hard_coral_cover"}, {"%"})
 ATTRIBUTES["davis_coralline_cover"] = _d("B4", {"turf_cca_invertebrate_cover"}, {"%"})
 
 
+# --- group 4 (water-column sources: tang, shao, mouw, francesco, jorgensen) -----------------------------------
+# J1 attributes are shared by several compilations, so this block adds a J1 attribute or unit string by MERGING
+# into any existing declaration instead of replacing it (the branches of other groups can add the same attribute).
+def _g4_declare_j1(attr: str, subfield: str, *units: str) -> None:
+    old = ATTRIBUTES.get(attr)
+    if old is not None and (old.measurement_type != "J1" or old.subfields != frozenset({subfield})):
+        raise VocabError(f"{attr}: already declared with a different type or subfield")
+    ATTRIBUTES[attr] = _d("J1", {subfield}, (set(old.units) if old else set()) | set(units))
+
+
+_g4_declare_j1("water_nitrite", "nitrite", "μM")  # Tang (U+03BC, header spelling)
+_g4_declare_j1("water_ph", "ph", "unitless")  # Tang (no unit in the sheet); also declared by group 3 (union)
+# Tang et al. volumetric nitrification rates (two sheets -> two attributes)
+ATTRIBUTES["tang_ammonia_oxidation"] = _d("C5", {"ammonia_oxidation"}, {"nmol N L-1 d-1"})
+ATTRIBUTES["tang_nitrite_oxidation"] = _d("C5", {"nitrite_oxidation"}, {"nmol N L-1 d-1"})
+# Tang J1 values reuse water_ammonium / water_nitrate / water_o2 (same "μM" string as Chang)
+# Mouw et al. global ocean POC flux compilation (sediment traps and 234Th): one attribute per analyte, all mg/m**2/day
+for _a, _sub in (("poc", "poc_flux"), ("pon", "pon_flux"), ("total_mass", "total_mass_flux"),
+                 ("caco3", "biogenic_silica_carbonate_flux"), ("psi", "biogenic_silica_carbonate_flux"),
+                 ("psio2", "biogenic_silica_carbonate_flux"), ("psioh4", "biogenic_silica_carbonate_flux")):
+    ATTRIBUTES[f"mouw_{_a}_flux"] = _d("C6", {_sub}, {"mg/m**2/day"})
+# Mattei and Scardi (Francesco) global marine phytoplankton production: depth-resolved and profile-level values
+_g4_declare_j1("water_chl_a", "chlorophyll_a", "mg m^-3")
+# Shao et al. diazotroph database: U+00B5 'µM' (micro sign) is a different string from U+03BC 'μM'; rule 3.2
+_g4_declare_j1("water_nitrate", "nitrate", "µM")
+_g4_declare_j1("water_phosphate", "phosphate", "µM")
+_g4_declare_j1("water_chl_a", "chlorophyll_a", "mg m-3")
+_g4_declare_j1("water_chl_a_integrated", "chlorophyll_a", "mg m^-2")
+_g4_declare_j1("water_chl_a_total", "chlorophyll_a", "mg m^-2")
+ATTRIBUTES["francesco_pp_volumetric"] = _d("B8", {"primary_production_per_volume"}, {"mg C m^-3 day^-1"})
+ATTRIBUTES["francesco_pp_integrated"] = _d("B8", {"depth_integrated_primary_production"}, {"mg C m^-2 day^-1"})
+ATTRIBUTES["francesco_pbopt"] = _d("B8", {"chlorophyll_specific_production"}, {"mg C mg Chla-1 h-1"})
+# Jorgensen et al. benthic O2 uptake (units: the file's header spelling; DOU's unit cell is blank and is taken from the
+# description text, see the extract's docstring)
+ATTRIBUTES["jorgensen_tou"] = _d("B5", {"total_o2_uptake"}, {"mmol m-2 d-1"})
+ATTRIBUTES["jorgensen_dou"] = _d("B5", {"diffusive_o2_uptake"}, {"mmol m-2 d-1"})
+ATTRIBUTES["jorgensen_opd"] = _d("C2", {"o2_penetration_depth"}, {"mm"})
+# Shao et al. diazotroph database v2 (rates: units are the sheet headers' spellings, U+03BC in 'μmol')
+for _f in ("total", "whole_seawater", "trichodesmium", "heterocyst", "lt10um", "gt10um", "light", "dark"):
+    ATTRIBUTES[f"shao_n2fix_{_f}"] = _d("C5", {"n2_fixation"}, {"μmol N m-3 d-1", "μmol N m-3 h-1", "μmol N m-2 d-1", "μmol N m-2 h-1"})
+ATTRIBUTES["shao_n2fix_per_cell"] = _d("C5", {"n2_fixation"}, {"fmol N cell-1 d-1"})
+ATTRIBUTES["shao_n2fix_per_cellular_n"] = _d("C5", {"n2_fixation"}, {"fmol N fmol N-1 d-1"})
+ATTRIBUTES["shao_cellular_n_content"] = _d(
+    "other", {None}, {"fmol N cell-1"},
+    "Shao Cell_Specific sheet: cellular N content (fmol N cell-1) of the organism, the divisor of the N-specific rate")
+
+
 def check_attribute_decls() -> None:
     """Self-consistency of the declarations above (run by the tests)."""
     for attr, d in ATTRIBUTES.items():
@@ -407,6 +454,8 @@ FLAGS: dict[str, str] = {
     "error_propagated": "error is a propagated SE",
     "inequality": "the source prints the value as an inequality (e.g. '<0.02'); value is the printed number and "
                   "fact.value_comparator holds the sign ('<' or '>')",
+    "source_mean_reported": "the source prints 'mean (sd)': value is the mean, sd the bracket number (an aggregate, not a single measurement)",
+    "qc_rejected_by_source": "the source's own note says the value was REJECTED by its quality control; the value is loaded with this flag",
     "digitized_from_figure": "value was digitised from a figure",
     "replicate": "row is a replicate",
     "shallow_lt10m": "source selection code: in situ, depth < 10 m",
@@ -431,6 +480,7 @@ SKIP_REASONS: dict[str, str] = {
     "no_metadata_row": "value cell with no sample_metadata row on (sample, material, analysis, replicate): no article or method can be attached",
     "error_without_fact": "error cell whose value cell is blank or was itself skipped",
     "material_unit_unclear": "value measured on a material whose quantity or unit is unclear (MOSAIC material 'surface_area')",
+    "unparseable_value": "value cell is text that is not a number (e.g. a decimal comma); kept in the skip report",
 }
 
 
