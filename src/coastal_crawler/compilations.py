@@ -241,7 +241,8 @@ TABLES: dict[str, Table] = {
             _s("light_dark"),
             _s("incubation_type"),  # raw: intact core / in situ chamber / slurry ...
             _s("experimental_status"),  # raw: control / treatment / natural ...
-            _s("params"),  # JSON text
+            _s("params"),  # JSON text: structured method details and original values
+            _s("notes"),  # free text: the source's own comments about this method / these rows, verbatim
         ),
         ("source_key", "method_key"),
         (FK(("source_key",), "source"),),
@@ -259,6 +260,7 @@ TABLES: dict[str, Table] = {
             _s("measurement_type", True),  # standard type code (G1..P1) or "other"
             _s("subfield"),
             _d("value", True),
+            _s("value_comparator"),  # "<" or ">" when the source prints an inequality (value = the printed number); flag "inequality"
             _s("units_raw", True),
             _d("sd"),
             _d("se"),
@@ -308,6 +310,29 @@ _LIST_COLS = {
 # --------------------------------------------------------------------------
 
 
+# Columns added to the contract after the first compilations were written. An extract.py that does not
+# supply one gets NULL in ``write_extracted`` (and only there: ``validate_tables`` and ``read_extracted``
+# still demand the full column set). Extend this list, with a reason, only for a nullable column.
+OPTIONAL_COLUMNS: dict[str, tuple[str, ...]] = {
+    "fact": ("value_comparator",),  # inequality sign of a censored value (e.g. "<0.02")
+    "method": ("notes",),  # the source's free-text comments, verbatim (params stays structured)
+}
+
+
+def fill_optional_columns(tables: dict[str, pd.DataFrame]) -> dict[str, pd.DataFrame]:
+    """Return ``tables`` with every column of ``OPTIONAL_COLUMNS`` the extract.py did not supply set to NULL."""
+    out = dict(tables)
+    for name, cols in OPTIONAL_COLUMNS.items():
+        df = out[name]
+        missing = [c for c in cols if c not in df.columns]
+        if missing:
+            df = df.copy()
+            for c in missing:
+                df[c] = pd.Series([None] * len(df), index=df.index, dtype=object)
+            out[name] = df
+    return out
+
+
 def empty_table(name: str) -> pd.DataFrame:
     """A zero-row table with the contract's columns (for compilations with no rows)."""
     return pd.DataFrame({c: pd.Series(dtype=object) for c in TABLES[name].col_names})
@@ -320,7 +345,7 @@ def write_extracted(
 
     ``allow_factless``: see :func:`validate_tables`.
     """
-    tables = add_derived_labels(tables, allow_factless)
+    tables = add_derived_labels(fill_optional_columns(tables), allow_factless)
     validate_tables(tables, allow_factless)
     out_dir.mkdir(parents=True, exist_ok=True)
     for name, spec in TABLES.items():
@@ -438,8 +463,10 @@ def validate_tables(
             raise ContractError(f"missing table {name!r}")
         df = tables[name]
         if list(df.columns) != spec.col_names:
-            # allow reordered but complete
-            if set(df.columns) != set(spec.col_names):
+            # allow reordered but complete; in memory, a column of OPTIONAL_COLUMNS may be absent
+            # (read_extracted checks the parquet schema strictly, so a build never sees it absent)
+            optional = set(OPTIONAL_COLUMNS.get(name, ()))
+            if set(df.columns) | optional != set(spec.col_names):
                 raise ContractError(
                     f"{name}: columns {list(df.columns)} != contract {spec.col_names}"
                 )
