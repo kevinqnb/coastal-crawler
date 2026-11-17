@@ -245,6 +245,20 @@ _j1("water_nitrate_nitrite", "nitrate_nitrite", {"uM"})
 _j1("water_silicate", "silicate", {"uM"})
 _j1("water_ph", "ph", {"unitless"})
 
+# Fulweiler et al. N2 fixation (EDI edi.1759.2): rates are the source's converted molar values (four unit spellings, the same
+# for the water-column and benthic attributes); J1 units are the verbatim ancillary-file unit cells (all ASCII).
+_FULWEILER_RATE_UNITS = {"umol-n m-2 h-1", "umol-n l-1 h-1", "umol-n g-1 h-1", "umol-n m-3 h-1"}
+ATTRIBUTES["fulweiler_n2fix_water"] = _d("C5", {"n2_fixation"}, _FULWEILER_RATE_UNITS)
+ATTRIBUTES["fulweiler_n2fix_benthic"] = _d("C7", {"n2_fixation"}, _FULWEILER_RATE_UNITS)
+_j1("water_ammonium", "ammonium", {"mg l-1", "mg-n l-1", "nh4-n mg l-1", "nmol l-1", "ug l-1", "ug-n l-1", "um", "umol l-1", "umol-n l-1"})
+_j1("water_nitrate", "nitrate", {"g-no3 m-3", "mg l-1", "mg-n l-1", "nmol l-1", "no3-n mg l-1", "ug l-1", "ug-n l-1", "um", "umol", "umol l-1", "umol-n l-1"})
+_j1("water_nitrite", "nitrite", {"um", "umol l-1", "umol-n l-1"})
+_j1("water_nitrate_nitrite", "nitrate_nitrite", {"mg l-1", "mg m-3", "mg-n l-1", "mmol m-2", "nm", "ug l-1", "ug-n l-1", "um", "umol kg-1", "umol l-1"})
+_j1("water_din", "din", {"ug l-1", "umol l-1"})
+_j1("water_phosphate", "phosphate", {"mg l-1", "mg m-3", "mg-p l-1", "mmol m-2", "nm", "ug l-1", "ug-p l-1", "um", "umol", "umol kg-1", "umol l-1", "umol-p l-1", "umol-po4 l-1"})
+_j1("water_o2", "dissolved_oxygen", {"%", "% sat", "mg l-1", "mg o2/l", "ml l-1", "um", "umol kg-1", "umol l-1"})
+_j1("water_chl_a", "chlorophyll_a", {"fluor mg m-3", "mg m-2", "mg m-3", "mg-chla m-3", "ug cm-2", "ug l-1", "ug ml-1", "ug-chla l-1"})
+
 
 def check_attribute_decls() -> None:
     """Self-consistency of the declarations above (run by the tests)."""
@@ -340,6 +354,7 @@ FLAGS: dict[str, str] = {
     "cited_secondary": "source marks the citation as 'cited in' another paper",
     "error_type_other": "error column is neither SD nor SE",
     "error_propagated": "error is a propagated SE",
+    "error_type_missing": "the source gives an error value but no error type (SD or SE not stated)",
     "digitized_from_figure": "value was digitised from a figure",
     "replicate": "row is a replicate",
     "shallow_lt10m": "source selection code: in situ, depth < 10 m",

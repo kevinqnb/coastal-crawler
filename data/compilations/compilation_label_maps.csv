@@ -101,3 +101,33 @@ ray-oyster,habitat_type,Reef,habitat,Shellfish reef / bed
 ray-oyster,habitat_type,Aquaculture,habitat,
 ray-oyster,habitat_type,Mesocosm,habitat,
 boynton-flux,habitat_type,,habitat,
+fulweiler-nfix,habitat_type,salt marshes,habitat,Tidal marsh
+fulweiler-nfix,habitat_type,mangroves,habitat,Mangrove forest
+fulweiler-nfix,habitat_type,tidal flats,habitat,Tidal flat
+fulweiler-nfix,habitat_type,seagrasses,habitat,Seagrass meadow
+fulweiler-nfix,habitat_type,estuaries,habitat,
+fulweiler-nfix,habitat_type,continental shelves,habitat,
+fulweiler-nfix,habitat_type,lakes,habitat,
+fulweiler-nfix,habitat_type,rivers,habitat,
+fulweiler-nfix,habitat_type,freshwater wetlands,habitat,
+fulweiler-nfix,habitat_type,estuaries | wc,habitat,Water column
+fulweiler-nfix,habitat_type,continental shelves | wc,habitat,Water column
+fulweiler-nfix,habitat_type,lakes | wc,habitat,Water column
+fulweiler-nfix,habitat_type,rivers | wc,habitat,Water column
+fulweiler-nfix,habitat_type,freshwater wetlands | wc,habitat,Water column
+fulweiler-nfix,habitat_type,seagrasses | wc,habitat,Water column
+fulweiler-nfix,habitat_type,salt marshes,setting,
+fulweiler-nfix,habitat_type,mangroves,setting,
+fulweiler-nfix,habitat_type,tidal flats,setting,
+fulweiler-nfix,habitat_type,seagrasses,setting,
+fulweiler-nfix,habitat_type,estuaries,setting,estuary
+fulweiler-nfix,habitat_type,continental shelves,setting,shelf
+fulweiler-nfix,habitat_type,lakes,setting,
+fulweiler-nfix,habitat_type,rivers,setting,
+fulweiler-nfix,habitat_type,freshwater wetlands,setting,
+fulweiler-nfix,habitat_type,estuaries | wc,setting,estuary
+fulweiler-nfix,habitat_type,continental shelves | wc,setting,shelf
+fulweiler-nfix,habitat_type,lakes | wc,setting,
+fulweiler-nfix,habitat_type,rivers | wc,setting,
+fulweiler-nfix,habitat_type,freshwater wetlands | wc,setting,
+fulweiler-nfix,habitat_type,seagrasses | wc,setting,
