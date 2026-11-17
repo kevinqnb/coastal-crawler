@@ -307,6 +307,8 @@ FLAGS: dict[str, str] = {
     "cited_secondary": "source marks the citation as 'cited in' another paper",
     "error_type_other": "error column is neither SD nor SE",
     "error_propagated": "error is a propagated SE",
+    "inequality": "the source prints the value as an inequality (e.g. '<0.02'); value is the printed number and "
+                  "fact.value_comparator holds the sign ('<' or '>')",
     "digitized_from_figure": "value was digitised from a figure",
     "replicate": "row is a replicate",
     "shallow_lt10m": "source selection code: in situ, depth < 10 m",
@@ -326,12 +328,29 @@ SKIP_REASONS: dict[str, str] = {
 }
 
 
+COMPARATORS: frozenset[str] = frozenset({"<", ">"})
+
+
 def check_flags(fact: pd.DataFrame) -> None:
     """Every flag on every fact must be registered in FLAGS."""
     seen = {x for lst in fact["flags"] for x in lst}
     bad = seen - set(FLAGS)
     if bad:
         raise VocabError(f"flags not registered in FLAGS: {sorted(bad)}")
+    # the inequality flag and the sign column go together, and only '<' / '>' are allowed
+    comp = fact["value_comparator"] if "value_comparator" in fact.columns else pd.Series(
+        [None] * len(fact), index=fact.index, dtype=object
+    )
+    has_sign = comp.notna()
+    bad_sign = set(comp[has_sign]) - COMPARATORS
+    if bad_sign:
+        raise VocabError(f"value_comparator values {sorted(map(str, bad_sign))} not in {sorted(COMPARATORS)}")
+    has_flag = pd.Series(["inequality" in lst for lst in fact["flags"]], index=fact.index)
+    if (has_sign != has_flag).any():
+        raise VocabError(
+            f"inequality flag and value_comparator disagree on {int((has_sign != has_flag).sum())} facts "
+            "(each must be present exactly when the other is)"
+        )
 
 
 def check_skip_reasons(reasons: Iterable[str]) -> None:

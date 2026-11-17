@@ -16,6 +16,7 @@ import pytest
 from coastal_crawler.compilations import (
     ContractError,
     add_derived_labels,
+    fill_optional_columns,
     assign_global_keys,
     GLOBAL_NAMES,
     TABLES,
@@ -337,7 +338,7 @@ def test_bulk_load_identical_to_rowwise_writer(tmp_path):
     """Two sources (one with an empty study_screening, a nullable Int64 FK, empty flag lists,
     NaN doubles, all-NULL columns): the bulk writer stores exactly what the row writer did."""
     tables = _build()[0]
-    derived = add_derived_labels(tables)
+    derived = add_derived_labels(fill_optional_columns(tables))
     glob = assign_global_keys([derived, _second_source(derived)])
     glob["fact"].at[0, "flags"] = []  # every built fact now has a flag; force the empty-list case
     n = len(glob["fact"])
