@@ -233,6 +233,13 @@ for _a, _sub in (("poc", "poc_flux"), ("pon", "pon_flux"), ("total_mass", "total
                  ("caco3", "biogenic_silica_carbonate_flux"), ("psi", "biogenic_silica_carbonate_flux"),
                  ("psio2", "biogenic_silica_carbonate_flux"), ("psioh4", "biogenic_silica_carbonate_flux")):
     ATTRIBUTES[f"mouw_{_a}_flux"] = _d("C6", {_sub}, {"mg/m**2/day"})
+# Mattei and Scardi (Francesco) global marine phytoplankton production: depth-resolved and profile-level values
+_g4_declare_j1("water_chl_a", "chlorophyll_a", "mg m^-3")
+_g4_declare_j1("water_chl_a_integrated", "chlorophyll_a", "mg m^-2")
+_g4_declare_j1("water_chl_a_total", "chlorophyll_a", "mg m^-2")
+ATTRIBUTES["francesco_pp_volumetric"] = _d("B8", {"primary_production_per_volume"}, {"mg C m^-3 day^-1"})
+ATTRIBUTES["francesco_pp_integrated"] = _d("B8", {"depth_integrated_primary_production"}, {"mg C m^-2 day^-1"})
+ATTRIBUTES["francesco_pbopt"] = _d("B8", {"chlorophyll_specific_production"}, {"mg C mg Chla-1 h-1"})
 
 
 def check_attribute_decls() -> None:
