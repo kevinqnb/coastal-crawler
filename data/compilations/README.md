@@ -252,8 +252,8 @@ source needs it; the compilation's README says how that source applies it.
   `outside_source_qc_range` 38; `negative_value` 37; `study_marked_excluded` 31; `error_propagated` 24; `flux_type_missing` 20;
   `lon_wrapped` 16; `qc_rejected_by_source` 8 (Shao: the authors' own quality control rejected the value; loaded, flagged);
   `negative_sd` 6; `potential_rate` 4; `depth_inverted` 4; `fraction_gt_1` 2; `lat_beyond_pole` 1.
-- **Registered, not used by any current compilation:** `sd_converted_from_se`, `lat_lon_zero` (considered and not used; see the
-  Ray and Rosentreter READMEs for why).
+- **Registered, not used by any current compilation:** `sd_converted_from_se` (considered for Ray and Rosentreter and not used: the
+  files do not say which rows; see their READMEs) and `lat_lon_zero` (a check that found no such coordinates in any compilation).
 - **Skip reasons in use:** `depthseries_core_not_in_cores`, `empty_row`, `no_seagrass_measurement`, `no_density`,
   `not_measured` (Chang 2, Tang 166, Shao 185), `below_detection_limit` (Tang 772, Shao 646: results printed as `BDL`, `n.d.`
   and the like; the detection limit is copied into the report where the source gives one), `units_missing` (Fulweiler 4),
