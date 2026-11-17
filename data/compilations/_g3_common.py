@@ -10,6 +10,7 @@ from collections.abc import Hashable, Iterable, Sequence
 
 import numpy as np
 
+from _j1_collapse import J1Cell, collapse_j1
 from coastal_crawler.compilations import ContractError
 
 _NBSP = ("\xa0", " ", " ", " ")
@@ -87,26 +88,17 @@ def count_flags(flag_lists: Iterable[Sequence[str]]) -> dict[str, int]:
 def collapse_covariates(
     cells: Iterable[tuple[Hashable, str, float, int]],
 ) -> tuple[list[tuple[Hashable, str, float, int, bool]], int]:
-    """J1 rule 1 (INTEGRATION_PLAN 1.2): one fact per (sample, attribute, distinct value).
+    """J1 rule 1 (INTEGRATION_PLAN 1.2): one fact per (sample, attribute, distinct value), via ``_j1_collapse.collapse_j1``.
 
-    ``cells`` are (sample_key, attribute, value, source_row) in source row order. Repeats of the same value
-    within a (sample, attribute) collapse into the first cell (lowest source row). A (sample, attribute) with
-    more than one distinct value keeps one fact per distinct value, each marked ``conflict`` = True (nothing is
-    averaged or dropped). Returns (kept [(sample_key, attribute, value, source_row, conflict)] in first-seen
-    order, number collapsed). ``len(cells) == len(kept) + collapsed`` is asserted.
+    ``cells`` are (sample_key, attribute, value, source_row) in source row order; ``value`` is a number, or a tuple whose
+    first element is the number and whose remaining elements (e.g. the unit) must also match for two values to be the same
+    (a value in two units is two values). Returns (kept [(sample_key, attribute, value, source_row, conflict)] in first-seen
+    order, number collapsed); ``len(cells) == len(kept) + collapsed`` is asserted by ``collapse_j1``.
     """
-    cells = list(cells)
-    first: dict[tuple[Hashable, str, float], int] = {}
-    order: list[tuple[Hashable, str, float]] = []
-    values_of: dict[tuple[Hashable, str], set[float]] = {}
-    for sk, attr, val, row in cells:
-        k = (sk, attr, val)
-        if k not in first:
-            first[k] = row
-            order.append(k)
-        values_of.setdefault((sk, attr), set()).add(val)
-    kept = [(sk, attr, val, first[(sk, attr, val)], len(values_of[(sk, attr)]) > 1) for sk, attr, val in order]
-    collapsed = len(cells) - len(kept)
-    if collapsed < 0:
-        raise ContractError("collapse produced more facts than cells")
-    return kept, collapsed
+    j1 = []
+    for order, (sk, attr, val, row) in enumerate(cells):
+        number, variant = (val[0], tuple(val[1:])) if isinstance(val, tuple) else (val, ())
+        j1.append(J1Cell(order, sk, attr, number, f"row {row}", (val, row), variant))
+    facts, counts = collapse_j1(j1)
+    kept = [(f.cell.sample_key, f.cell.attribute, f.cell.payload[0], f.cell.payload[1], f.covariate_conflict) for f in facts]  # type: ignore[index]
+    return kept, counts["collapsed_repeats"]

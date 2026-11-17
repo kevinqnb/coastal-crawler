@@ -240,6 +240,7 @@ out/*
 # helper modules shared by several extract.py files (group 3 / group 4 builds)
 !/data/compilations/_g3_common.py
 !/data/compilations/_g4_common.py
+!/data/compilations/_j1_collapse.py
 !/data/compilations/*/
 /data/compilations/*/*
 !/data/compilations/*/extract.py
