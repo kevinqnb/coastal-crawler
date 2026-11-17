@@ -1,56 +1,51 @@
 #!/usr/bin/env python3
-"""Mattei and Scardi global marine phytoplankton production dataset -> contract tables.
+"""Mattei and Scardi global marine phytoplankton production dataset -> compilation-contract tables.
 
-Mattei, F., Scardi, M. (2021): Global marine phytoplankton production dataset. PANGAEA, doi:10.1594/PANGAEA.932417
-(CC-BY-4.0, published 2021-06-09); paper Earth System Science Data 13, 4967-4985, doi:10.5194/essd-13-4967-2021. Raw file
-(this directory): ``Global_marine_phytoplankton_production_dataset.txt`` (tab-separated, 37,722 data rows x 49 columns, quoted
-fields, the ``Short reference`` carries a trailing CR LF inside its quotes). The file has no PANGAEA header, so version and
-license are copied from the dataset page (INTEGRATION_PLAN 1.4).
+Mattei, F., Scardi, M. (2021): Global marine phytoplankton production dataset. PANGAEA, doi:10.1594/PANGAEA.932417 (CC-BY-4.0, published
+2021-06-09); paper Earth System Science Data 13, 4967-4985, doi:10.5194/essd-13-4967-2021. Raw file (this directory):
+``Global_marine_phytoplankton_production_dataset.txt`` (tab-separated, 49 columns, quoted fields; ``Short reference`` carries a trailing CR LF
+inside its quotes). The file has no PANGAEA header, so version and license are copied from the dataset page (INTEGRATION_PLAN 1.4).
 
-Grain. A data row is one sampling depth of a profile. ``Profile number`` (6,084 values, asserted equal to the number of distinct
-values) groups the rows of a profile; eight profile numbers span two (latitude, longitude, date) stations and the
-station of a profile-level fact is that of the profile's FIRST row (named in ``sample.depth_notes`` and in the report).
+Grain: a data row is one sampling depth of a profile. ``Profile number`` groups the rows of a profile, and its count of distinct values is
+asserted. Eight profile numbers span two (latitude, longitude, date) stations. The station of a profile-level fact is that of the profile's
+FIRST row (named in ``sample.depth_notes`` and in the report).
 
-Row-level (one fact per numeric cell, 37,722 rows):
+Row-level (one fact per numeric cell):
   Depth-resolved primary production (mg C m^-3 day^-1)  francesco_pp_volumetric   B8 primary_production_per_volume
   Depth-resolved chl a (mg m^-3)                         water_chl_a                J1 chlorophyll_a
-Profile-level values repeated on every row of a profile are loaded ONCE per profile; the extract asserts they are constant
-within the profile (exact string equality) and counts the repeats as collapsed cells:
+Profile-level values repeated on every row of a profile are loaded ONCE per profile. The extract asserts they are constant within the
+profile (exact string equality) and counts the repeats as collapsed cells:
   Depth-integrated primary production (mg C m^-2 day^-1) francesco_pp_integrated   B8 depth_integrated_primary_production
   Pbopt (mg C mg Chla-1 h-1)                             francesco_pbopt           B8 chlorophyll_specific_production
   Depth-integrated chl a (mg m^-2)                       water_chl_a_integrated    J1 chlorophyll_a
   Total Chl a (mg m^-2)                                  water_chl_a_total         J1 chlorophyll_a
-The plan puts the last two under ONE attribute (``water_chl_a_integrated``); they differ on every profile (none of the 6,084 is
-equal), so under one attribute each profile would carry a bogus ``covariate_conflict``. They are two attributes here.
+The plan puts the last two under ONE attribute. They differ on every profile, so under one attribute each profile would carry a false
+``covariate_conflict``. They are two attributes here.
 
-J1: a J1 value belongs to the SAMPLE. The row-level sample key is profile | sampling depth | date | latitude | longitude (strings
-as written); equal values of one sample and attribute collapse and are counted, different values are all loaded with
-``covariate_conflict`` (one profile-depth pair of the file: 12.1 vs 10.4 mg m^-3 at 3 m in profile 1711; another pair, profile
-2282, is equal and collapses). The profile-level samples are keyed ``profile<n>``.
+J1: a J1 value belongs to the SAMPLE. The row-level sample key is profile | sampling depth | date | latitude | longitude (strings as written).
+Equal values of one sample and attribute collapse and are counted, and different values are all loaded with ``covariate_conflict`` (one
+profile-depth pair: 12.1 vs 10.4 mg m^-3 at 3 m in profile 1711; profile 2282 is equal and collapses). Profile-level samples are keyed
+``profile<n>``.
 
-Context. ``Sampling depth`` -> ``sample.sample_depth_m`` (row-level samples; NULL on profile-level samples). ``SST`` (all rows, both flags) is NOT loaded
-(the user's decision): it is a SURFACE temperature, not the temperature at the sampling depth, so ``water_temperature_c`` stays NULL. ``Date`` (dd/mm/yyyy; year and month asserted equal to the ``Year`` and
-``Month`` columns) -> sampling_year / month. ``Event`` (the original cruise or programme, blank on 850 rows) ->
-``sample.source_sample_id``. A longitude below -180 (one profile) is wrapped by +360 and the facts carry ``lon_wrapped``.
-Habitat ``Water column`` from the dataset's scope, flag ``habitat_from_scope`` on every fact.
+Context: ``Sampling depth`` goes to ``sample.sample_depth_m`` (NULL on profile-level samples). ``SST`` (all rows, both flags) is NOT loaded
+(the user's decision): it is a surface temperature, not the temperature at the sampling depth, so ``water_temperature_c`` stays NULL. ``Date``
+(dd/mm/yyyy; year and month asserted equal to the ``Year`` and ``Month`` columns) gives sampling_year and month. ``Event`` (the original
+cruise or programme) is ``sample.source_sample_id``. A longitude below -180 (one profile) is wrapped by +360 and its facts carry
+``lon_wrapped``. Habitat is Water column from the dataset's scope, with ``habitat_from_scope`` on every fact.
 
-Not loaded (derived, reconstructed or categorical; counted in the report): ``SST`` (both flags), ``surface PAR`` (phase 2, both flags),
-``Day length`` and ``Day of the year`` (computed), ``Mixed Layer Depth``, ``Euphotic zone depth``, ``Max production depth``,
-``Max sampling depth``, ``Bottom depth`` and its sd (GEBCO), ``Distance from coastline`` (NASA OBPG grid),
-``Production to biomass ratio`` (derived, D7), ``hemisphere``, ``Northern hemisphere season`` and every ``* magnitude``
-category (Jenks classes). Every numeric cell of the nine loaded columns is a number: no missing codes occur, and a non-numeric
-cell raises.
+Not loaded (derived, reconstructed or categorical; counted in the report): ``SST``, ``surface PAR`` (phase 2), ``Day length`` and ``Day of the
+year`` (computed), ``Mixed Layer Depth``, ``Euphotic zone depth``, ``Max production depth``, ``Max sampling depth``, ``Bottom depth`` and its sd
+(GEBCO), ``Distance from coastline`` (a NASA grid), ``Production to biomass ratio`` (derived), ``hemisphere``, ``Northern hemisphere season``
+and every ``* magnitude`` category (Jenks classes). Every numeric cell of the loaded columns is a number, and a non-numeric cell raises.
 
-References. ``Short reference`` names the source the compilers took a profile from (many are databases, not papers); the
-original cruise is ``Event``. ``reference_key`` = ``doi:<lower-case doi>`` where ``Paper doi`` is given, ``ref:<short
-reference>`` where it is blank; a cell with two DOIs (``a; b``) gives the composite key ``doi:a+doi:b`` and one citation
-per DOI (INTEGRATION_PLAN 3.4). A DOI shared by several short references is one reference with all of them in the citation's
-``bibliography_id``. Every fact carries ``secondary_compilation``.
+References: ``Short reference`` names the source the compilers took a profile from (many are databases, not papers), and the original cruise
+is ``Event``. reference_key is ``doi:<lower-case doi>`` where ``Paper doi`` is given and ``ref:<short reference>`` where it is blank. A cell
+with two DOIs (``a; b``) gives the composite key ``doi:a+doi:b`` and one citation per DOI. A DOI shared by several short references is one
+reference with all of them in the citation's ``bibliography_id``. Every fact carries ``secondary_compilation``.
 
 Flags: habitat_from_scope, secondary_compilation (all), lon_wrapped, covariate_conflict, zero_value.
 
-Provenance: ``source_row_ref`` = ``<file>#data_row=<0-based data row>:<attribute>``; for a profile-level fact the data row is
-the first row of its profile.
+Provenance: ``source_row_ref`` = ``<file>#data_row=<0-based row>:<attribute>`` (for a profile-level fact, the first row of its profile).
 
 Usage:
     python -I extract.py --access-date YYYY-MM-DD

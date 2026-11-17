@@ -1,71 +1,53 @@
 #!/usr/bin/env python3
-"""Strydom et al. global seagrass structure / biomass / production database -> compilation-contract tables.
+"""Strydom et al. global seagrass structure, biomass and production database -> compilation-contract tables.
 
-Strydom, S. et al. (2021): Global database of key seagrass structure, biomass and production
-variables [dataset]. PANGAEA, doi:10.1594/PANGAEA.929968. Supplement to Strydom et al. (2023),
-Earth System Science Data 15, 511-519, doi:10.5194/essd-15-511-2023. CC-BY-4.0. Raw file (this
-directory): ``Seagrass_db.tab`` (PANGAEA tab format: a ``/* ... */`` header, then a tab-separated
-table with its own header line).
+Strydom, S. et al. (2021): Global database of key seagrass structure, biomass and production variables. PANGAEA,
+doi:10.1594/PANGAEA.929968. Supplement to Strydom et al. (2023), Earth System Science Data 15, 511-519,
+doi:10.5194/essd-15-511-2023. CC-BY-4.0. Raw file (this directory): ``Seagrass_db.tab`` (PANGAEA tab format: a ``/* ... */``
+header, then a tab-separated table with its own header line).
 
-The table is the same design as Foster et al. (``foster-seagrass``): one row per study x site x
-genus x year with the same 11 seagrass measures, so this extract reuses Foster's attribute names,
-types and sum-of-parts rule (imported read-only from ``foster-seagrass/extract.py``). What differs:
-PANGAEA's unit spellings (declared verbatim), no Unique.ID, no DOI column, no ECOREGION, no Bio-ORACLE
-columns, and a full citation list in the file header.
+The table has the same design as Foster et al. (``foster-seagrass``): one row per study, site, genus and year with the same 11
+seagrass measures. This extract reuses Foster's attribute names, types and sum-of-parts rule (imported read-only from
+``foster-seagrass/extract.py``). It differs in PANGAEA's unit spellings (declared verbatim), no Unique.ID, no DOI column, no
+ECOREGION, no Bio-ORACLE columns, and a full citation list in the file header.
 
-Grain: ONE FACT PER NON-BLANK SEAGRASS MEASUREMENT. A row holding k of the 11 measurement columns
-becomes k facts. Values are carried exactly as reported, in the units of the column header
-(asserted). Nothing is converted or capped. PANGAEA parameter names say dry mass ("dm").
+Grain: one fact per non-blank measurement cell, in the units of the column header (asserted). Nothing is converted or capped.
+PANGAEA parameter names say dry mass ("dm").
 
 Attributes (source column -> attribute, units_raw verbatim from the header bracket):
-  Seagr biom above/below/tot dm [g/m**2]        -> seagrass_biomass_above/_below/_total      g/m**2
-  Seagr shoot dens [#/m**2]                     -> seagrass_shoot_density                    #/m**2
-  Seagr leaf dens [#/m**2]                      -> seagrass_leaf_density                     #/m**2
-  Seagr cov [%]                                 -> seagrass_percent_cover                    %
+  Seagr biom above/below/tot dm [g/m**2]   -> seagrass_biomass_above/_below/_total   g/m**2
+  Seagr shoot dens [#/m**2]                -> seagrass_shoot_density                 #/m**2
+  Seagr leaf dens [#/m**2]                 -> seagrass_leaf_density                  #/m**2
+  Seagr cov [%]                            -> seagrass_percent_cover                 %
   Seagr prod above/below/total dm, shoot prod dm, leaf prod dm [g/m**2/day]
-                                                -> seagrass_production_above/_below/_total/_shoot/_leaf   g/m**2/day
-The attributes and their measurement types are Foster's (``compilation_vocab.ATTRIBUTES``); the
-unit strings are this source's spelling and are declared beside Foster's. Equivalent spellings
-(``g DW m-2`` vs ``g/m**2``) stay separate; conversion is downstream.
+                                           -> seagrass_production_above/_below/_total/_shoot/_leaf   g/m**2/day
+Attributes and types are Foster's; the unit strings are this source's spelling, declared beside Foster's. Equivalent spellings
+(``g DW m-2`` vs ``g/m**2``) stay separate, and conversion is downstream.
 
-Fail loud. The only exclusion is a row with none of the 11 measurement columns filled (reason
-``no_seagrass_measurement``, in ``skip_report.jsonl``). Row accounting is asserted: source rows =
-rows with facts + excluded rows, and fact count = non-blank measurement cells.
+Exclusions: only a row with none of the 11 measurement columns filled (``no_seagrass_measurement``). Row accounting is asserted:
+source rows = rows with facts + excluded rows, and facts = non-blank measurement cells.
 
-Standardisation / derived-field rules (the raw value is recoverable via ``fact.source_row_ref`` =
-``Seagrass_db.tab#data_row=<0-based data row, as read by pandas after the header>:<attribute>``):
-  * Strings are whitespace-stripped; blank becomes NULL (the file has no ``NA`` literal; a
-    non-numeric measurement raises).
-  * latitude/longitude are the source decimal degrees, unchanged (asserted in range). The source
-    corrected some longitudes from east to west on 2025-05-06 (header "Change history"); the file
-    read here is that corrected version.
-  * habitat_type = constant ``seagrass`` (the dataset's scope, not a per-row label).
-    geomorphic_setting = the source ``Habitat`` label (``Coastal`` / ``Estuarine``), raw.
-    bioregion = ``Seagr bioregion`` (the six Short et al. 2007 bioregions). No marine_ecoregion,
-    site_name, country, water_body, salinity, position_* or elevation (not in the source).
-  * location_key = lat | lon | Habitat | Seagr bioregion (floats by repr), so coordinates carrying
-    conflicting labels stay separate locations (as Foster).
-  * sample: one per source data row (the file has no row id). taxon = ``Genus`` (12 genera, an
-    unknown genus raises; there is no ``Mixed`` here), taxon_rank = ``genus``. sampling_year =
-    ``Year obs [a AD]`` (blank -> NULL, flag ``year_missing``); month and depth are NULL.
-  * method: the source gives no method information, so one method row per attribute,
-    ``method_status = method_id_null``, params = the source column (and, for the totals, Foster's note that
-    a total may be the sum of its parts).
-  * reference_key = ``ref:<Reference string>`` (whitespace-normalised). The file has no DOI per row.
-    Full citations and DOIs come from the header's "Related to" list by an author-year match
-    (``match_reference``): single author -> one-author entry; "A and B" / "A & B" -> two-author entry
-    with both surnames; "A et al." -> entry with >= 2 authors and that first surname; the year must
-    be equal. A string with a year letter (``2010a``), or matching more than one entry, is
-    AMBIGUOUS and not matched; no entry -> unmatched. Nothing is matched fuzzily; matched / ambiguous /
-    unmatched strings are all listed in ``extract_report.json``. A matched string gets the entry's
-    DOI, authors and year; the others keep the string and a year parsed from it. The DOI of a matched
-    entry is the ``https://doi.org/...`` link ending the entry (entries with no link: no DOI).
+Derived-field rules (the raw value is recoverable via ``fact.source_row_ref`` = ``Seagrass_db.tab#data_row=<0-based row>:<attribute>``):
+  * Strings are whitespace-stripped and blank becomes NULL. There is no ``NA`` literal, and a non-numeric measurement raises.
+  * latitude and longitude are the source decimal degrees, asserted in range. The source corrected some longitudes from east to west
+    on 2025-05-06 (header "Change history"), and this is the corrected file.
+  * habitat_type is the constant ``seagrass`` (the dataset's scope). geomorphic_setting is ``Habitat`` (Coastal or Estuarine, raw) and
+    bioregion is ``Seagr bioregion`` (six Short et al. 2007 bioregions). Other location fields are NULL.
+  * location_key = lat | lon | Habitat | Seagr bioregion, so coordinates with conflicting labels stay separate (as Foster).
+  * sample: one per data row (no row id). taxon is ``Genus`` (12 genera; an unknown genus raises), rank ``genus``. sampling_year is
+    ``Year obs [a AD]`` (blank gives NULL and ``year_missing``). Month and depth are NULL.
+  * method: no method information, so one row per attribute, method_id_null, ``params`` = the source column (for the totals also
+    Foster's note that a total may be the sum of its parts).
+  * reference_key is ``ref:<Reference string>`` (whitespace-normalised); the file has no DOI per row. Full citations and DOIs come
+    from the header's "Related to" list by an author-year match (``match_reference``): one author matches a one-author entry,
+    "A and B" or "A & B" a two-author entry with both surnames, and "A et al." an entry with two or more authors and that first
+    surname. The year must be equal. A string with a year letter (``2010a``), or matching more than one entry, is ambiguous and not
+    matched. Nothing is matched fuzzily, and matched, ambiguous and unmatched strings are all listed in ``extract_report.json``. A
+    matched string gets the entry's DOI (the ``https://doi.org/...`` link ending the entry), authors and year. The others keep the
+    string and a year parsed from it.
 
-Flags (informational; nothing is changed or dropped): habitat_from_scope (every fact),
-year_missing, duplicate_source_row (every member of a group of rows identical in ALL columns --
-identical measurement values included, so some may be genuine replicates), total_ne_sum_of_parts
-(same rule and tolerances as Foster: above, below and total all present, total differs from
-above+below by more than ``--sum-rel-tol`` relative AND ``--sum-abs-tol`` absolute).
+Flags (nothing is changed or dropped): habitat_from_scope (every fact), year_missing, duplicate_source_row (every member of a group of
+rows identical in ALL columns, so some may be genuine replicates), total_ne_sum_of_parts (Foster's rule and tolerances).
 
 Usage:
     python -I extract.py --access-date YYYY-MM-DD --sum-rel-tol 1e-3 --sum-abs-tol 1e-3

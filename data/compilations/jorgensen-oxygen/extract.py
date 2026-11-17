@@ -1,60 +1,56 @@
 #!/usr/bin/env python3
-"""Jorgensen et al. benthic oxygen uptake database -> contract tables.
+"""Jorgensen et al. benthic oxygen uptake database -> compilation-contract tables.
 
-Jorgensen, B.B., Wenzhofer, F., Egger, M., Glud, R.N. (2022): Sediment oxygen consumption: Role in the global marine carbon
-cycle. Earth-Science Reviews 228, 103987, doi:10.1016/j.earscirev.2022.103987, Supplementary Table S1. Raw file (this
-directory): ``1-s2.0-S001282522200071X-mmc2.xlsx`` (one sheet, 4,343 rows x 16 columns).
+Jorgensen, B.B., Wenzhofer, F., Egger, M., Glud, R.N. (2022): Sediment oxygen consumption: role in the global marine carbon cycle.
+Earth-Science Reviews 228, 103987, doi:10.1016/j.earscirev.2022.103987, Supplementary Table S1. Raw file (this directory):
+``1-s2.0-S001282522200071X-mmc2.xlsx`` (one sheet, 16 columns).
 
-Layout of the sheet (asserted): row 0 the description, row 1 the column names, row 2 the units row, row 3 blank, then
-three SECTION rows (text in column 0 only: ``In Situ 0 - 6,500m O2 fluxes``, ``In situ Hadal (>6,500m) O2 fluxes``,
-``Ex Situ (<1,000m) O2 fluxes``), each preceded by blank rows, and 4,332 DATA rows. The plan expected about 230 "stray rows that
-contain only a code in column 0"; there are none: every row other than the three section rows and the blank rows is a full data
-row (``Station`` is blank on 1,756 of them, which is normal: the stations repeat). The selection codes sit in column 0 of the
-data rows themselves, as numbers (0, 1, 2) or as TEXT holding several codes (``0, 3``; ``1, 4, 5``; one row reads ``0, 3,, 4``,
-a typo for 0, 3, 4).
+Layout (asserted): row 0 is the description, row 1 the column names, row 2 the units row, row 3 blank, then three SECTION rows (text in
+column 0 only: ``In Situ 0 - 6,500m O2 fluxes``, ``In situ Hadal (>6,500m) O2 fluxes``, ``Ex Situ (<1,000m) O2 fluxes``), each preceded by
+blank rows, then the DATA rows. The plan expected about 230 "stray rows holding only a code in column 0". There are none: every row other
+than the three section rows and the blank rows is a full data row (``Station`` is blank on many of them, which is normal, since stations
+repeat). The selection codes sit in column 0 of the data rows themselves, as numbers (0, 1, 2) or as TEXT holding several codes (``0, 3``,
+``1, 4, 5``; one row reads ``0, 3,, 4``, a typo for 0, 3, 4).
 
-Grain: ONE FACT PER NUMERIC CELL of three columns, one sample per data row (``row<n>``, ``n`` = 0-based data-row index among the
-4,332 data rows, section and blank rows excluded):
-  TOU  jorgensen_tou  B5 total_o2_uptake       ``mmol m-2 d-1``  (header unit under TOU)
-  DOU  jorgensen_dou  B5 diffusive_o2_uptake   ``mmol m-2 d-1``  (the DOU unit cell is blank; the description says "O2 fluxes are
-       presented in mmol m-2 d-1", asserted to be present, and TOU's unit is applied)
+Grain: one fact per numeric cell of three columns, with one sample per data row (``row<n>``, n = 0-based index among the data rows, section
+and blank rows excluded):
+  TOU  jorgensen_tou  B5 total_o2_uptake       ``mmol m-2 d-1`` (header unit under TOU)
+  DOU  jorgensen_dou  B5 diffusive_o2_uptake   ``mmol m-2 d-1`` (the DOU unit cell is blank. The description says "O2 fluxes are presented
+       in mmol m-2 d-1", asserted to be present, and TOU's unit is applied)
   OPD  jorgensen_opd  C2 o2_penetration_depth  ``mm``
-``N`` (the number of values averaged, filled on 472 rows) is the ``n`` of every fact of its row. One OPD cell reads ``3,8`` (a
-decimal comma, or a list; undecidable): it is a skip, reason ``unparseable_value``, kept in the skip report. Every other cell of the
-three columns is a number.
+``N`` (the number of values averaged) is the ``n`` of every fact of its row. One OPD cell reads ``3,8`` (a decimal comma, or a list;
+undecidable). It is a skip with reason ``unparseable_value``, kept in the skip report. Every other cell of the three columns is a number.
 
-Selection-ID (the description: "0" multiple data from one site, "1" single data from one site, "2" averaged multiple data
-points, "3" in situ <10 m water depth, "4" methodical exclusion, "5" bottom water <25 uM O2): a row's codes are the numbers
-in its cell (exactly one of 0, 1, 2 is asserted). Flags: 2 -> ``source_average_row`` (an average of other rows of the same site:
-filter downstream, the members are loaded too), 3 -> ``shallow_lt10m``, 4 -> ``method_excluded``, 5 -> ``low_o2_bottom_water``. The
-raw cell text is kept in ``sample.depth_notes`` as ``selection_id=<text>``.
+Selection-ID (the description: "0" multiple data from one site, "1" single data from one site, "2" averaged multiple data points, "3" in
+situ <10 m water depth, "4" methodical exclusion, "5" bottom water <25 uM O2): a row's codes are the numbers in its cell (exactly one of
+0, 1, 2 is asserted). Flags: 2 gives ``source_average_row`` (an average of other rows of the same site, so filter downstream, as the
+members are loaded too), 3 gives ``shallow_lt10m``, 4 gives ``method_excluded`` and 5 gives ``low_o2_bottom_water``. The raw cell text is
+kept in ``sample.depth_notes`` as ``selection_id=<text>``.
 
-Context: ``Station`` -> ``sample.source_sample_id``; ``Depth`` (m, positive) -> ``location.water_depth_m``; latitude and longitude
-(22 rows have none: flag ``coords_missing``); bottom-water O2 -> the ``bottom_water_o2`` slot when the cell is a number, with the
-units string of the file's units row, ``µM or % saturatiion`` (U+00B5, the file's own spelling), and every fact of such a row
-carries ``o2_units_ambiguous`` (the column mixes uM and % saturation); text cells (ranges such as ``170-180``, ``no info``,
-``> 40%``, ``oxic``) give a NULL slot and are copied into ``depth_notes`` as ``bottom_water_o2_as_written=<text>``; ``Comments``
--> ``depth_notes`` as ``comment=<text>``. ``NPP`` (Oregon State VGPM satellite production, INTEGRATION_PLAN 3.5) is not loaded,
-nor are ``Ocean`` and ``Region`` (counted in the report).
+Context: ``Station`` is ``sample.source_sample_id``. ``Depth`` (m, positive) is ``location.water_depth_m``. Rows without coordinates get
+``coords_missing``. Bottom-water O2 goes to the ``bottom_water_o2`` slot when the cell is a number, with the units string of the file's units
+row, ``µM or % saturatiion`` (U+00B5, the file's own spelling), and every fact of such a row carries ``o2_units_ambiguous`` (the column mixes
+uM and % saturation). Text cells (ranges such as ``170-180``, ``no info``, ``> 40%``, ``oxic``) give a NULL slot and are copied into
+``depth_notes`` as ``bottom_water_o2_as_written=<text>``. ``Comments`` goes to ``depth_notes`` as ``comment=<text>``. ``NPP`` (Oregon State
+VGPM satellite production, INTEGRATION_PLAN 3.5) is not loaded, nor are ``Ocean`` and ``Region`` (counted in the report).
 
-Locations: ``location_key`` = latitude | longitude | depth | Depth range label (the same coordinates carry different labels in 25 cases).
+Locations: location_key = latitude | longitude | depth | Depth range label (the same coordinates carry different labels in some cases).
 
-Habitat: the ``Depth range`` label is the raw ``habitat_type`` (spelling variants such as ``outer shelf`` / ``Outer shelf`` are
-separate raw labels with their own map rows); every label maps to Subtidal soft sediment by the dataset's scope (flag
-``habitat_from_scope`` on the facts of rows that have a label; 7 rows have none: NULL habitat, no flag); setting ``shelf``
-for the shelf labels and ``open ocean`` for rise, abyss and hadal, none for slope and near-shore (the SCOC mapping).
+Habitat: the ``Depth range`` label is the raw ``habitat_type`` (spelling variants such as ``outer shelf`` and ``Outer shelf`` are separate raw
+labels with their own map rows). Every label maps to Subtidal soft sediment by the dataset's scope (``habitat_from_scope`` on the facts of
+rows that have a label, and rows with none get NULL habitat and no flag). Setting is ``shelf`` for the shelf labels, ``open ocean`` for rise,
+abyss and hadal, and none for slope and near-shore (the SCOC mapping).
 
-Methods: one row per (attribute, section); ``in_situ_ex_situ`` = ``in situ`` / ``in situ hadal (>6,500m)`` / ``ex situ`` from the
-section, no technique.
+Methods: one row per (attribute, section). ``in_situ_ex_situ`` is ``in situ``, ``in situ hadal (>6,500m)`` or ``ex situ`` from the section,
+with no technique.
 
-References: ``Reference`` is filled on the first row of each study group and blank on the others: a row belongs to the last
-non-blank reference above it (asserted: the first data row of every section has one). ``reference_key`` = ``ref:<normalised
-string>``; four strings contain a ``;`` or a line break and are kept whole (each may cite several papers). No DOIs in the file.
+References: ``Reference`` is filled on the first row of each study group and blank on the others, so a row belongs to the last non-blank
+reference above it (asserted: the first data row of every section has one). reference_key is ``ref:<normalised string>``. Strings containing
+a ``;`` or a line break are kept whole (each may cite several papers). There are no DOIs in the file.
 
-Flags: habitat_from_scope, source_average_row, shallow_lt10m, method_excluded, low_o2_bottom_water, o2_units_ambiguous,
-coords_missing.
+Flags: habitat_from_scope, source_average_row, shallow_lt10m, method_excluded, low_o2_bottom_water, o2_units_ambiguous, coords_missing.
 
-Provenance: ``source_row_ref`` = ``<file>[<sheet>]#sheet_row=<0-based row of the sheet as read with header=None>:<attribute>``.
+Provenance: ``source_row_ref`` = ``<file>[<sheet>]#sheet_row=<0-based row read with header=None>:<attribute>``.
 
 Usage:
     python -I extract.py --access-date YYYY-MM-DD

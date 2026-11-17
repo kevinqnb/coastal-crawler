@@ -1,57 +1,61 @@
 #!/usr/bin/env python3
-"""Shao et al. global ocean diazotroph database v2 -> contract tables (phase 1: N2 fixation rates and J1 water values).
+"""Shao et al. global ocean diazotroph database v2 -> compilation-contract tables (phase 1: N2 fixation rates and J1 water values).
 
-Shao, Z., Xu, Y., Wang, H., Luo, W., Wang, L., Huang, Y., et al. (2023): Version 2 of the global ocean diazotroph database.
-figshare, doi:10.6084/m9.figshare.21677687.v3 (paper: Earth System Science Data 2023). Only ``DiazotrophsDatabase-20240109.xlsx``
-(version 2024-01-09, CC BY 4.0) is read; the 20230626 workbook and the update notes are not. Sheets loaded: the five rate sheets
-``N2_Fixation (Incub. 24 h)``, ``N2_Fixation (Incub.<24 h)``, ``N2_Fixation_Integral (24 h)``, ``N2_Fixation_Integral (<24 h)`` and
-``Cell_Specific_N2_Fixation_Rate``. Not loaded (rows counted in the report): ``Cell_Count``, ``Cell_Count_Integral``, ``nifH_Gene``,
-``nifH_Gene_Integral``, ``NCD_Gene`` (phase 2), ``Reference List`` (used only to attach citation titles by DOI).
+Shao, Z., Xu, Y., Wang, H., Luo, W., Wang, L., Huang, Y., et al. (2023): Version 2 of the global ocean diazotroph database. figshare,
+doi:10.6084/m9.figshare.21677687.v3 (paper: Earth System Science Data 2023). Only ``DiazotrophsDatabase-20240109.xlsx`` (version
+2024-01-09, CC BY 4.0) is read. Sheets loaded: ``N2_Fixation (Incub. 24 h)``, ``N2_Fixation (Incub.<24 h)``, ``N2_Fixation_Integral
+(24 h)``, ``N2_Fixation_Integral (<24 h)`` and ``Cell_Specific_N2_Fixation_Rate``. Not loaded (rows counted in the report):
+``Cell_Count``, ``Cell_Count_Integral``, ``nifH_Gene``, ``nifH_Gene_Integral`` and ``NCD_Gene`` (phase 2). ``Reference List`` is used only
+to attach citation titles by DOI.
 
-Every sheet is read with ``header=None``; row 0 is the header, normalised (whitespace collapsed, ' )' -> ')') and compared to an
-explicit expected list (any other header raises). ``data_row`` is the 0-based row below the header.
+Every sheet is read with ``header=None``. Row 0 is the header, normalised (whitespace collapsed) and compared to an explicit expected
+list, and any other header raises. ``data_row`` is the 0-based row below the header.
 
-Rates (main sheets, ONE attribute per fraction, plan 5.12): Trichodesmium / Heterocyst / <10 um / >10 um / Whole Seawater / Total /
-under Light / under Dark -> ``shao_n2fix_{trichodesmium,heterocyst,lt10um,gt10um,whole_seawater,total,light,dark}``, C5 n2_fixation;
-the unit is the sheet's header unit (``μmol N m-3 d-1``, ``m-3 h-1``, ``m-2 d-1``, ``m-2 h-1``; U+03BC). Components and Total coexist
-in a row (double counting; nothing is summed). ``Cell_Specific`` sheet: 16 organism triples (rate per cell, cellular N, rate per
-cellular N): ``shao_n2fix_per_cell`` (fmol N cell-1 d-1), ``shao_cellular_n_content`` (``other``, fmol N cell-1) and
-``shao_n2fix_per_cellular_n`` (fmol N fmol N-1 d-1); the organism is ``sample.taxon`` with ``taxon_rank`` from ``TAXA`` (free text:
-genus / clade / phylum / cell_type / functional_group / host_of_clade).
+Rates (main sheets, one attribute per fraction): Trichodesmium, Heterocyst, <10 um, >10 um, Whole Seawater, Total, under Light and under
+Dark give ``shao_n2fix_{trichodesmium,heterocyst,lt10um,gt10um,whole_seawater,total,light,dark}`` (C5 n2_fixation). The unit is the
+sheet's header unit (``μmol N m-3 d-1``, ``m-3 h-1``, ``m-2 d-1``, ``m-2 h-1``; U+03BC). Components and Total sit in the same row, so
+nothing is summed. ``Cell_Specific`` sheet: 16 organism triples (rate per cell, cellular N, rate per cellular N). They give
+``shao_n2fix_per_cell`` (fmol N cell-1 d-1), ``shao_cellular_n_content`` (``other``, fmol N cell-1) and ``shao_n2fix_per_cellular_n``
+(fmol N fmol N-1 d-1). The organism is ``sample.taxon`` with ``taxon_rank`` from ``TAXA`` (free text: genus, clade, phylum, cell_type,
+functional_group, host_of_clade).
 
-J1 (plan 1.2): nitrate (``Nitrate (µM)``, U+00B5), phosphate (``Phosphate (µM)``) and chlorophyll a (``Chlorophyll-a (mg m-3)``) ->
-``water_nitrate`` / ``water_phosphate`` / ``water_chl_a``; on the integral sheets the near-surface columns (the same attributes). The
-J1 sample key is reference | latitude | longitude | date | depth | family (volumetric / integral / cell); equal values of one sample and
-attribute collapse (value, comparator and sd must all be equal), different values are all loaded with ``covariate_conflict``. Fe and
-NPP and the C fixation column are not loaded (phase 2, counted). Temperature and salinity go to the sample slots on the volumetric
-and cell sheets only: the integral sheets' columns are NEAR-SURFACE values of an integral sample and, like Francesco's SST, are
-not loaded.
+J1: nitrate (``Nitrate (µM)``, U+00B5), phosphate (``Phosphate (µM)``) and chlorophyll a (``Chlorophyll-a (mg m-3)``) give
+``water_nitrate``, ``water_phosphate`` and ``water_chl_a``. On the integral sheets the near-surface columns are used for the same
+attributes. The J1 sample key is reference | latitude | longitude | date | depth | family (volumetric, integral or cell). Equal values of
+one sample and attribute collapse (value, comparator and sd must all be equal), and different values are all loaded with
+``covariate_conflict``. Fe, NPP and the C fixation column are not loaded (phase 2, counted). Temperature and salinity go to the sample
+slots on the volumetric and cell sheets only. On the integral sheets they are near-surface values of an integral sample and are not loaded.
+Rows of one sample that disagree on a slot are named in ``SLOT_CONFLICT_SAMPLES``, and only the disagreeing slot is NULL for them. Any new
+disagreement, or an allow-listed one that no longer occurs, raises.
 
-Cell contents (all fact-bearing columns; user rules): a number -> a fact; blank / whitespace -> nothing (counted); ``mean (sd)``
-(e.g. ``2.38 (0.64)``) -> value = the mean, ``sd`` = the bracket number, flag ``source_mean_reported``; a malformed one (``0.49 (0.02``,
-``0.01 (0.00)*``) -> skip ``unparseable_value`` (listed in the report); ``<0.02`` / ``> 3`` -> value = the printed number,
-``value_comparator`` = the sign and flag ``inequality``; BELOW_DETECTION codes (``n.d.``, ``nd``, ``bdl``, ``bld``, ``bd``, ``b.d.``,
-``dnq``, ``u.d.``, ``< DL``, ``DL``) -> skip ``below_detection_limit``; NOT_MEASURED codes (``nm``, ``n.a.``, ``na``, ``n/a``, ``n``,
-``/``, ``-``, ``nan``) -> skip ``not_measured``; any other text raises. Counts per code are in the report. In the slot columns
-(temperature, salinity) codes and censored values give NULL (counted).
+Cell contents (all fact-bearing columns; user rules):
+  a number                                -> a fact
+  blank or whitespace                     -> nothing (counted)
+  ``mean (sd)``, e.g. ``2.38 (0.64)``     -> value is the mean, ``sd`` is the bracket, flag ``source_mean_reported``
+  malformed, e.g. ``0.49 (0.02``          -> skip ``unparseable_value`` (listed in the report)
+  ``<0.02``, ``> 3``                      -> value is the printed number, ``value_comparator`` is the sign, flag ``inequality``
+  BELOW_DETECTION codes (n.d., nd, bdl, bld, bd, b.d., dnq, u.d., < DL, DL)  -> skip ``below_detection_limit``
+  NOT_MEASURED codes (nm, n.a., na, n/a, n, /, -, nan)                       -> skip ``not_measured``
+  any other text                          -> raises
+Counts per code are in the report. In the slot columns (temperature, salinity), codes and censored values give NULL (counted).
 
-Notes column (last column of each sheet) -> ``method.notes`` verbatim, one method row per distinct (attribute, METHODS string,
-incubation time, notes); a number in the Notes cell (misplaced data on the integral sheets) is written as its text and counted.
-Flags from Notes: ``converted_by_source`` where a note matches ``CONVERSION_PATTERNS`` (hourly -> daily or daily -> hourly
-statements; counts per pattern in the report) and ``qc_rejected_by_source`` where it says ``REJECTED by Quality Control`` (the
-values are loaded; the flag is on every rate fact of the row, the note says which fraction).
+Notes column (last column of each sheet): copied verbatim to ``method.notes``, with one method row per distinct (attribute, METHODS
+string, incubation time, notes). A number in a Notes cell (misplaced data on the integral sheets) is written as its text and counted.
+Flags from Notes: ``converted_by_source`` where a note matches ``CONVERSION_PATTERNS`` (hourly to daily or daily to hourly statements,
+counts per pattern in the report), and ``qc_rejected_by_source`` where it says ``REJECTED by Quality Control``. The values are loaded, and
+the flag is on every rate fact of the row (the note says which fraction).
 
-References: EVERY non-blank ``SOURCE`` cell starts a new reference block and IS the reference of the rows after it until the next
-non-blank cell (the user's rule): no classification into references and comments. ``reference_key`` = ``doi:<lower-case doi>`` where
-the string contains a DOI, else ``ref:<the string, whitespace-normalised>``; the citation's ``bibliography_id`` is the string, its title
-comes from ``Reference List`` where the DOI matches. ``pers_comm`` only where the string itself says pers. comm. / personal
-communication. A data row before the first SOURCE cell of its sheet raises. The report counts the SOURCE strings with neither a DOI nor
-an author-year pattern (information only).
+References: every non-blank ``SOURCE`` cell starts a new reference block and IS the reference of the rows after it until the next
+non-blank cell (the user's rule), with no classification into references and comments. reference_key is ``doi:<lower-case doi>`` where
+the string contains a DOI, else ``ref:<the string, whitespace-normalised>``. The citation's ``bibliography_id`` is the string, and its title
+comes from ``Reference List`` where the DOI matches. ``pers_comm`` is set only where the string itself says pers. comm. or personal
+communication. A data row before the first SOURCE cell of its sheet raises. The report counts SOURCE strings with neither a DOI nor an
+author-year pattern (information only).
 
-Habitat ``Water column`` from scope (flag ``habitat_from_scope`` on every fact). Dates: datetime -> year/month; text ranges
-(``2008/7/19-8/3``) -> year if both ends agree, month NULL, the text in ``sample.depth_notes``. Depth: volumetric depth ->
-``sample_depth_m``; the integral sheets' depth is the integration depth -> ``depth_notes``; a depth that is text goes to
-``depth_notes``. Coordinates given as text with a tab (``25.128\\t``) are read as numbers (counted).
+Habitat is Water column from scope (``habitat_from_scope`` on every fact). Dates: a datetime gives year and month, and text ranges
+(``2008/7/19-8/3``) give the year if both ends agree with month NULL and the text in ``sample.depth_notes``. Depth: volumetric depth goes
+to ``sample_depth_m``, and the integral sheets' depth (an integration depth) and any text depth go to ``depth_notes``. Coordinates written
+as text with a trailing tab character are read as numbers (counted).
 
 Provenance: ``source_row_ref`` = ``<file>[<sheet>]#data_row=<n>:<attribute>`` (Cell_Specific: ``<attribute>[<taxon>]``).
 

@@ -1,65 +1,58 @@
 #!/usr/bin/env python3
-"""Fulweiler et al. global dataset of aquatic nitrogen fixation rates (EDI edi.1759.2) -> contract tables.
+"""Fulweiler et al. global dataset of aquatic nitrogen fixation rates (EDI edi.1759.2) -> compilation-contract tables.
 
-Fulweiler, R.W., Berberich, M.E., Rinehart, S.A., Taylor, J.M., Kelly, M.C., Ray, N.E., Oczkowski, A., Benavides, M.,
-Church, M.J., Loeks, B., Newell, S., Olofsson, M., Oppong, J., Roley, S.S., Vizza, C., Wilson, S.T., Scott, J.T.,
-Marcarelli, A.M. (2025): Global dataset of nitrogen fixation rates across inland and coastal waters based on a
-coordinated synthesis effort, ver 2. Environmental Data Initiative, doi:10.6073/pasta/333f651ca721da657d5fd0c393d26cf8
-(package edi.1759.2; the EML ``edi.1759.2.xml`` gives CC BY 4.0). Raw files (this directory): ``aquatic_N2fix_rates.csv``
-(4,793 rows, one rate each), ``aquatic_N2fix_ancillary.csv`` (3,238 rows keyed by ``nfix_rate_id``, a subset of the
-rates), ``aquatic_N2fix_references.csv`` (267 references), ``data_dictionary.csv`` (authoritative units and meanings;
-read, not parsed). ``..._with_abstracts.csv``, the EML/report xml and the R script are not loaded.
+Fulweiler, R.W., Berberich, M.E., Rinehart, S.A., Taylor, J.M., Kelly, M.C., Ray, N.E., Oczkowski, A., Benavides, M., Church, M.J.,
+Loeks, B., Newell, S., Olofsson, M., Oppong, J., Roley, S.S., Vizza, C., Wilson, S.T., Scott, J.T., Marcarelli, A.M. (2025): Global
+dataset of nitrogen fixation rates across inland and coastal waters based on a coordinated synthesis effort, ver 2. Environmental Data
+Initiative, doi:10.6073/pasta/333f651ca721da657d5fd0c393d26cf8 (package edi.1759.2; the EML ``edi.1759.2.xml`` gives CC BY 4.0). Raw
+files (this directory): ``aquatic_N2fix_rates.csv`` (one rate per row), ``aquatic_N2fix_ancillary.csv`` (keyed by ``nfix_rate_id``, a
+subset of the rates), ``aquatic_N2fix_references.csv`` and ``data_dictionary.csv`` (authoritative units and meanings, read but not
+parsed). ``..._with_abstracts.csv``, the EML and report xml and the R script are not loaded.
 
-D1 (harmonised value). The fact carries the SOURCE'S CONVERTED molar rate ``nfix_rate_converted`` in the unit
-``nfix_unit_converted`` (four declared spellings). Everything needed to recover the original sits in a per-source-row
-``method_dim`` row (method_key = ``nfix_rate_id``): ``params`` holds the original rate, error and unit, the ARA
-conversion factor, the incubation time and temperature, day, hour, season, the substrate and its details and the
-reference's extraction location; ``conversion_applied`` states the original -> converted values when they differ
-(flag ``converted_by_source``). ``technique`` = ``nfix_method`` (ARA, 15N2, N2/Ar). The 174 N2/Ar rows whose original
-is negative are stored positive by the source (sign flipped); counted in the report.
+The fact carries the SOURCE'S CONVERTED molar rate ``nfix_rate_converted``, in the unit ``nfix_unit_converted`` (four declared
+spellings). Everything needed to recover the original sits in a per-source-row method row (method_key = ``nfix_rate_id``). ``params``
+holds the original rate, error and unit, the ARA conversion factor, incubation time and temperature, day, hour, season, the substrate
+and its details, and the reference's extraction location. ``conversion_applied`` states original -> converted when they differ (flag
+``converted_by_source``). technique is ``nfix_method`` (ARA, 15N2, N2/Ar). N2/Ar rows whose original is negative are stored positive by
+the source, and are counted in the report.
 
-Attribute by ``substrate``: ``wc`` -> ``fulweiler_n2fix_water`` (C5 n2_fixation); ``benthos`` and ``other`` (plants,
-stems, epiphytes) -> ``fulweiler_n2fix_benthic`` (C7 n2_fixation). ``nfix_error_converted``: type ``stdev.`` -> ``sd``,
-``std. err`` -> ``se``; ``C.I.`` and ``range`` are not an SD or SE: no sd/se, the value and type go to params and the
-fact gets ``error_type_other``. A value with NO type is assumed to be an SD (the user's rule, 2026-11-17: default to SD,
-flag it, note it): it goes in ``sd``, the fact gets ``error_type_missing`` and its method row carries
-``notes`` = ``SD_ASSUMED_NOTE``; any other type string raises;
-``nfix_n`` -> ``n`` (blank 68).
+Attribute by ``substrate``: ``wc`` -> ``fulweiler_n2fix_water`` (C5 n2_fixation); ``benthos`` and ``other`` (plants, stems, epiphytes)
+-> ``fulweiler_n2fix_benthic`` (C7 n2_fixation). Error (``nfix_error_converted``): type ``stdev.`` goes to ``sd`` and ``std. err`` to
+``se``. ``C.I.`` and ``range`` are neither, so there is no sd or se, the value and type go to params, and the fact gets
+``error_type_other``. A value with NO type (the file's code is ``NA``) is assumed to be an SD (the user's rule: default to SD, flag it,
+note it). It goes in ``sd``, the fact gets ``error_type_missing`` and its method row carries ``notes`` = ``SD_ASSUMED_NOTE``. Any other
+type string raises. ``nfix_n`` is ``n``.
 
-Habitat (D3). Raw ``habitat_type`` = the ``habitat`` column for ``benthos`` / ``other`` rows and ``<habitat> | wc``
-for ``wc`` rows (both written into ``location_key``, rule 3.10). The label map sends salt marshes, mangroves, tidal
-flats, seagrasses to their standard habitat, every ``... | wc`` label to ``Water column`` (these facts carry
-``habitat_from_scope``: no source states it), ``estuaries`` / ``continental shelves`` (and their wc forms) to a
-``setting`` only, and lakes, rivers and freshwater wetlands to nothing (the inland rows are loaded so the database
-mirrors the compilation).
+Habitat: raw ``habitat_type`` is the ``habitat`` column for ``benthos`` and ``other`` rows and ``<habitat> | wc`` for ``wc`` rows (both in
+``location_key``). The label map sends salt marshes, mangroves, tidal flats and seagrasses to their standard habitat, and every
+``... | wc`` label to ``Water column`` (these facts carry ``habitat_from_scope``, since no source states it). ``estuaries`` and
+``continental shelves`` (and their wc forms) give a ``setting`` only. Lakes, rivers and freshwater wetlands map to nothing (the inland
+rows are loaded so the database mirrors the compilation).
 
-Samples. The plan's grain is reference + lat + lon + date + sample depth + substrate; ``sample_key`` here adds the
-other fields stored on the sample row (substrate details, salinity and its raw unit), so the row is single-valued.
-Rows with no ancillary row have no salinity. ``sample_depth`` is "depth of site, sample, or sediment" (ambiguous): it
-goes to the numeric ``sample_depth_m`` only for ``wc`` rows and is otherwise kept as text in ``depth_notes``
-together with the substrate and its details. Year and month blank -> NULL (flag ``year_missing`` for the year).
-Day, hour and season are in the method params.
+Samples: the plan's grain is reference + lat + lon + date + sample depth + substrate. ``sample_key`` here adds the other fields stored on
+the sample row (substrate details, salinity and its raw unit), so the row is single-valued. Rows with no ancillary row have no salinity.
+``sample_depth`` is "depth of site, sample, or sediment" (ambiguous), so it goes to the numeric ``sample_depth_m`` only for ``wc`` rows and
+is otherwise text in ``depth_notes`` with the substrate details. A blank year gives NULL and ``year_missing``. Day, hour and season are in
+the method params.
 
-J1 (water concentrations from the ancillary file; rules of INTEGRATION_PLAN 1.2). One fact per (sample,
-distinct value): ``NH4_wc`` water_ammonium, ``NO3_wc`` water_nitrate, ``NO2_wc`` water_nitrite, ``NOx_wc``
-water_nitrate_nitrite, ``DIN_wc`` water_din, ``DIP_wc`` water_phosphate, ``DO_wc`` water_o2, ``chla_wc`` water_chl_a,
-``pH`` water_ph (unit ``unitless``, from the data dictionary). Units are the ancillary file's unit cells verbatim
-(whitespace normalised; 2 to 13 spellings per attribute, some areal or percent: the J1 attribute is not
-unit-homogeneous). A value with no unit cell is skipped (``units_missing``; 4 ``chla_wc`` cells). Repeats of one value
-in a sample collapse into the first row's fact and are counted; two different values in one sample are both kept with
-``covariate_conflict``. Salinity (+ its unit cell) goes to the sample slot; a value with no unit keeps NULL units and the
-facts of that row carry ``salinity_units_missing``. Not loaded (phase 2): conductivity, PAR, flow, residence time,
-water table, primary production, DIN flux, POC_wc, PON_wc and every ``*_sed`` column (counts in the report).
+J1 water concentrations (from the ancillary file; INTEGRATION_PLAN 1.2): one fact per (sample, distinct value and unit). ``NH4_wc``
+water_ammonium, ``NO3_wc`` water_nitrate, ``NO2_wc`` water_nitrite, ``NOx_wc`` water_nitrate_nitrite, ``DIN_wc`` water_din, ``DIP_wc``
+water_phosphate, ``DO_wc`` water_o2, ``chla_wc`` water_chl_a, and ``pH`` water_ph (unit ``unitless``, from the data dictionary). Units are
+the file's unit cells verbatim (whitespace normalised), 2 to 13 spellings per attribute, some areal or percent, so a J1 attribute here is
+not unit-homogeneous. A value with no unit cell is skipped (``units_missing``). Repeats of a value in a sample collapse into the first
+row's fact and are counted. Two different values in one sample are both kept with ``covariate_conflict``. Salinity and its unit cell go to
+the sample slot, and a value with no unit keeps NULL units and the row's facts carry ``salinity_units_missing``.
+Not loaded (phase 2): conductivity, PAR, flow, residence time, water table, primary production, DIN flux, POC_wc, PON_wc and every
+``*_sed`` column (counts in the report).
 
-References: ``reference_id`` (R1..R267) is the study id and ``reference_key``; the references file supplies DOI (lower
-case), url, authors, title, year; ``bibliography_id`` = the shorthand ``reference``. Journal, volume and pages are not loaded.
+References: ``reference_id`` (R1 to R267) is the study id and ``reference_key``. The references file supplies DOI (lower case), url,
+authors, title and year, and ``bibliography_id`` is the shorthand ``reference``. Journal, volume and pages are not loaded.
 
-Flags: zero_value, year_missing, duplicate_source_row (rate rows identical in every column except ``nfix_rate_id``,
-both or all copies flagged, as Chang), habitat_from_scope, converted_by_source, error_type_other, error_type_missing,
-salinity_units_missing, covariate_conflict.
+Flags: zero_value, year_missing, duplicate_source_row (rate rows identical in every column except ``nfix_rate_id``, all copies flagged),
+habitat_from_scope, converted_by_source, error_type_other, error_type_missing, salinity_units_missing, covariate_conflict.
 
-Provenance: ``source_row_ref`` = ``<file>#data_row=<0-based data row>:<attribute>`` in the rates file (rate facts) or the
-ancillary file (J1 facts; the first row of the sample carrying the value).
+Provenance: ``source_row_ref`` = ``<file>#data_row=<0-based row>:<attribute>`` in the rates file (rate facts) or the ancillary file (J1
+facts, the first row of the sample carrying the value).
 
 Usage:
     python -I extract.py --access-date YYYY-MM-DD

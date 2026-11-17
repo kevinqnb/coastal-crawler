@@ -1,32 +1,32 @@
 #!/usr/bin/env python3
 """Ribeiro et al. (2019) Appendix S1 reference list -> compilation-contract tables. NO MEASUREMENTS.
 
-Ribeiro, R.A., Rovai, A.S., Twilley, R.R., Castaneda-Moya, E. (2019): Spatial variability of mangrove primary productivity
-in the neotropics. Ecosphere 10(8), e02841, doi:10.1002/ecs2.2841. Raw file (this directory):
-``ecs22841-sup-0001-appendixs1.pdf`` (13 PDF pages): page 1 front matter, page 2 Table S1 (AIC model coefficients) and S2
-(ANOVA) of the authors' litterfall model, pages 3-13 "List of studies used to build the litterfall model for mangroves in the
-neotropics". Tables S1 and S2 are modelling output, not measurements, and are not loaded.
+Ribeiro, R.A., Rovai, A.S., Twilley, R.R., Castaneda-Moya, E. (2019): Spatial variability of mangrove primary productivity in the
+neotropics. Ecosphere 10(8), e02841, doi:10.1002/ecs2.2841. Raw file (this directory): ``ecs22841-sup-0001-appendixs1.pdf`` (13 pages):
+page 1 front matter, page 2 Tables S1 (AIC model coefficients) and S2 (ANOVA) of the authors' litterfall model, and pages 3 to 13 the "List
+of studies used to build the litterfall model for mangroves in the neotropics". Tables S1 and S2 are modelling output, not measurements,
+and are not loaded.
 
-What this builds: the ``source`` row, and one ``reference`` + one ``citation`` row per listed study (``reference_key`` =
-``ref:<first author [and second | et al.] year[letter]>``). There is NO location, sample, method or fact row, so the build needs
-the explicit ``--allow-factless ribeiro-mangrove`` flag (contract change C1); this extract passes the same exemption to
-``write_extracted``. The point of listing the studies is to seed literature extraction, which needs their DOIs (``doi`` NULL here;
-the later OpenAlex job fills ``doi_resolved``).
+What this builds: the ``source`` row, and one ``reference`` and one ``citation`` row per listed study (``reference_key`` = ``ref:<first
+author [and second | et al.] year[letter]>``). There is NO location, sample, method or fact row, so the build needs the explicit
+``--allow-factless ribeiro-mangrove`` flag, and this extract passes the same exemption to ``write_extracted``. The point of listing the
+studies is to seed literature extraction, which needs their DOIs (``doi`` is NULL here, and the later OpenAlex job fills ``doi_resolved``).
 
-Parsing (Ecosphere reference style, double spaced, no hanging indent): text lines are read with pdfplumber, page-number lines
-dropped; a vertical gap above ``PARAGRAPH_GAP_PT`` between line tops starts a new paragraph. A page can end in the middle of an
-entry: the first paragraph of a page continues the last one of the previous page when that one is incomplete (no ``. YEAR.``
-or no final full stop); when it is complete the next paragraph must look like an author start, else the parse raises. Each
-paragraph must match ``Authors. YEAR[letter]. Title and publication details``; the extract asserts that the number of parsed
-entries equals the number of paragraphs that contain a year and the number of paragraphs (a paragraph that fails to parse
-raises), and that the reference keys are unique. ``citation.authors`` = the author string as printed (initials-first after the
-first author), ``citation.year`` the year, ``citation.title`` the text after the year (title, journal, volume:pages, publisher
-or institution as printed: the entries have no separable title) and ``publication_type`` from keywords: ``dissertation`` /
-``thesis`` (the words ``Dissertation.`` / ``Thesis.`` as a sentence), ``book chapter`` (``Pages N-N in``), ``proceedings`` (``Proceedings of``), ``journal article``
-(ends in ``volume:pages.``), else NULL (a report or book the keywords do not identify).
+Parsing (Ecosphere reference style, double spaced, no hanging indent): text lines are read with pdfplumber and page-number lines dropped. A
+vertical gap above ``PARAGRAPH_GAP_PT`` between line tops starts a new paragraph. A page can end in the middle of an entry: the first
+paragraph of a page continues the last one of the previous page when that one is incomplete (no ``. YEAR.`` or no final full stop). When it
+is complete, the next paragraph must look like an author start, or the parse raises. Each paragraph must match ``Authors. YEAR[letter].
+Title and publication details``. The extract asserts that the parsed entries equal the paragraphs that contain a year and the paragraphs
+(a paragraph that fails to parse raises), and that the reference keys are unique.
+  * ``citation.authors`` is the author string as printed (initials-first after the first author) and ``citation.year`` the year.
+  * ``citation.title`` is the text after the year (title, journal, volume:pages, publisher or institution as printed, since the entries
+    have no separable title).
+  * ``publication_type`` comes from keywords: ``dissertation`` or ``thesis`` (the word as a sentence), ``book chapter`` (``Pages N-N in``),
+    ``proceedings`` (``Proceedings of``), ``journal article`` (ends in ``volume:pages.``), otherwise NULL (a report or book the keywords do
+    not identify).
 
-The PDF's text layer garbles a few author strings (e.g. ``S. . Iriarte-Vivar``, ``C. M. A. . M. A. Hernandez``: duplicated
-initials in the source file); they are kept as printed.
+The PDF's text layer garbles a few author strings (e.g. ``S. . Iriarte-Vivar``, duplicated initials in the source file), and they are kept
+as printed.
 
 Usage:
     python -I extract.py --access-date YYYY-MM-DD

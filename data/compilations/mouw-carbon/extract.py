@@ -1,59 +1,55 @@
 #!/usr/bin/env python3
-"""Mouw et al. global ocean POC flux compilation (sediment traps and 234Th) -> contract tables.
+"""Mouw et al. global ocean POC flux compilation (sediment traps and 234Th) -> compilation-contract tables.
 
-Mouw, C.B., Barnett, A., McKinley, G.A., Gloege, L., Pilcher, D. (2016): Global ocean particulate organic carbon flux
-merged with satellite parameters [dataset publication series]. PANGAEA, doi:10.1594/PANGAEA.855600; the flux dataset
-is doi:10.1594/PANGAEA.855594 (supplement to ESSD 8(2), 531-541, doi:10.5194/essd-8-531-2016). CC-BY-3.0. Raw files
-(this directory): ``datasets/GO_flux.tab`` (a PANGAEA tab file: comment header ending in ``*/``, then one tab-separated
-table) and ``summary.txt`` (the collection description). The other five ``datasets/*.tab`` files (GO_chl_2010, GO_chl_2014,
-GO_microplankton, GO_mixed_layer, GO_sst) are satellite / climatology products the authors matched to the trap locations:
-never loaded (INTEGRATION_PLAN 3.5, context only from values measured beside the fact; they are not even opened here).
+Mouw, C.B., Barnett, A., McKinley, G.A., Gloege, L., Pilcher, D. (2016): Global ocean particulate organic carbon flux merged with satellite
+parameters. PANGAEA, doi:10.1594/PANGAEA.855600; the flux dataset is doi:10.1594/PANGAEA.855594 (supplement to ESSD 8(2), 531-541,
+doi:10.5194/essd-8-531-2016). CC-BY-3.0. Raw files (this directory): ``datasets/GO_flux.tab`` (a PANGAEA tab file: a comment header ending in
+``*/``, then one tab-separated table) and ``summary.txt``. The other five ``datasets/*.tab`` files (chlorophyll, microplankton, mixed layer,
+SST) are satellite and climatology products matched to the trap locations. They are never loaded and not even opened (INTEGRATION_PLAN 3.5:
+context only from values measured beside the fact).
 
-Grain: ONE FACT PER NON-BLANK NUMERIC FLUX CELL of the seven columns below (every value is a number: no codes occur; any
-non-numeric text raises). One sample per source row (a trap deployment or 234Th station). Values are exactly as in the file.
+Grain: one fact per non-blank numeric flux cell of the seven columns below (every value is a number, and any non-numeric text raises). One
+sample per source row (a trap deployment or 234Th station). Values are as in the file.
 
-Column -> attribute (type/subfield), all ``mg/m**2/day`` (the header unit; asserted), ``sd`` from the paired std-dev column:
-  Flux tot            mouw_total_mass_flux   C6 total_mass_flux            sd = ``Flux std dev``
-  POC flux            mouw_poc_flux          C6 poc_flux                   sd = ``POC flux std dev``
-  PON flux            mouw_pon_flux          C6 pon_flux                   sd = ``PON flux std dev``
-  CaCO3 flux          mouw_caco3_flux        C6 biogenic_silica_carbonate_flux   sd = ``CaCO3 flux std dev``
-  PSi flux            mouw_psi_flux          C6 biogenic_silica_carbonate_flux   sd = ``PSi flux std dev``
+Column -> attribute (type/subfield), all ``mg/m**2/day`` (the header unit, asserted), with ``sd`` from the paired std-dev column:
+  Flux tot            mouw_total_mass_flux   C6 total_mass_flux                     sd = ``Flux std dev``
+  POC flux            mouw_poc_flux          C6 poc_flux                            sd = ``POC flux std dev``
+  PON flux            mouw_pon_flux          C6 pon_flux                            sd = ``PON flux std dev``
+  CaCO3 flux          mouw_caco3_flux        C6 biogenic_silica_carbonate_flux      sd = ``CaCO3 flux std dev``
+  PSi flux            mouw_psi_flux          C6 biogenic_silica_carbonate_flux      sd = ``PSi flux std dev``
   PSiO2 flux          mouw_psio2_flux        C6 biogenic_silica_carbonate_flux
   PSi(OH)4 flux       mouw_psioh4_flux       C6 biogenic_silica_carbonate_flux
-Not loaded (phase 2 ``other`` analytes, or no plan decision; counted per column in the report): TC flux, PIC, POP, PAl,
-Chl, Pheop (ug), Fe, Mn (ug), Ba (ug), Detrital, Ti (ug) and their std-dev columns. The std-dev columns of the seven loaded
-columns are used as ``sd`` (a std-dev without a flux value never occurs: asserted). The derived ``Bathy depth`` (ETOPO1
-gridded bathymetry) is not loaded.
+Not loaded (phase 2 ``other`` analytes, or no plan decision; counted per column in the report): TC flux, PIC, POP, PAl, Chl, Pheop, Fe,
+Mn, Ba, Detrital and Ti, with their std-dev columns. A std-dev without a flux value never occurs (asserted). The derived ``Bathy depth``
+(ETOPO1 gridded bathymetry) is not loaded.
 
-Context
-  * ``Depth water`` (trap deployment depth) -> ``sample.sample_depth_m``; ``Elevation`` (total water depth, negative) ->
-    ``location.water_depth_m`` with the sign flipped (positive down; raw recoverable via source_row_ref); blank on rows
-    without it. ``location_key`` = latitude | longitude | elevation, all as written in the file (the file's own
-    ``unique location identifier`` is not constant in its coordinates and depth, so it is not used).
-  * ``Date/Time (Deployed)`` -> sampling_year, sampling_month (8 rows have none: flag ``year_missing``). The deployment
-    duration varies per row and method rows are not per row, so it goes to ``sample.depth_notes`` as text
-    ``duration_days=<as written>; retrieved=<as written>`` (the written rule; zero durations occur and are kept).
-  * Longitudes are within [-180, 180] (asserted; 180.0 occurs and is valid).
-  * Habitat ``Water column`` from the dataset's scope (sediment traps and 234Th in the open ocean), flag ``habitat_from_scope``
-    on every fact.
-  * Method: one row per (attribute, ``Type``, ``Sediment trap type``); technique = ``<Type>; <trap type>`` with the file's
-    own spelling (``sediment_trap`` / ``th234``; trap type ``unknown`` kept).
+Context:
+  * ``Depth water`` (trap deployment depth) goes to ``sample.sample_depth_m``. ``Elevation`` (total water depth, negative) goes to
+    ``location.water_depth_m`` with the sign flipped (positive down; the raw value is recoverable via source_row_ref), and is blank on rows
+    without it. location_key = latitude | longitude | elevation, as written. The file's own ``unique location identifier`` is not constant
+    in its coordinates and depth, so it is not used.
+  * ``Date/Time (Deployed)`` gives sampling_year and sampling_month (rows without one get ``year_missing``). The deployment duration varies
+    per row and method rows are not per row, so it goes to ``sample.depth_notes`` as text ``duration_days=<as written>;
+    retrieved=<as written>`` (zero durations occur and are kept).
+  * Longitudes are within [-180, 180] (asserted; 180.0 is valid).
+  * Habitat is Water column from the dataset's scope (open-ocean traps and 234Th), with ``habitat_from_scope`` on every fact.
+  * Method: one row per (attribute, ``Type``, ``Sediment trap type``). technique is ``<Type>; <trap type>`` in the file's spelling
+    (``sediment_trap`` or ``th234``; trap type ``unknown`` kept).
 
-References (INTEGRATION_PLAN 1.3 and 5.14): ``reference_key`` = ``mouw_id:<ID>`` (the file's ``ID (Reference identifier)``,
-43 values). The ``Reference`` text is on every row of an ID, EXCEPT IDs 2 (3,613 rows) and 14 (820 rows). One
-``citation_dim`` row per cited paper: ID 7 cites two (an explicit split, asserted); the strings are carried as written
-(``bibliography_id``). A string of the form ``Surname et al., YYYY`` / ``Surname and Surname, YYYY`` gets a DOI and URL only
-where the header's ``Related to:`` list holds exactly one citation with that first-author surname and year (and second
-author); strings naming a data archive or a personal communication are never matched; unmatched strings are listed in the
-report. ID 14 is BATS by inference (one location, 31.613 N 64.314 W, 1988-12-16..2011-12-07, which the extract asserts)
-and Table 2 of the ESSD paper gives http://bats.bios.edu: the citation is that web page, the facts carry
-``reference_inferred``. ID 2 has no resolvable reference: ``reference_dim`` row only, no citation, facts carry
-``reference_unresolved``. Facts whose reference string says ``pers. comm.`` carry ``pers_comm``.
+References (INTEGRATION_PLAN 1.3 and 5.14): reference_key is ``mouw_id:<ID>`` (the file's ``ID (Reference identifier)``, 43 values). The
+``Reference`` text is on every row of an ID, EXCEPT IDs 2 and 14. One citation row per cited paper: ID 7 cites two (an explicit split,
+asserted), and strings are carried as written (``bibliography_id``). A string like ``Surname et al., YYYY`` or ``Surname and Surname, YYYY``
+gets a DOI and URL only where the header's ``Related to:`` list holds exactly one citation with that first-author surname and year (and
+second author). Strings naming a data archive or a personal communication are never matched, and unmatched strings are listed in the report.
+ID 14 is BATS by inference (one location, 31.613 N 64.314 W, 1988-12-16 to 2011-12-07, which the extract asserts, and Table 2 of the ESSD
+paper gives http://bats.bios.edu). The citation is that web page and the facts carry ``reference_inferred``. ID 2 has no resolvable
+reference: a ``reference_dim`` row only, no citation, and facts carry ``reference_unresolved``. Facts whose reference string says
+``pers. comm.`` carry ``pers_comm``.
 
 Flags: habitat_from_scope (all), reference_inferred, reference_unresolved, pers_comm, year_missing, zero_value, negative_value.
 
-Provenance: ``source_row_ref`` = ``datasets/GO_flux.tab#data_row=<0-based data row>:<attribute>`` (the data row is the row
-of the table below the ``*/`` line, header excluded).
+Provenance: ``source_row_ref`` = ``datasets/GO_flux.tab#data_row=<0-based row>:<attribute>`` (the row of the table below the ``*/`` line,
+header excluded).
 
 Usage:
     python -I extract.py --access-date YYYY-MM-DD

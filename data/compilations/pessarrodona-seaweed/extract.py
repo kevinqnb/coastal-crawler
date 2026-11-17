@@ -1,51 +1,48 @@
 #!/usr/bin/env python3
-"""Pessarrodona et al. global dataset of seaweed net primary productivity -> contract tables.
+"""Pessarrodona et al. global dataset of seaweed net primary productivity -> compilation-contract tables.
 
-Pessarrodona, A., Filbee-Dexter, K., Krumhansl, K.A., Moore, P.J., Pedersen, M.F., Wernberg, T. (2021): A global dataset
-of seaweed net primary productivity. figshare, doi:10.6084/m9.figshare.14882322.v5 (Scientific Data 2022). Raw files
-(this directory): ``NPP Dataset.csv`` (latin-1, 1,121 data rows, 80 columns of which 44 are empty ``Unnamed`` columns),
-``NPP dataset Sci Data code.R`` (not read), ``References from database.pdf`` (261 reference entries).
+Pessarrodona, A., Filbee-Dexter, K., Krumhansl, K.A., Moore, P.J., Pedersen, M.F., Wernberg, T. (2021): A global dataset of seaweed net
+primary productivity. figshare, doi:10.6084/m9.figshare.14882322.v5 (Scientific Data 2022). Raw files (this directory): ``NPP Dataset.csv``
+(latin-1; 44 of its 80 columns are empty ``Unnamed`` columns), ``NPP dataset Sci Data code.R`` (not read) and
+``References from database.pdf``.
 
-D1 (harmonised value). ONE FACT PER ROW: ``pessarrodona_npp`` (B6 ``seagrass_seaweed_npp``) = the source's harmonised
-``Avg_NPP_kg_C_m2_y`` in ``kg C m-2 y-1`` (the header's unit; all 1,121 rows have a value), ``sd`` = ``stdev_NPP_kg_C_m2_y``
-(blank and ``NA`` -> NULL). The ORIGINAL value (``Avg_NPP`` and ``sted_NPP`` with ``NPP_units``), ``Matter_Unit`` (DW, C,
-FW, O), the FW:DW and DW:C conversion factors, and the rest of the row's method information sit in a per-source-row
-``method_dim`` row (method_key = ``row<i>``) as ``params``; ``conversion_applied`` states original -> harmonised where they
-differ (flag ``converted_by_source``). A conversion factor the file does not hold cannot be told apart from none. Not
-loaded: ``Standing biomass_kg_DW_m2`` (11 values; not in the plan, reported) and the empty ``Unnamed`` columns; the
-stray non-empty cells in columns 73, 77, 78, 79 (rows 1083 and 1084) are asserted to be exactly the known ones.
+Harmonised value. One fact per row: ``pessarrodona_npp`` (B6 ``seagrass_seaweed_npp``) is the source's harmonised ``Avg_NPP_kg_C_m2_y``
+in ``kg C m-2 y-1`` (the header's unit), and ``sd`` is ``stdev_NPP_kg_C_m2_y`` (blank and ``NA`` give NULL). The ORIGINAL value
+(``Avg_NPP`` and ``sted_NPP`` with ``NPP_units``), ``Matter_Unit`` (DW, C, FW, O), the FW:DW and DW:C conversion factors and the rest of
+the row's method information sit in a per-source-row method row (method_key = ``row<i>``) as ``params``. ``conversion_applied`` states
+original -> harmonised where they differ (flag ``converted_by_source``). A conversion factor the file does not hold cannot be told apart
+from none. Not loaded: ``Standing biomass_kg_DW_m2`` (11 values, not in the plan, reported) and the empty ``Unnamed`` columns. The stray
+non-empty cells in columns 73, 77, 78 and 79 (rows 1083 and 1084) are asserted to be exactly the known ones.
 
-Locations: ``location_key`` = Site | Site_ID_within_study | lat | lon | habitat label | Level | Originalcoordinates |
-Depth_min_m | Depth_max_m. ``habitat_type`` = ``<Vegetation_category> | <Substrate_category>`` (composite, approved in the
-plan; every combination is in the label map and an unlisted one raises). ``tidal_position`` = ``Level`` (Intertidal /
-Subtidal; ``NA`` -> NULL). ``position_method``: ``Originalcoordinates`` YES -> ``reported``, NO -> ``approximated by
-compiler`` (also flag ``coords_approximate``); 9 rows have no coordinates (flag ``coords_missing``).
-Depth: ``Depth_min_m`` / ``Depth_max_m`` (``NA`` both on 61 rows). Rule: ``location.water_depth_m`` is set ONLY when min = max
-AND the value is >= 0; every other case (a range, or a negative value) is text in the sample's ``depth_notes``. The
-negative values occur almost only on intertidal rows (192 of 195 rows with a negative bound), which reads as
-elevation above the water level, but the source states no sign convention, so no sign is interpreted: nothing negative
-is written to the numeric slot.
+Locations: location_key = Site | Site_ID_within_study | lat | lon | habitat label | Level | Originalcoordinates | Depth_min_m | Depth_max_m.
+habitat_type is ``<Vegetation_category> | <Substrate_category>`` (a composite, approved in the plan; every combination is in the label map
+and an unlisted one raises). tidal_position is ``Level`` (Intertidal or Subtidal; ``NA`` gives NULL). position_method: ``Originalcoordinates``
+YES gives ``reported`` and NO gives ``approximated by compiler`` (also ``coords_approximate``). Rows with no coordinates get
+``coords_missing``.
+Depth: ``location.water_depth_m`` is set ONLY when ``Depth_min_m`` equals ``Depth_max_m`` AND the value is >= 0. Every other case (a range,
+or a negative value) is text in the sample's ``depth_notes``. Negative values occur almost only on intertidal rows, which reads as
+elevation above the water level, but the source states no sign convention, so no sign is interpreted and nothing negative reaches the numeric
+slot.
 
-Samples: one per source row (``row<i>``): ``sampling_year`` = ``Start_year`` when it equals ``End_year`` (NULL for a
-multi-year range, kept as text in ``depth_notes``; flag ``year_missing`` only where Start_year is ``NA``, 52 rows);
-``taxon`` = ``Species`` (the source's label, e.g. ``Turf assemblage``), ``taxon_rank`` = ``multiple`` where
-``Multispecies`` = YES else ``species``. Phylum, order, family, genus, seasons and sampling frequency are in the params.
+Samples: one per row (``row<i>``). sampling_year is ``Start_year`` when it equals ``End_year``. A multi-year range gives NULL, with the range
+as text in ``depth_notes``, and ``year_missing`` applies only where Start_year is ``NA``. taxon is ``Species`` (the source's label, e.g.
+``Turf assemblage``), with rank ``multiple`` where ``Multispecies`` is YES, else ``species``. Phylum, order, family, genus, seasons and
+sampling frequency are in the params.
 
-Methods: ``technique`` = ``Prod_method_group`` (``Unknown`` on 8 rows -> NULL technique, status ``method_id_null``);
-``Prod_method_general``, ``Description``, ``Data_mining_method`` (flag ``digitized_from_figure`` where it contains
-``Graph digitizer``), ``Aggregation_required``, ``Person_entering_data`` are params.
+Methods: technique is ``Prod_method_group`` (``Unknown`` gives a NULL technique and method_id_null). ``Prod_method_general``,
+``Description``, ``Data_mining_method`` (``digitized_from_figure`` where it contains ``Graph digitizer``), ``Aggregation_required`` and
+``Person_entering_data`` are params.
 
-References: ``Reference`` strings (author-year text) -> ``ref:<string>`` (whitespace normalised). Full text and DOIs come
-from the PDF's entries by an explicit rule: first-author surname (ASCII-folded, from the entry; ``———`` repeats the
-previous author) and the year with its suffix letter must match exactly ONE entry, and for ``A & B`` strings B must be in
-that entry. Anything else (typos, suffix letters the PDF lacks, secondary citations ``X in Y``, theses, unpublished work)
-is NOT guessed: it keeps a text-only citation and is listed in the report. Strings of the form ``X in Y`` / ``cited in``
-(the source marks the citation as secondary) carry flag ``cited_secondary``.
+References: ``Reference`` strings (author-year text) give ``ref:<string>`` (whitespace normalised). Full text and DOIs come from the PDF's
+entries by an explicit rule: the first-author surname (ASCII-folded; ``———`` repeats the previous author) and the year with its suffix
+letter must match exactly ONE entry, and for ``A & B`` strings B must be in that entry. Anything else (typos, suffix letters the PDF lacks,
+secondary citations, theses, unpublished work) is NOT guessed. It keeps a text-only citation and is listed in the report. Strings of the form
+``X in Y`` or ``cited in`` (the source marks the citation as secondary) carry ``cited_secondary``.
 
-Flags: negative_value (harmonised value < 0), zero_value, coords_missing, coords_approximate, year_missing,
-digitized_from_figure, converted_by_source, cited_secondary, duplicate_source_row (none occur; asserted).
+Flags: negative_value (harmonised value < 0), zero_value, coords_missing, coords_approximate, year_missing, digitized_from_figure,
+converted_by_source, cited_secondary, duplicate_source_row (none occur, asserted).
 
-Provenance: ``source_row_ref`` = ``NPP Dataset.csv#data_row=<0-based data row>:pessarrodona_npp``.
+Provenance: ``source_row_ref`` = ``NPP Dataset.csv#data_row=<0-based row>:pessarrodona_npp``.
 
 Usage:
     python -I extract.py --access-date YYYY-MM-DD

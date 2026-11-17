@@ -1,73 +1,61 @@
 #!/usr/bin/env python3
 """USGS tidal saline wetland ecosystem properties (Feher et al.) -> compilation-contract tables.
 
-Feher, L.C., Osland, M.J., Grace, J.B., Buffington, K.J., Carr, J.A., Guntenspergen, G.R.,
-Martinez, M., Neville, J.A., Rankin, L.L., Thorne, K.M. (2025): North American dataset of
-ecosystem properties in tidal saline wetlands -- Canopy height, aboveground biomass, productivity,
-soil carbon density, and soil carbon accumulation. U.S. Geological Survey data release,
-doi:10.5066/P133WKRO. Raw files (this directory): ``ecosystem_attribute_data_2023.xlsx`` (five
-data sheets + ``Citations``) and its FGDC metadata ``ecosystem_attributes_2023.xml``.
+Feher, L.C., Osland, M.J., Grace, J.B., Buffington, K.J., Carr, J.A., Guntenspergen, G.R., Martinez, M., Neville, J.A., Rankin, L.L.,
+Thorne, K.M. (2025): North American dataset of ecosystem properties in tidal saline wetlands: canopy height, aboveground biomass,
+productivity, soil carbon density, and soil carbon accumulation. U.S. Geological Survey data release, doi:10.5066/P133WKRO. Raw
+files (this directory): ``ecosystem_attribute_data_2023.xlsx`` (five data sheets and ``Citations``) and its FGDC metadata
+``ecosystem_attributes_2023.xml``.
 
-Grain: ONE FACT PER SOURCE DATA ROW (every row of the five data sheets has exactly one value;
-asserted). Values are carried exactly as reported, in the unit of the sheet's ``units`` column
-(asserted equal to the declared unit). Nothing is converted or capped.
+Grain: one fact per data row (every row of the five data sheets has exactly one value, asserted), in the unit of the sheet's
+``units`` column (asserted equal to the declared unit). Nothing is converted or capped.
 
 Sheet -> attribute (type/subfield, unit):
-  Height               usgs_canopy_height        B3 canopy_height              m
-  Biomass              usgs_aboveground_biomass  B2 above_ground_biomass       t/ha   (xml: "average aboveground vegetation biomass")
-  Productivity         usgs_productivity         B6 litterfall | above_ground_npp | NULL    t/ha/yr
-  soil_C_density       usgs_soil_c_density       C1 soil_carbon_density (extension)  g/cm3
-  soil_C_accumulation  usgs_soil_c_accum         G2 carbon_burial              g/m2/yr
+  Height               usgs_canopy_height        B3 canopy_height                       m
+  Biomass              usgs_aboveground_biomass  B2 above_ground_biomass                t/ha
+  Productivity         usgs_productivity         B6 litterfall | above_ground_npp | NULL  t/ha/yr
+  soil_C_density       usgs_soil_c_density       C1 soil_carbon_density (extension)     g/cm3
+  soil_C_accumulation  usgs_soil_c_accum         G2 carbon_burial                       g/m2/yr
 
-Productivity subfield (one written rule, an exhaustive table over the 14 ``method`` strings; an
-unknown string raises). The xml defines the whole sheet as "average aboveground vegetation
-productivity", so every named method maps to ``above_ground_npp`` except the litterfall one;
-``not reported`` leaves the subfield NULL (the method is unknown, nothing is guessed):
-  litterfall, recorded monthly over at least 1 year              -> litterfall
-  peak standing crop | Smalley 1959 | Wiegert and Evans 1964 | Milner and Hughes 1968 |
-  summation method for NPP (litterfall + wood growth) | non-destructive | Valiela et al. 1975 |
-  Rey's method | Shew et al. 1981 | Lomnicki et al. 1968 | Wiegert and McGinnis 1975 |
-  Pierce 1983; Dickerman et al. 1986                             -> above_ground_npp
-  not reported                                                   -> NULL
+Productivity subfield (an exhaustive table over the 14 ``method`` strings; an unknown string raises). The xml defines the whole sheet
+as aboveground productivity, so every named method maps to ``above_ground_npp`` except the litterfall one. ``not reported`` leaves
+the subfield NULL, since the method is unknown:
+  litterfall, recorded monthly over at least 1 year -> litterfall
+  peak standing crop | Smalley 1959 | Wiegert and Evans 1964 | Milner and Hughes 1968 | summation method for NPP (litterfall + wood
+  growth) | non-destructive | Valiela et al. 1975 | Rey's method | Shew et al. 1981 | Lomnicki et al. 1968 | Wiegert and McGinnis
+  1975 | Pierce 1983; Dickerman et al. 1986 -> above_ground_npp
+  not reported -> NULL
 
-Locations (``location_key`` = lat | lon | type | veg_type | location, the five source fields, so rows at
-one coordinate with different labels stay separate): site_name = ``location`` (stripped);
-habitat_type = ``type`` raw (salt marsh / mangrove / salt flat / salt marsh mangrove; the label map maps
-salt marsh and mangrove and leaves salt flat and the mixed class blank); vegetation_class = ``veg_type`` raw
-(G, M, F, S, G/M). The source places some sites approximately from the text (Google Earth, xml): that is
-not marked per row, so no per-fact flag; ``coords_integer_degree`` marks rows with both coordinates whole
-degrees. No country is derived from the location string.
+Locations: location_key = lat | lon | type | veg_type | location, so rows at one coordinate with different labels stay separate.
+site_name is ``location`` (stripped). habitat_type is ``type`` raw (salt marsh, mangrove, salt flat, salt marsh mangrove; the label map
+maps the first two and leaves the others blank). vegetation_class is ``veg_type`` raw. Some sites were placed approximately from the
+text (Google Earth, xml), which is not marked per row, so there is no per-fact flag. ``coords_integer_degree`` marks both coordinates
+being whole degrees. No country is derived.
 
-Samples: one per data row (keyed sheet:row). Only soil_C_density has a depth: ``core_depth_cm`` is parsed
-strictly as ``0-N`` into depth_min/max_cm; ``not reported`` -> NULL depth + flag ``depth_missing``. The other
-sheets' values are site averages with no sediment depth interval. The source has no year.
+Samples: one per data row (keyed sheet:row). Only soil_C_density has a depth: ``core_depth_cm`` is parsed strictly as ``0-N`` into
+depth_min and depth_max, and ``not reported`` gives NULL depth and ``depth_missing``. The other sheets are site averages with no
+sediment depth interval. The source has no year.
 
-Methods: one ``method_dim`` row per distinct (attribute, method string, range, source_review,
-included_Feher_2017); ``technique`` = the sheet's ``method`` string (Biomass, Productivity only; ``not reported`` ->
-NULL technique, ``method_status = method_id_null``, flag ``method_missing``); the sheet's ``*_range`` text,
-``source_review`` and ``included_Feher_2017`` go to ``params`` (the range is NOT an sd; sd, se, n are NULL).
-Sheets without a method column get ``method_id_null`` and no ``method_missing`` flag.
+Methods: one row per distinct (attribute, method string, range, source_review, included_Feher_2017). technique is the sheet's
+``method`` string (Biomass and Productivity only). ``not reported`` gives a NULL technique, method_id_null and ``method_missing``.
+The ``*_range`` text, ``source_review`` and ``included_Feher_2017`` go to ``params``. The range is NOT an sd, and sd, se and n are NULL.
+Sheets without a method column get method_id_null and no ``method_missing``.
 
-References: ``source_primary`` is the study. Citation strings (data cells and the Citations tab) are
-whitespace-normalised first (the tab has NBSP characters). Each ``;``-separated part is looked up in the
-Citations tab by an accent- and case-insensitive match of the normalised string. A part with a valid DOI url
-(``10.NNNN/...``; three ``doi.org`` urls are not DOIs and are kept as plain urls) gets ``doi:<lower-case doi>``,
-else ``ref:<string>``; a composite string gets the part keys joined by ``+`` with one citation row per part,
-and the number of parts must equal the number of citation rows. A part with no Citations row must be in the
-declared sets below (``UNPUBLISHED``: the source's own "unpublished data"; ``UNRESOLVED_NEAR_MISS``: a
-different-year entry exists but the data side has no title to check, so no match is made); the set of
-unmatched parts must equal their union exactly. ``COMMA_SPLITS`` declares the one comma-joined composite.
-Citation rows keep the tab's ``full_citation`` text in ``title`` (SCOC / BenBioDen precedent), unparsed.
-``source_review`` (the secondary compilation the value was taken from) is kept as a string in ``params``
-with the flag ``secondary_source``.
+References: ``source_primary`` is the study. Citation strings (data cells and the Citations tab) are whitespace-normalised first (the
+tab has NBSP characters). Each ``;``-separated part is looked up in the tab by an accent- and case-insensitive match. A part with a
+valid DOI url (``10.NNNN/...``; three ``doi.org`` urls are not DOIs and stay plain urls) gets ``doi:<lower-case doi>``, else
+``ref:<string>``. A composite string gets the part keys joined by ``+``, one citation row per part, and the part count must equal the
+citation row count. A part with no tab row must be in a declared set: ``UNPUBLISHED`` (the source's own "unpublished data") or
+``UNRESOLVED_NEAR_MISS`` (a different-year entry exists but the data side has no title to check, so no match). The unmatched parts must
+equal their union exactly. ``COMMA_SPLITS`` declares the one comma-joined composite. Citation ``title`` keeps the tab's
+``full_citation`` text, unparsed. ``source_review`` (the secondary compilation a value was taken from) is a string in ``params`` with
+the flag ``secondary_source``.
 
-Flags (informational; nothing is changed or dropped): zero_value; assigned_by_source (the xml states salt-flat
-height and biomass were "estimated as 0"; asserted to be exactly the salt-flat rows of those two sheets);
-secondary_source; method_missing; depth_missing; duplicate_source_row (rows identical in ALL columns of their
-sheet); coords_integer_degree; negative_value.
+Flags (nothing is changed or dropped): zero_value; assigned_by_source (the xml says salt-flat height and biomass were "estimated as 0",
+asserted to be exactly the salt-flat rows of those two sheets); secondary_source; method_missing; depth_missing; duplicate_source_row
+(rows identical in all columns of their sheet); coords_integer_degree; negative_value.
 
-Provenance: ``source_row_ref`` = ``ecosystem_attribute_data_2023.xlsx[<sheet>]#data_row=<0-based data row>:<attribute>``
-(rows as read by pandas after the header, per sheet).
+Provenance: ``source_row_ref`` = ``ecosystem_attribute_data_2023.xlsx[<sheet>]#data_row=<0-based row after the header>:<attribute>``.
 
 Usage:
     python -I extract.py --access-date YYYY-MM-DD

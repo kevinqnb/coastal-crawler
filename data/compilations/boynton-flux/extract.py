@@ -1,85 +1,73 @@
 #!/usr/bin/env python3
-"""Boynton and Ceballos World Flux Data Set 2016 (v3) -> contract tables.
+"""Boynton and Ceballos World Flux Data Set 2016 (v3) -> compilation-contract tables.
 
-Boynton, W., Ceballos, M.A. (2017): World Flux Data Set 2016. Mendeley Data, V3, doi:10.17632/8gc3ys3jx6.3
-(created 2016-12-16, updated 2017-05-17; Boynton et al. 2018, Estuaries and Coasts). Raw file (this directory):
-``Published2016v3WorldFlux DataSet.xlsx`` (v3 only; the v1 and v2 files in the directory are superseded and
-never read). Sheets used: ``WorldFluxDataSet2016v3`` (2,879 data rows, one sediment-water flux incubation per row,
-unique ``ID#``) and ``DataRefs`` (the reference list). ``Table2DataVariables`` is a picture (the variable and unit
-table, read by eye: element basis and "usually top 1 cm" for the sediment variables); the other sheets are
-descriptive.
+Boynton, W., Ceballos, M.A. (2017): World Flux Data Set 2016. Mendeley Data, V3, doi:10.17632/8gc3ys3jx6.3 (Boynton et al. 2018,
+Estuaries and Coasts). Raw file (this directory): ``Published2016v3WorldFlux DataSet.xlsx`` (v3 only; the v1 and v2 files are
+superseded and never read). Sheets used: ``WorldFluxDataSet2016v3`` (one sediment-water flux incubation per row, unique ``ID#``) and
+``DataRefs`` (the reference list). ``Table2DataVariables`` is a picture of the variable and unit table, read by eye (element basis and
+"usually top 1 cm" for the sediment variables).
 
-Grain: ONE FACT PER NON-BLANK NUMERIC CELL of the value columns below, except the J1 water concentrations, which
-belong to the SAMPLE and are collapsed (see below). Values are carried exactly as reported; units are the
-header's own spelling (Table 2 gives the element basis: O2 / N / P / DSi; it is not written into ``units_raw``).
-Nothing is converted.
+Grain: one fact per non-blank numeric cell of the value columns below, except the J1 water concentrations, which belong to the
+SAMPLE and are collapsed (see below). Units are the header's own spelling (Table 2 gives the element basis, which is not written into
+``units_raw``). Nothing is converted.
 
 Column -> attribute (type/subfield, header unit):
   O2 or SOC            boynton_soc               B5 total_o2_uptake      umol/m2/hr  (NEGATIVE = into the sediment)
   NH4 / PO4 / NO2 / NO3 / NO23 / DSi Flux
-                       boynton_{nh4,po4,no2,no3,no23,dsi}_flux   C3 ammonium/phosphate/nitrite/nitrate/
-                       nitrate_nitrite/silicate flux             umol/m2/hr
+                       boynton_{nh4,po4,no2,no3,no23,dsi}_flux   C3 ammonium, phosphate, nitrite, nitrate, nitrate_nitrite, silicate
+                       flux      umol/m2/hr
   RES                  boynton_water_respiration B9 community_respiration  gO2/m2/day (water-column respiration)
   SedCHLa              boynton_sediment_chl_a    B1 sediment_chlorophyll_a mg/m2
-  POC(%DW)             boynton_poc               C1 organic_carbon        %DW   (Table 2 says %DW; the plan's
-                       "mg C m-2" is not in the file)
-  PON(%DW), PP(%DW)    boynton_pon, boynton_pp   other (particulate organic N / P; not total N)   %DW
+  POC(%DW)             boynton_poc               C1 organic_carbon        %DW (Table 2 says %DW; the plan's "mg C m-2" is wrong)
+  PON(%DW), PP(%DW)    boynton_pon, boynton_pp   other (particulate organic N and P, not total N)   %DW
   pH, NH4, PO4, NO3, NO23, DSi (bottom water)
-                       water_ph (unitless, Table 2), water_ammonium, water_phosphate, water_nitrate,
-                       water_nitrate_nitrite, water_silicate (uM)  -> J1
-Slots (sample / location, Table 2 "Bottom water ..."): Salinity (unitless), Temp (degC), DO(uM) -> sample
-``water_salinity`` / ``water_temperature_c`` / ``bottom_water_o2``; Water Depth (m) -> ``location.water_depth_m``
-(as Chang, SCOC; ``sample_depth_m`` is a water-column sample depth).
-Not loaded: ``Temp. Range`` (annual range text), ``Wet/Dry/Normal`` and ``SEASON`` beyond the sample key (raw text in
-the method params / key), ``Date`` as a value (see Dates).
+                       water_ph (unitless), water_ammonium, water_phosphate, water_nitrate, water_nitrate_nitrite, water_silicate
+                       (uM)  -> J1
+Slots (Table 2 "Bottom water ..."): Salinity (unitless), Temp (degC) and DO(uM) go to sample ``water_salinity``,
+``water_temperature_c`` and ``bottom_water_o2``. Water Depth (m) goes to ``location.water_depth_m``.
+Not loaded: ``Temp. Range`` (annual range text), ``Wet/Dry/Normal`` and ``SEASON`` beyond the sample key and method params, and
+``Date`` as a value (see Dates).
 
-Missing codes: ``ND`` (not determined) -> NULL; ``OSN`` ("other reason, see notes") in a value column -> NULL, counted
-in the report (no fact to carry a flag; see the README). Blank = NULL. Any other string in a numeric column raises.
+Missing codes: ``ND`` (not determined) and blank give NULL. ``OSN`` ("other reason, see notes") in a value column gives NULL, counted in
+the report (no fact exists to carry a flag). Any other string in a numeric column raises.
 
-SIGN (not normalised): the source's Edit Notes state the compilers' convention, negative = into the sediment
-("in paper positive fluxes were into sediment, but data was entered in our method (negative into sediment)";
-"SOC plotted as positive ... We changed flux sign to negative"; "All SOC made negative"). Table 2 states none.
-SOC is asserted <= 0 on every row.
+SIGN (not normalised): the Edit Notes state the compilers' convention, negative = into the sediment ("in paper positive fluxes were into
+sediment, but data was entered in our method (negative into sediment)"; "All SOC made negative"). Table 2 states none. SOC is asserted
+<= 0 on every row.
 
-J1 and the sample grain. The plan's sample key (reference, station, lat, lon, Date) cannot be stored: within it the
-rows can differ in salinity, temperature and DO (which sit on the sample row) and in Month / Season. So the sample key
-here is the plan's key PLUS every value written onto the sample row (raw Year, Month, Season, Salinity, Temp, DO).
-Each J1 attribute gets one fact per (sample, distinct value): repeats of one value collapse into the first row's fact
-(``collapsed`` in the report and in the row accounting), and a sample with two different values of one J1
-attribute keeps both with flag ``covariate_conflict``. The report gives J1 counts under both keys.
+J1 and the sample grain. The plan's sample key (reference, station, lat, lon, Date) cannot be stored, because within it rows can differ in
+salinity, temperature and DO (which sit on the sample row) and in Month and Season. So the sample key is the plan's key PLUS every value
+written onto the sample row (raw Year, Month, Season, Salinity, Temp, DO). Each J1 attribute gets one fact per (sample, distinct value).
+Repeats of a value collapse into the first row's fact (counted in the report), and a sample with two different values of one attribute
+keeps both with ``covariate_conflict``. The report gives J1 counts under both keys.
 
-Locations: ``location_key`` = REGION | Estuary Name | Station Name | lat | lon | water depth | state/area | country |
-general characteristics (every field stored). ``site_name`` = Estuary Name, ``source_site_id`` = Station Name,
-``bioregion`` = REGION (the source's continent / world region label), ``geomorphic_setting`` = general
-characteristics (raw, unmapped: D3), ``admin_division`` = state/area, country. Habitat is NULL, unflagged (D3): the
-label map declares the habitat column with one empty-label row.
+Locations: location_key = REGION | Estuary Name | Station Name | lat | lon | water depth | state/area | country | general characteristics.
+site_name is Estuary Name, source_site_id is Station Name, bioregion is REGION (the source's continent label), geomorphic_setting is
+general characteristics (raw, unmapped), and admin_division is state/area. Habitat is NULL with no flag: the label map declares the
+habitat column with one empty-label row.
 
-Dates (one rule): ``sampling_year`` = the ``Year`` column when it is a number, else NULL with flag ``year_missing``
-(ranges such as 1979-1981 and ``OSN, averaged several yrs`` are not a year); ``sampling_month`` = the ``Month``
-column when it is one month name, else NULL. The ``Date`` column is not loaded; it disagrees with Year on 8 rows
-and with Month on 16 (counted in the report; Month, Season and Year agree with each other on the Jorgensen and
-Sorensen rows where Date is off).
+Dates: ``sampling_year`` is the ``Year`` column when it is a number, else NULL with ``year_missing`` (ranges such as 1979-1981 and
+``OSN, averaged several yrs`` are not a year). ``sampling_month`` is ``Month`` when it is one month name, else NULL. The ``Date`` column
+is not loaded, because it disagrees with Year on 8 rows and with Month on 16 (counted in the report).
 
-Methods: for the seven rate attributes (SOC and the six fluxes) one method row per distinct (attribute, technique
-and the incubation fields of the row); the other attributes carry ``method_id_null`` rows. ``in_situ_ex_situ`` by
-the written rule: ``Method/measurement technique`` (lower-cased) starts with ``in situ`` -> ``in situ``; with
-``lab`` or ``shipboard`` -> ``ex situ``; anything else raises. ``light_dark`` from ``Photic/Aphotic`` (the incubation
-condition, Table 2): ``Aphotic`` -> ``dark``, ``Photic`` -> ``light``, ``Aphotic&Photic`` -> ``dark and light``,
-anything else NULL (raw string in params). The raw technique string is ``technique``. Params: measurement
-frequency, incubation hours, stirring, flow-through or batch, photic text, light-reaches-bottom, core diameter,
-length, sediment height, volume, area, wet/dry/normal, both ``pub or us`` columns, Edit Notes (verbatim; they
-document source errata). ``ND`` is stored as null.
+Methods: for the seven rate attributes (SOC and the six fluxes), one method row per distinct (attribute, technique, incubation fields).
+Other attributes get method_id_null rows. ``in_situ_ex_situ``: the technique string (lower-cased) starting with ``in situ`` gives
+``in situ``, and starting with ``lab`` or ``shipboard`` gives ``ex situ``. Anything else raises. ``light_dark`` comes from
+``Photic/Aphotic``: ``Aphotic`` is ``dark``, ``Photic`` is ``light``, ``Aphotic&Photic`` is ``dark and light``, and anything else is NULL.
+The raw technique string is ``technique``. Params hold the measurement frequency, incubation hours, stirring, flow-through or batch, photic
+text, light-reaches-bottom, core diameter, length, sediment height, volume, area, wet/dry/normal, both ``pub or us`` columns and the Edit
+Notes (verbatim, as they document source errata). ``ND`` is stored as null.
 
-Flags: zero_value (any value 0), negative_value (only for quantities that cannot be negative: not SOC or the
-fluxes), year_missing, source_site_averaged (``sites averaged`` = Y), source_time_averaged (``time averaged`` = Y),
-covariate_conflict (J1). No row repeats another once ``ID#`` is ignored (asserted), so no duplicate flag.
+Flags: zero_value, negative_value (only for quantities that cannot be negative, so not SOC or fluxes), year_missing,
+source_site_averaged (``sites averaged`` = Y), source_time_averaged (``time averaged`` = Y), covariate_conflict (J1). No row repeats another
+once ``ID#`` is ignored (asserted), so there is no duplicate flag.
 
-References: ``Reference`` strings -> ``ref:<string>``; full text and any DOI from ``DataRefs`` by CROSSWALK below
-(unique first-author surname + first year, a second-author check for "A and B" strings, and explicit entries for every
-ambiguous or misspelt string; strings with no entry get a text-only citation and are listed in the report).
+References: ``Reference`` strings give ``ref:<string>``. Full text and any DOI come from ``DataRefs`` through the CROSSWALK below (unique
+first-author surname plus first year, a second-author check for "A and B" strings, and explicit entries for every ambiguous or misspelt
+string). Strings with no entry get a text-only citation and are listed in the report.
 
-Provenance: ``source_row_ref`` = ``<file>[WorldFluxDataSet2016v3]#data_row=<0-based row>:<attribute>`` (for a J1
-fact, the first row of the sample that carries the value).
+Provenance: ``source_row_ref`` = ``<file>[WorldFluxDataSet2016v3]#data_row=<0-based row>:<attribute>`` (for a J1 fact, the first row of
+the sample that carries the value).
 
 Usage:
     python -I extract.py --access-date YYYY-MM-DD

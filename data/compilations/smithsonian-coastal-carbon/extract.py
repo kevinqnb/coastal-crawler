@@ -1,58 +1,41 @@
 #!/usr/bin/env python3
 """Coastal Carbon Library (CCN v1.7.0) -> compilation-contract tables.
 
-Reads the raw CCN_*.csv files in this directory and writes the tables defined
-in ``coastal_crawler.compilations.TABLES`` as parquet into ``extracted/``
-(compilation-local keys only; ``scripts/build_compilations.py`` assigns global
-ids and builds ``compilations.duckdb``).
+Reads the raw CCN_*.csv files in this directory and writes the tables in ``coastal_crawler.compilations.TABLES`` as parquet
+into ``extracted/`` (compilation-local keys; ``scripts/build_compilations.py`` assigns global ids).
 
-Grain: ONE FACT PER VARIABLE MEASUREMENT = one non-null cell of
-``dry_bulk_density`` / ``fraction_organic_matter`` / ``fraction_carbon`` in
-CCN_depthseries.csv (measurement type C1), plus one fact per core with a
-``pb210_cic_accretion_rate`` in CCN_cores.csv (measurement type G2; core-level, so its
-sample row has no depth interval). Depth interval, year/month and core-level labels
-are context in ``sample``/``location``. The other radiometric/dating columns are
-out of scope. Values are carried exactly as reported (no unit conversion, no
-cleaning); suspicious values are FLAGGED in ``fact.flags``, never changed or
-dropped.
+Grain: one fact per non-null cell of ``dry_bulk_density``, ``fraction_organic_matter`` and ``fraction_carbon`` in
+CCN_depthseries.csv (type C1), plus one fact per core with a ``pb210_cic_accretion_rate`` in CCN_cores.csv (type G2; core-level,
+so its sample has no depth interval). Other radiometric and dating columns are out of scope. Values are carried as reported.
+Suspicious values are flagged in ``fact.flags``, never changed or dropped.
 
-Fail loud. The only exclusions are depth-series rows whose
-(study, site, core) key matches no row in CCN_cores.csv (no coordinates, no
-labels, no date): they go to ``skip_report.jsonl`` with the reason from
-``ALLOWED_SKIP_REASONS`` and, where one exists, a *suggested* case/spelling
-match that is NOT applied. An unlisted exclusion reason raises.
+Exclusions: only depth-series rows whose (study, site, core) key matches no row in CCN_cores.csv. They go to
+``skip_report.jsonl`` with a reason from ``ALLOWED_SKIP_REASONS`` and, where one exists, a suggested spelling match that is NOT
+applied. An unlisted reason raises.
 
-Measurement types (``compilation_vocab.ATTRIBUTES``): dry_bulk_density ->
-C1 dry_bulk_density; fraction_organic_matter -> C1 loi_organic_matter;
-fraction_carbon -> C1 with ``subfield`` from the method row's ``carbon_type``
-("organic carbon" -> organic_carbon, "total carbon" -> total_carbon, anything else,
-including no matched method row -> carbon_unspecified); pb210_cic_accretion_rate -> G2
-vertical_accretion (technique = 210Pb constant-initial-concentration model, from the
-column name; the cores file has no method id, so method_status = method_id_null).
-Standard labels (habitat, setting, salinity_zone, modification_class) come from
-``compilation_label_maps.csv``, not from this file.
+Types and subfields (``compilation_vocab.ATTRIBUTES``):
+  dry_bulk_density -> C1 dry_bulk_density
+  fraction_organic_matter -> C1 loi_organic_matter
+  fraction_carbon -> C1, subfield from the method row's ``carbon_type``: "organic carbon" -> organic_carbon,
+    "total carbon" -> total_carbon, anything else (including no matched method) -> carbon_unspecified
+  pb210_cic_accretion_rate -> G2 vertical_accretion. Technique is the 210Pb constant-initial-concentration model (from the
+    column name). The cores file has no method id, so method_status is method_id_null.
+Standard labels come from ``compilation_label_maps.csv``, not from this file.
 
-Accretion facts: value = ``pb210_cic_accretion_rate`` (centimeterPerYear per the structure
-doc); ``se`` = ``pb210_cic_accretion_rate_se``, which the doc gives in a DIFFERENT unit
-(millimetersPerYear). Nothing is converted: the fact is flagged ``se_units_differ`` and
-``method.params`` records ``se_units``; max depth, r2 and notes go in ``method.params``
-(one method row per core).
+Accretion facts: value is in centimeterPerYear (structure doc). Its ``se`` is documented in a different unit
+(millimetersPerYear). Nothing is converted: the fact gets ``se_units_differ`` and ``method.params`` records ``se_units``. Max
+depth, r2 and notes go in ``method.params`` (one method row per core).
 
-Derived-field rules (the raw value is always kept alongside in ``location``):
-  * salinity_class / vegetation_class / tidal_position (= inundation_class):
-    the core-level value; if the core has none, the site-level value from
-    CCN_sites.csv ONLY when every site row for that (study, site) is non-null
-    and identical (sites.csv repeats some site_ids, e.g. one per habitat).
-    ``*_level`` records which one was used ("core" | "site").
-  * vegetated_or_bare: ``unvegetated`` -> "bare";  emergent / forested /
-    scrub shrub / seagrass / forested to shrub / forested to emergent ->
-    "vegetated"; ``mudflat`` -> NULL (no stated vegetation status).
-  * marsh_zone: tidal_position if habitat == "marsh" and tidal_position in
-    {low, mid, high}; otherwise NULL.
-  * modification_status: union of site-level and core-level CCN_impacts rows; rows whose
-    impact_class is blank are dropped.
-  * conversion_applied (fraction_carbon only): fraction_carbon_method if the
-    study says carbon was "modeled" or the method contains "regression".
+Derived-field rules (the raw value is always kept beside them):
+  * salinity_class, vegetation_class, tidal_position (= inundation_class): the core value, else the site value from
+    CCN_sites.csv only when every site row for that (study, site) is non-null and identical. ``*_level`` records
+    "core" or "site".
+  * vegetated_or_bare: unvegetated -> "bare"; emergent, forested, scrub shrub, seagrass, forested to shrub, forested to
+    emergent -> "vegetated"; mudflat -> NULL.
+  * marsh_zone: tidal_position when habitat is "marsh" and tidal_position is low, mid or high; otherwise NULL.
+  * modification_status: union of site-level and core-level CCN_impacts rows; blank impact_class rows are dropped.
+  * conversion_applied (fraction_carbon only): fraction_carbon_method if the study says carbon was "modeled" or the method
+    contains "regression".
 
 Usage:
     python extract.py --access-date YYYY-MM-DD --max-dry-bulk-density 3.0

@@ -2,56 +2,49 @@
 """Ray and Fulweiler oyster meta-analysis data -> compilation-contract tables.
 
 Ray, N.E., Fulweiler, R.W. (2020): Meta-analysis of oyster impacts on coastal biogeochemistry. figshare,
-doi:10.6084/m9.figshare.12488753.v1 (paper: Nature Sustainability 4, 261-269, 2021,
-doi:10.1038/s41893-020-00644-9). Raw file (this directory): ``oyster_meta - excel for figshare.xlsx`` with sheets
-``Overview`` (empty), ``sediment fluxes`` (37 rows) and ``oyster fluxes`` (17 rows).
+doi:10.6084/m9.figshare.12488753.v1 (paper: Nature Sustainability 4, 261-269, 2021, doi:10.1038/s41893-020-00644-9). Raw file (this
+directory): ``oyster_meta - excel for figshare.xlsx`` with sheets ``Overview`` (empty), ``sediment fluxes`` and ``oyster fluxes``.
 
-Grain: ONE FACT PER (ROW, SOLUTE, ARM) WITH A MEAN. ``sediment fluxes`` has paired columns for a control and an oyster
-arm (``Mean X Ctrl`` / ``SD X Ctrl`` / ``n X Ctrl`` and the ``Oys`` set) for 10 solutes; ``oyster fluxes`` has one
-set per solute (the oysters themselves, no control) for 8. The fact value is the mean, ``sd`` and ``n`` the paired
-columns (every mean has both; asserted, and an sd or n without a mean raises). Values are carried as reported. The file
-has NO units; the paper's Methods state that the authors converted all sediment fluxes to umol m-2 h-1 and all oyster
-fluxes to umol per individual and hour (per-gram rates were converted with 2.93 g per individual). The paper's Table
-1 prints N2O and CH4 oyster fluxes in nmol; the file's values are the same numbers divided by 1000 (checked: the
-Saccostrea glomerata N2O of 0.067662 is 67.66 in Table 1), so they are umol too. Declared units:
+Grain: one fact per (row, solute, arm) with a mean. ``sediment fluxes`` has paired columns for a control and an oyster arm
+(``Mean X Ctrl``, ``SD X Ctrl``, ``n X Ctrl`` and the ``Oys`` set) for 10 solutes. ``oyster fluxes`` has one set per solute (the
+oysters themselves, no control) for 8. The fact value is the mean, with ``sd`` and ``n`` from the paired columns (every mean has both,
+asserted, and an sd or n without a mean raises). Values are carried as reported.
+
+Units: the file has none. The paper's Methods say all sediment fluxes were converted to umol m-2 h-1 and all oyster fluxes to umol per
+individual and hour (per-gram rates with 2.93 g per individual). The paper's Table 1 prints N2O and CH4 oyster fluxes in nmol, which
+are the file's numbers times 1000 (the Saccostrea glomerata N2O of 0.067662 is 67.66 there), so the file is in umol too.
   sediment: umol m-2 h-1 for every solute (attributes ray_sediment_<solute>)
   oyster:   umol ind-1 h-1 for every solute (attributes ray_oyster_<solute>)
-Solute -> type/subfield: N2 C4 denitrification; NH4 C3 ammonium_flux; PO4 (``P``) C3 phosphate_flux; Si C3
-silicate_flux; NOx C3 nitrate_nitrite_flux; NO3 C3 nitrate_flux; NO2 C3 nitrite_flux (extensions); N2O, CO2, CH4 C8.
-``n`` is stored as an integer; the authors give 10.5 (the median of a range) for some, which cannot be an integer: such a
-fact has n = NULL and the reported number in ``method.params.n_reported``.
+Solute -> type/subfield: N2 C4 denitrification; NH4 C3 ammonium_flux; PO4 (``P``) C3 phosphate_flux; Si C3 silicate_flux; NOx C3
+nitrate_nitrite_flux; NO3 C3 nitrate_flux and NO2 C3 nitrite_flux (extensions); N2O, CO2, CH4 C8. ``n`` is an integer. Where the authors
+give 10.5 (the median of a range), n is NULL and the number is in ``method.params.n_reported``.
 
-Control vs oyster: ``method.experimental_status`` is the raw label ``control`` or ``oyster`` (sediment sheet) and ``oyster
-(the oysters' own flux; no control)`` (oyster sheet); both are loaded, filtering is downstream. The N2 method column
-(``n2_method`` / ``Denitrification Method``: n2_ar, n2/ar, IPT, acetylene) is the ``technique`` of the N2 facts only (other
-solutes: ``method_id_null``). The one row whose note says the denitrification is a potential rate (acetylene block; NH4 by
-ammonification assays) gets the flag ``potential_rate`` on its N2 and NH4 facts (the solutes the note names). Every
-``notes`` text is carried verbatim in ``method.params.note`` on that row's facts.
+Control or oyster: ``method.experimental_status`` is the raw label ``control`` or ``oyster`` (sediment sheet) and ``oyster (the oysters'
+own flux; no control)`` (oyster sheet). Both are loaded, and filtering is downstream. The N2 method column (n2_ar, n2/ar, IPT,
+acetylene) is the ``technique`` of N2 facts only (other solutes are method_id_null). The one row whose note says the denitrification
+is a potential rate (acetylene block; NH4 by ammonification assays) gets ``potential_rate`` on its N2 and NH4 facts. Every ``notes``
+text is carried verbatim in ``method.params.note`` on that row's facts.
 
-The authors converted every SE to an SD (their Equation 1) and every per-gram rate to per individual, but the file does not
-say which rows, so there is no per-fact ``sd_converted_from_se`` / ``converted_by_source`` flag (it would be wrong for
-the rows reported as SD); ``method.params.sd_note`` says it for every fact. The 3 rows named ``... - IPT`` hold only the
-isotope-pairing N2 pair of the study named before them and have no species, coordinates or habitat: they are not
-merged into that study and not given its labels.
+The authors converted every SE to an SD and every per-gram rate to per individual, but the file does not say which rows, so there is no
+per-fact ``sd_converted_from_se`` or ``converted_by_source`` flag (it would be wrong for rows reported as SD). ``method.params.sd_note``
+says it for every fact. The 3 rows named ``... - IPT`` hold only the isotope-pairing N2 pair of the study named before them and have no
+species, coordinates or habitat. They are not merged into that study.
 
-Locations: ``Coordinates`` / ``Location`` is one string ``lat, lon`` (parsed strictly; 6 sediment rows blank ->
-``coords_missing``); ``habitat_type`` = ``Habitat`` raw on the sediment sheet (Reef -> shellfish reef / bed; Aquaculture,
-Mesocosm -> blank in the label map), NULL on the oyster sheet (no such column). ``location_key`` = lat | lon | habitat (a
-row without coordinates: ``nocoords|<abbreviated_name>|<habitat>``). Samples: one per data row; ``taxon`` = ``Species``
-(``species``). The ``Year`` is the publication year, not a sampling year: no ``sampling_year``.
+Locations: ``Coordinates`` is one string ``lat, lon`` (parsed strictly; blank gives ``coords_missing``). habitat_type is ``Habitat`` raw
+on the sediment sheet (Reef maps to shellfish reef / bed, Aquaculture and Mesocosm to blank) and NULL on the oyster sheet. location_key
+= lat | lon | habitat (a row without coordinates: ``nocoords|<abbreviated_name>|<habitat>``). Samples: one per data row, taxon is
+``Species`` (rank ``species``). ``Year`` is the publication year, so there is no sampling_year.
 
-References: ``reference_key`` = ``ref:<abbreviated_name>`` (the file's own study label, whitespace-normalised). Different
-labels are different references even when they are rows of one paper (``Smyth et al., 2015 - low`` / ``- high``) or the same
-paper on both sheets: nothing is merged. A label that occurs twice (Caffrey 2016, McCarthy 2019 on the oyster sheet) must have
-identical title, authors and year (asserted). ``citation``: title, authors, year (the journal has no contract column and is
-not loaded; recoverable through ``source_row_ref``).
+References: ``reference_key`` = ``ref:<abbreviated_name>`` (the file's study label, whitespace-normalised). Different labels are
+different references even for one paper, and nothing is merged. A label occurring twice must have identical title, authors and year
+(asserted). The citation holds title, authors and year (the journal has no contract column and is recoverable through
+``source_row_ref``).
 
-Flags (informational; nothing is changed or dropped): coords_missing, zero_value, potential_rate, negative_sd (the one
-declared negative SD, Erler 2017 nitrate, ``sd`` kept as reported), duplicate_source_row (rows
-identical in ALL columns of their sheet). Negative fluxes are real and not flagged.
+Flags (nothing is changed or dropped): coords_missing, zero_value, potential_rate, negative_sd (the one declared negative SD, Erler 2017
+nitrate, kept as reported), duplicate_source_row (rows identical in all columns of their sheet). Negative fluxes are real and not flagged.
 
-Provenance: ``source_row_ref`` = ``<file>[<sheet>]#data_row=<0-based data row>:<attribute>:<arm>`` (``arm`` is ``ctrl`` or
-``oys`` on the sediment sheet, ``oyster`` on the oyster sheet).
+Provenance: ``source_row_ref`` = ``<file>[<sheet>]#data_row=<0-based row>:<attribute>:<arm>`` (``arm`` is ``ctrl`` or ``oys`` on the
+sediment sheet, ``oyster`` on the oyster sheet).
 
 Usage:
     python -I extract.py --access-date YYYY-MM-DD

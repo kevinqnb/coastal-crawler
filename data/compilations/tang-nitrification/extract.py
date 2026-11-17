@@ -1,67 +1,60 @@
 #!/usr/bin/env python3
-"""Tang et al. database of nitrification and nitrifiers in the global ocean -> contract tables.
+"""Tang et al. database of nitrification and nitrifiers in the global ocean -> compilation-contract tables.
 
-Tang, W., Ward, B.B., Beman, M., Bristow, L., Clark, D., Fawcett, S., et al. (2023): Database of nitrification and
-nitrifiers in the global ocean. Earth System Science Data 15, 5039-5077, doi:10.5194/essd-15-5039-2023; data
-doi:10.5281/zenodo.8355912 (Zenodo v1, 2023-09-18, CC BY 4.0). Raw file (this directory): ``Database of nitrification
-and nitrifiers in the global ocean.xlsx`` (8 sheets); the ``Template_...xlsx`` beside it is the empty submission template
-and is not read.
+Tang, W., Ward, B.B., Beman, M., Bristow, L., Clark, D., Fawcett, S., et al. (2023): Database of nitrification and nitrifiers in the
+global ocean. Earth System Science Data 15, 5039-5077, doi:10.5194/essd-15-5039-2023; data doi:10.5281/zenodo.8355912 (Zenodo v1,
+2023-09-18, CC BY 4.0). Raw file (this directory): ``Database of nitrification and nitrifiers in the global ocean.xlsx`` (8 sheets). The
+``Template_...xlsx`` beside it is the empty submission template and is not read.
 
-Loaded (phase 1)
-  ``volumetric ammonia oxidation`` (2,417 rows)  -> ``tang_ammonia_oxidation``  C5 ammonia_oxidation, nmol N L-1 d-1
-  ``volumetric nitrite oxidation``  (1,010 rows) -> ``tang_nitrite_oxidation``  C5 nitrite_oxidation, nmol N L-1 d-1
-  (``sd`` = the sheet's ``Standard deviation of rate`` where it is a number), and from the same rows the J1 water values
-  ``Ammonium+ammonia`` -> ``water_ammonium``, ``Nitrite`` -> ``water_nitrite``, ``Nitrate`` -> ``water_nitrate``,
-  ``O2`` -> ``water_o2`` (all ``μM``, U+03BC, from the headers), ``pH`` -> ``water_ph`` (``unitless``).
-Sheets ``rate metadata`` / ``rate metadata 2`` give the method row of each ``Data source`` (technique = ``Method``, every
-column in ``params``). Not loaded (listed in ``extract_report.json``): the gene-abundance sheets ``ammonia oxidizer`` and
-``NOB`` and their qPCR metadata sheets (phase 2), and the rate sheets' ``PAR``, ``Light level`` and
-``Potential density`` columns (phase 2 ``other`` attributes).
+Loaded (phase 1):
+  ``volumetric ammonia oxidation`` -> ``tang_ammonia_oxidation``  C5 ammonia_oxidation, nmol N L-1 d-1
+  ``volumetric nitrite oxidation`` -> ``tang_nitrite_oxidation``  C5 nitrite_oxidation, nmol N L-1 d-1
+  (``sd`` is the sheet's ``Standard deviation of rate`` where it is a number), and from the same rows the J1 water values
+  ``Ammonium+ammonia`` -> ``water_ammonium``, ``Nitrite`` -> ``water_nitrite``, ``Nitrate`` -> ``water_nitrate``, ``O2`` -> ``water_o2``
+  (all ``μM``, U+03BC, from the headers) and ``pH`` -> ``water_ph`` (``unitless``).
+The sheets ``rate metadata`` and ``rate metadata 2`` give the method row of each ``Data source`` (technique is ``Method``, every column in
+``params``). Not loaded (listed in ``extract_report.json``): the gene-abundance sheets ``ammonia oxidizer`` and ``NOB`` with their qPCR
+metadata sheets (phase 2), and the rate sheets' ``PAR``, ``Light level`` and ``Potential density`` columns (phase 2 ``other``).
 
-Missing codes (documented per column): blank and ``NA`` -> no value (NULL / no fact, counted); ``NM`` (not measured) and
-``BDL`` (below detection limit) in a fact-bearing column -> a skip-report row, reasons ``not_measured`` /
-``below_detection_limit`` (D6; the detection limit is copied into the skip row, see below); anywhere else an
-unrecognised non-numeric string raises. In the slot columns (depth, temperature, salinity) ``NA``/``NM``/``BDL`` -> NULL.
+Missing codes (per column): blank and ``NA`` give no value (counted). ``NM`` (not measured) and ``BDL`` (below detection limit) in a
+fact-bearing column give a skip row with reason ``not_measured`` or ``below_detection_limit`` (the detection limit is copied into the skip
+row). Any other non-numeric string raises. In the slot columns (depth, temperature, salinity), ``NA``, ``NM`` and ``BDL`` give NULL.
 
-J1 rules (INTEGRATION_PLAN 1.2)
-  * A J1 value belongs to the SAMPLE: one fact per (sample, attribute). The sample key is latitude | longitude | depth |
-    date (floats cast before the key is built; datetimes as ISO dates; text dates verbatim). The plan's wording also names
-    the data source, but its own counts (2,352 collapsed repeats) are only reproduced WITHOUT it: the two rate sheets spell
-    the same paper differently ('Narure Comms' / 'Nature Comms', 'LO.' / 'L&O.', trailing dots) and the same station is
-    reported under two papers (Beman 2012 / 2013, Wan 2018 / 2022), so the reference stays on the fact and is not part of
-    the key. Reference strings are never merged by similarity; a collapsed value keeps the reference of the first raw cell
-    (sheet order, then row order), and ``source_row_ref`` points at that cell.
-  * Equal values (exactly, no tolerance) of one (sample, attribute) collapse into one fact and are counted. Different
-    values are all loaded with the flag ``covariate_conflict``; nothing is averaged or dropped.
-  * J1 values on a row whose rate is ``BDL`` / ``NM`` still load (the sample exists because they reference it).
-  * ``pH`` (66 numeric cells, Breider 2019 and Shiozaki 2019; the plan said the column was empty) has no unit anywhere in the
-    sheet: J1 ``water_ph`` with units ``unitless`` (the user's decision; as for Fulweiler).
-  * Sample slots: ``sample_depth_m`` = Depth, ``water_temperature_c``, ``water_salinity`` (+ ``psu``). One sample's rows must
-    agree on a slot; ``SLOT_CONFLICT_SAMPLES`` names the one sample where two replicate casts disagree on temperature and
-    salinity (-67.774 N, 80 m, 2011-01-17): its slots are NULL (not averaged) and the case is in the report. Any other
-    disagreement raises.
+J1 rules (INTEGRATION_PLAN 1.2):
+  * A J1 value belongs to the SAMPLE: one fact per (sample, attribute). The sample key is latitude | longitude | depth | date (floats cast
+    before the key is built, datetimes as ISO dates, text dates verbatim). The plan's wording also names the data source, but its own counts
+    (2,352 collapsed repeats) reproduce only WITHOUT it: the two rate sheets spell the same paper differently ('Narure Comms' / 'Nature Comms',
+    'LO.' / 'L&O.', trailing dots) and the same station is reported under two papers (Beman 2012 / 2013, Wan 2018 / 2022). So the reference
+    stays on the fact and is not part of the key. Reference strings are never merged by similarity. A collapsed value keeps the reference of
+    the first raw cell (sheet order, then row order), and ``source_row_ref`` points at that cell.
+  * Equal values (exactly, no tolerance) of one (sample, attribute) collapse into one fact and are counted. Different values are all loaded
+    with ``covariate_conflict``, and nothing is averaged or dropped.
+  * J1 values on a row whose rate is ``BDL`` or ``NM`` still load (the sample exists because they reference it).
+  * ``pH`` (the plan said the column was empty) has no unit anywhere in the sheet. It is J1 ``water_ph`` with units ``unitless`` (the user's
+    decision, as for Fulweiler).
+  * Sample slots: ``sample_depth_m`` is Depth, plus ``water_temperature_c`` and ``water_salinity`` (``psu``). One sample's rows must agree on
+    a slot. ``SLOT_CONFLICT_SAMPLES`` names the one sample where two replicate casts disagree (-67.774 N, 80 m, 2011-01-17): its slots are
+    NULL (not averaged) and the case is in the report. Any other disagreement raises.
 
-Dates: a datetime gives year and month. The 29 text forms are an explicit table (``DATE_TEXT``): ``YYYY Month`` -> year and
-month; a range inside one year (``1993 March to May``, ``2008 May/June``) -> year, month NULL; the cross-year range
-``2008 Dec-2009 Jan`` -> year and month NULL (flag ``year_missing``). Any range text is kept in ``sample.depth_notes``.
+Dates: a datetime gives year and month. The 29 text forms are an explicit table (``DATE_TEXT``). ``YYYY Month`` gives year and month, a range
+inside one year (``1993 March to May``) gives the year with month NULL, and the cross-year range ``2008 Dec-2009 Jan`` gives year and month
+NULL (``year_missing``). Any range text is kept in ``sample.depth_notes``.
 
-``Data source`` column: the reference string is on the first row of a block and the following rows leave it blank, EXCEPT
-that comment lines ('Data shown in Figure 3', 'detection limit ...', 'INSPIRE', 'SSB Autumn') are written into the same
-column. Comment lines are recognised by the explicit ``NOTE_PREFIXES`` / ``NOTE_EXACT`` tables, everything else must look
-like a reference (a year followed by a full stop, or 'unpublished') or the extract raises. A row belongs to the block of the
-last reference above it; the block's ``detection limit`` comments and the ``rate metadata`` limit are copied into every BDL
-skip row. ``reference_key`` = ``ref:<normalised string>`` (no DOIs in the file).
+``Data source`` column: the reference string is on the first row of a block, and the following rows leave it blank, EXCEPT that comment
+lines ('Data shown in Figure 3', 'detection limit ...', 'INSPIRE', 'SSB Autumn') are written into the same column. Comment lines are
+recognised by the explicit ``NOTE_PREFIXES`` and ``NOTE_EXACT`` tables, and everything else must look like a reference (a year followed by a
+full stop, or 'unpublished') or the extract raises. A row belongs to the last reference above it. The block's ``detection limit`` comments and
+the ``rate metadata`` limit are copied into every BDL skip row. reference_key is ``ref:<normalised string>`` (no DOIs in the file).
 
-Locations: ``location_key`` = latitude | longitude; habitat_type is the constant ``water column`` (not stated by the source:
-fact flag ``habitat_from_scope`` on every fact). Longitudes are all within +-180 (asserted).
+Locations: location_key = latitude | longitude. habitat_type is the constant ``water column`` (not stated by the source, so ``habitat_from_scope``
+on every fact). Longitudes are within +-180 (asserted).
 
-Methods: rate facts, one row per (attribute, Data source): ``matched`` when the data source string equals one in the
-metadata sheet of that process, otherwise ``method_id_unmatched`` (technique NULL because unknown). J1 attributes: one
-``method_id_null`` row each.
+Methods: for rate facts, one row per (attribute, Data source), ``matched`` when the string equals one in that process's metadata sheet and
+otherwise method_id_unmatched (technique NULL because unknown). J1 attributes get one method_id_null row each.
 
 Flags: habitat_from_scope (all), covariate_conflict, zero_value, negative_value, year_missing, depth_missing.
 
-Provenance: ``source_row_ref`` = ``<file>[<sheet>]#data_row=<0-based data row>:<attribute>``.
+Provenance: ``source_row_ref`` = ``<file>[<sheet>]#data_row=<0-based row>:<attribute>``.
 
 Usage:
     python -I extract.py --access-date YYYY-MM-DD

@@ -1,63 +1,58 @@
 #!/usr/bin/env python3
-"""Chang et al. global database of actual nitrogen loss rates in coastal and marine sediments -> contract tables.
+"""Chang et al. global database of actual nitrogen loss rates in coastal and marine sediments -> compilation-contract tables.
 
-Chang, Y., Tan, E., Gao, D., Liu, C., Zhang, Z., Huang, Z., et al. (2024): Global database of actual nitrogen
-loss rates in coastal and marine sediments. figshare, doi:10.6084/m9.figshare.27745770.v3 (paper: Earth System
-Science Data 17, 3521, 2025). Raw files (this directory): ``Upload_data.xlsx`` (sheets ``Raw_data`` and
-``Experiment information``, 473 rows each, aligned by position) and ``Raw_data references.docx`` (69 numbered
-references).
+Chang, Y., Tan, E., Gao, D., Liu, C., Zhang, Z., Huang, Z., et al. (2024): Global database of actual nitrogen loss rates in coastal
+and marine sediments. figshare, doi:10.6084/m9.figshare.27745770.v3 (paper: Earth System Science Data 17, 3521, 2025). Raw files (this
+directory): ``Upload_data.xlsx`` (sheets ``Raw_data`` and ``Experiment information``, 473 rows each, aligned by position) and
+``Raw_data references.docx`` (69 numbered references).
 
-Grain: ONE FACT PER NON-BLANK NUMERIC MEASUREMENT CELL of the eight value columns below. Values are carried
-exactly as reported, in the unit of the column header (thin and no-break spaces normalised; asserted). Nothing is
-converted or capped.
+Grain: one fact per non-blank numeric cell of the nine value columns below, in the unit of the column header (thin and no-break spaces
+normalised, asserted). Nothing is converted or capped.
 
 Column -> attribute (type/subfield, unit):
   Denitrification (umol N m-2 h-1)   chang_denitrification        C4 denitrification
   Anammox (umol N m-2 h-1)           chang_anammox                C4 anammox
-  P14 (umol N m-2 h-1)               chang_total_n2_production    C4 total_n2_production (extension); P14 equals
-                                     denitrification + anammox to rounding on every row that has both (asserted)
+  P14 (umol N m-2 h-1)               chang_total_n2_production    C4 total_n2_production (extension). P14 equals
+                                     denitrification + anammox to rounding wherever both exist (asserted)
   Organic carbon (%)                 chang_organic_carbon         C1 organic_carbon
   C/N (mol:mol)                      chang_c_n_ratio              C1 c_n_ratio
   Oxygen penetration depth (mm)      chang_o2_penetration_depth   C2 o2_penetration_depth
   Nitrate (uM)                       water_nitrate                J1 nitrate
   Ammonium (uM)                      water_ammonium               J1 ammonium
   Dissolved oxygen (uM)              water_o2                     J1 dissolved_oxygen
-Not loaded as facts: ``ra (%)`` (the anammox share of total N2 production, derived by the authors; it does not
-equal Anammox / P14 on every row, so it is not reconstructed); ``Process`` (a label: whether anammox was measured).
+Not loaded: ``ra (%)`` (the anammox share, derived by the authors and not always equal to Anammox / P14) and ``Process`` (a label for
+whether anammox was measured).
 
-J1 (the paper calls these "water physicochemical factors" without naming the water layer): nitrate, ammonium and
-dissolved oxygen are water-medium concentrations, so they are J1; dissolved oxygen is J1 ``water_o2`` and not the
-``bottom_water_o2`` slot because the source does not say bottom water. Temperature (-> sample.water_temperature_c) and
-salinity (-> sample.water_salinity, units ``psu`` from the header) are sample slots. Water depth (m) is the depth
-of the water over the sediment, so it goes to ``location.water_depth_m`` (as SCOC and BenBioDen), not to the
-water-column ``sample_depth_m``. One sample per source row, so each J1 value is one fact per sample and attribute.
+Water chemistry: the paper calls nitrate, ammonium and dissolved oxygen "water physicochemical factors" without naming the layer, so
+they are J1 water concentrations. Oxygen is J1 ``water_o2``, not the ``bottom_water_o2`` slot, because the source does not say bottom
+water. Temperature (sample.water_temperature_c) and salinity (sample.water_salinity, ``psu`` from the header) are sample slots. Water
+depth is the depth of water over the sediment, so it is ``location.water_depth_m``. One sample per source row, so each J1 value is one
+fact per sample and attribute.
 
-Missing codes (the paper: "NM represents parameters that were not measured, and empty or NA indicates data not
-available"): blank -> no value; ``na`` / ``n/a`` -> NULL (counted in the report, no fact, no skip); ``nm`` in a
-fact-bearing column -> a skip-report row, reason ``not_measured`` (in a slot column it would be NULL; none occur).
-Any other non-numeric string raises.
+Missing codes (the paper: "NM represents parameters that were not measured, and empty or NA indicates data not available"): blank gives
+no value. ``na`` and ``n/a`` give NULL (counted in the report, no fact, no skip). ``nm`` in a fact-bearing column is a skip with reason
+``not_measured`` (in a slot column it would be NULL; none occur). Any other non-numeric string raises.
 
-Locations: ``location_key`` = reference no | Locations | Site | lat | lon | water depth. ``site_name`` = Locations,
-``source_site_id`` = Site. No habitat is given or stated for the dataset (D3): habitat_type is NULL, no flag; the
-label map declares the habitat column with an empty-label row only. 27 rows have no coordinates (flag
-``coords_missing``), the latitude and longitude of a row are both blank or both present (asserted).
+Locations: location_key = reference no | Locations | Site | lat | lon | water depth. site_name is Locations and source_site_id is Site.
+No habitat is given or stated for the dataset, so habitat_type is NULL with no flag, and the label map declares the habitat column with
+an empty-label row only. Rows without coordinates get ``coords_missing`` (latitude and longitude are both blank or both present,
+asserted).
 
-Samples: one per source row (keyed row<n>); sampling_year = Year (blank -> NULL, flag ``year_missing``);
-sampling_month = Month_1 (Month names are asserted to agree with Month_1).
+Samples: one per source row (keyed row<n>). sampling_year is Year (blank gives NULL and ``year_missing``) and sampling_month is Month_1
+(the Month names are asserted to agree).
 
-Methods: the ``Experiment information`` sheet row aligned to each data row (reference, location and site asserted
-equal). For the three rate attributes one method row per distinct (attribute, 15NO3 addition concentration, incubation
-environment, incubation temperature, incubation time, termination, rate calculation); ``technique`` = the rate
-calculation string; ``light_dark`` = ``dark`` where the incubation environment says so; all six strings go to ``params``.
-The paper says every rate is from an intact-core incubation, dark only, but the file does not say it per row, so
-``incubation_type`` is NULL. Covariate attributes (organic carbon, C/N, O2 penetration, J1) get one method row each,
-``method_id_null``.
+Methods: the ``Experiment information`` row aligned to each data row (reference, location and site asserted equal). For the three rate
+attributes, one method row per distinct (attribute, 15NO3 addition concentration, incubation environment, incubation temperature,
+incubation time, termination, rate calculation). technique is the rate calculation string, light_dark is ``dark`` where the incubation
+environment says so, and all six strings go to ``params``. The paper says every rate is from a dark intact-core incubation, but the file
+does not say so per row, so incubation_type is NULL. Covariate attributes (organic carbon, C/N, O2 penetration, J1) get one
+method_id_null row each.
 
-References: ``References No.`` 1..69 is the study id: ``reference_key`` = ``ref_no:<n>``; the docx supplies the
-text (title = the whole entry, year parsed from the ``, YYYY.`` that ends the journal part; no DOIs in the file).
+References: ``References No.`` 1 to 69 is the study id, ``reference_key`` = ``ref_no:<n>``. The docx supplies the text (title is the
+whole entry, and the year is parsed from the ``, YYYY.`` ending the journal part). There are no DOIs in the file.
 
-Flags (informational; nothing is changed or dropped): coords_missing, year_missing, zero_value,
-duplicate_source_row (rows identical in all columns of both sheets).
+Flags (nothing is changed or dropped): coords_missing, year_missing, zero_value, duplicate_source_row (rows identical in all columns of
+both sheets).
 
 Provenance: ``source_row_ref`` = ``Upload_data.xlsx[Raw_data]#data_row=<0-based row>:<attribute>``.
 

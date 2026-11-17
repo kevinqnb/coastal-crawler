@@ -1,77 +1,57 @@
 #!/usr/bin/env python3
-"""BenBioDen database (BenBIO biomass + BenDEN density) -> compilation-contract tables.
+"""BenBioDen database (BenBIO biomass and BenDEN density) -> compilation-contract tables.
 
-Stratmann, T., van Oevelen, D., Martinez Arbizu, P. et al. (2021). The BenBioDen database, a
-global database for meio-, macro- and megabenthic biomass and densities. Dryad,
-doi:10.5061/dryad.gb5mkkwm6 (paper: Sci. Data 2020). Raw files (this directory), all Windows-1252:
-``BenBIO_database.csv`` (biomass), ``BenDEN_database.csv`` (density) and the screening record of
-each database, ``List_of_studies_for_BenBio_database.txt`` / ``List_of_studies_for_BenDen_database.txt``
-(tab-separated). One source (``stratma-bio``), two data files.
+Stratmann, T., van Oevelen, D., Martinez Arbizu, P. et al. (2021). The BenBioDen database, a global database for meio-, macro- and
+megabenthic biomass and densities. Dryad, doi:10.5061/dryad.gb5mkkwm6 (paper: Sci. Data 2020). Raw files (this directory), all
+Windows-1252: ``BenBIO_database.csv`` (biomass), ``BenDEN_database.csv`` (density), and each database's screening record,
+``List_of_studies_for_BenBio_database.txt`` and ``List_of_studies_for_BenDen_database.txt`` (tab-separated). One source
+(``stratma-bio``), two data files.
 
-Grain: ONE FACT PER DATA ROW = one community biomass (BenBIO) or one community density (BenDEN) at
-one station for one size class. Values are carried exactly as reported, in the source's units; the
-four biomass units (``g WM/ m2``, ``g DM/ m2``, ``g C/ m2``, ``g AFDM/ m2``) are the per-row ``unit``
-column, the density unit is read from the BenDEN header (``Density (ind/ m2)``), both asserted.
-Nothing is converted. Suspicious values are FLAGGED, never changed or dropped.
+Grain: one fact per data row (one community biomass or density at one station and size class), in the source's units. The four
+biomass units (``g WM/ m2``, ``g DM/ m2``, ``g C/ m2``, ``g AFDM/ m2``) are the per-row ``unit`` column. The density unit is read from
+the BenDEN header (``Density (ind/ m2)``). Both are asserted. Nothing is converted, and suspicious values are flagged.
 
-Attributes, both measurement type B10 (macrofauna): ``benbio_biomass`` [total_biomass],
-``benden_density`` [total_density]. They are different quantities; the biomass unit differs per row.
-Standard labels (habitat, setting) come from ``compilation_label_maps.csv``: habitat = subtidal soft
-sediment for every ``Depth range`` label (dataset scope, as SCOC), setting shelf for the shelf label,
-open ocean for the abyssal label, blank for near-shore and slope. A row whose ``Depth range`` is
-``NA`` gets NO habitat label and no ``habitat_from_scope`` flag; the habitat is never inferred from the
-depth number (in this file the depth is blank on every such row anyway).
+Attributes, both type B10: ``benbio_biomass`` [total_biomass] and ``benden_density`` [total_density]. They are different quantities,
+and the biomass unit differs per row. Standard labels via ``compilation_label_maps.csv``: habitat is subtidal soft sediment for every
+``Depth range`` label (dataset scope, as SCOC). Setting is shelf for the shelf label, open ocean for the abyssal label, and blank
+for near-shore and slope. A row whose ``Depth range`` is ``NA`` gets no habitat and no ``habitat_from_scope`` flag. Habitat is
+never inferred from the depth number.
 
-Fail loud. The only exclusion is a BenDEN row with no density (reason ``no_density``, listed with its
-file in ``skip_report.jsonl``). A BenBIO row without a biomass raises. Row accounting is asserted:
-source rows = facts + excluded rows, per file.
+Exclusions: only a BenDEN row with no density (``no_density``, listed with its file in ``skip_report.jsonl``). A BenBIO row without
+a biomass raises. Row accounting is asserted per file: source rows = facts + excluded rows.
 
-Standardisation / derived-field rules (the raw value is recoverable via ``fact.source_row_ref`` =
-``<file>#data_row=<0-based data row, as read by pandas>:<attribute>``):
-  * Strings are whitespace-stripped; the literals ``NA`` and blank become NULL. Numbers are parsed with
-    Python's ``float`` (``2.58E+00`` style is fine); a non-numeric value raises.
-  * latitude / longitude are the source decimal degrees, unchanged (asserted in range; the source has no
-    0-360 longitudes). One BenDEN row (data row 48707, station "North Pole") has latitude 90.012, beyond the
-    pole: kept as reported, flagged ``lat_beyond_pole``, declared in ``KNOWN_LATITUDE_BEYOND_POLE`` (any other row
-    outside [-90, 90] raises). Where only the longitude is blank (19 BenBIO + 19 BenDEN rows, one study) the latitude
-    is kept as reported, the longitude is NULL, and the facts get ``coords_missing``.
-  * water_depth_m = ``Depth (m)`` (positive down, unchanged; must be > 0); elevation NULL. habitat_type =
-    the source ``Depth range`` label (a depth class, raw); water_body = ``Ocean``; site_name = ``Region``;
-    position_method = the source ``Location`` label (exact / approximated).
-  * sample: one per data row (the value is for the whole community; no sediment depth interval).
-    taxon = ``Benthos`` (macrobenthos / meiobenthos / megabenthos), taxon_rank = ``size_class``.
-  * method: one per (reference, attribute, sampling gear, sieve lower, sieve upper, raw/converted,
-    conversion reference). technique = ``sampling gear``; the sieve mesh strings (kept as text, e.g.
-    ``0.300 and 0.500``), the raw/converted label and the conversion reference go to ``params``.
-    ``method_status`` = ``matched`` when a sampling gear is stated, ``method_id_null`` when it is NA
-    (the technique is then unknown, not absent by design); the source has no method id.
-  * location_key = reference | region | ocean | lat | lon | depth | location label | depth range (raw strings),
-    shared by both files, so identical stations of one reference in BenBIO and BenDEN are one location. The
-    ocean is in the key because two stations (BenDEN rows 1210/1211 and 1285/1286, one Bering Sea region) carry
-    both ``Pacific Ocean`` and ``Arctic Ocean`` at identical coordinates; they stay separate locations.
-  * reference_key = ``ref:<Reference string>`` (whitespace collapsed, one trailing full stop dropped), the
-    same key in both files. Strings are never merged beyond that (strings differing in anything else, also
-    those equal after dropping punctuation and case, stay separate; they are listed in the report).
-    ``citation_dim``: one row per reference (bibliography_id = title = the string; year and DOI parsed
-    from it by regex only when the string is a single citation, i.e. has no ``; ``).
+Derived-field rules (the raw value is recoverable via ``fact.source_row_ref`` = ``<file>#data_row=<0-based row>:<attribute>``):
+  * Strings are whitespace-stripped, and ``NA`` and blank become NULL. Numbers are parsed with ``float``, and a non-numeric value raises.
+  * latitude and longitude are the source decimal degrees, asserted in range. BenDEN data row 48707 (station "North Pole") has
+    latitude 90.012, beyond the pole. It is kept, flagged ``lat_beyond_pole`` and declared in ``KNOWN_LATITUDE_BEYOND_POLE``, and any
+    other row outside [-90, 90] raises. Where only the longitude is blank (19 rows per file, one study) the latitude is kept, the
+    longitude is NULL, and the facts get ``coords_missing``.
+  * water_depth_m is ``Depth (m)`` (positive down, must be > 0), and elevation is NULL. habitat_type is ``Depth range`` (a depth
+    class, raw), water_body is ``Ocean``, site_name is ``Region`` and position_method is ``Location`` (exact or approximated).
+  * sample: one per data row (no sediment depth interval). taxon is ``Benthos`` (macro, meio or megabenthos), rank ``size_class``.
+  * method: one per (reference, attribute, sampling gear, sieve lower, sieve upper, raw or converted, conversion reference).
+    technique is the sampling gear. The sieve mesh strings (kept as text, e.g. ``0.300 and 0.500``), the raw or converted label and
+    the conversion reference go to ``params``. method_status is ``matched`` when a gear is stated and ``method_id_null`` when it is
+    NA (the source has no method id).
+  * location_key = reference | region | ocean | lat | lon | depth | location label | depth range (raw strings), shared by both files,
+    so the same station of one reference in BenBIO and BenDEN is one location. Ocean is in the key because two stations (BenDEN rows
+    1210/1211 and 1285/1286) carry both ``Pacific Ocean`` and ``Arctic Ocean`` at identical coordinates, and they stay separate.
+  * reference_key is ``ref:<Reference string>`` (whitespace collapsed, one trailing full stop dropped), the same in both files.
+    Strings are never merged beyond that. Citation: bibliography_id and title are the string, and year and DOI are parsed by regex
+    only when the string is a single citation (no ``; ``).
 
-Study lists (``study_screening``): each file has its own list (one row per candidate study, with that
-database's screening labels); ``study_key`` = ``benbio_<n>`` / ``benden_<n>`` with n the 0-based list row.
-Two trailing BenBIO list rows are fully blank (asserted) and dropped. A data reference string is matched
-to ITS OWN database's list: the whole string on its case- and punctuation-insensitive form, else each
-``; ``-separated part the same way, else the part is resolved by ``CROSSWALK`` (a typo, an encoding loss, a
-journal abbreviation or, for two papers, a different year in the list; title, journal, volume and pages
-agree) or declared in ``UNRESOLVED`` (the list has no entry for it). Every other part, and every
-included-but-unused list entry not declared in ``INCLUDED_UNUSED``, raises. A list entry is linked to a
-reference only when exactly one reference string resolves to it as a whole; entries cited only inside
-composite strings keep ``reference_key`` NULL (the study_screening link holds one reference).
-``study_marked_excluded`` goes on facts citing a list entry whose database status is not ``included``
-(``KNOWN_USED_BUT_NOT_INCLUDED``; any other raises).
+Study lists (``study_screening``): each file has its own list with that database's labels, and ``study_key`` is ``benbio_<n>`` or
+``benden_<n>`` (n = 0-based list row). Two trailing BenBIO list rows are blank (asserted) and dropped. A reference string is matched
+to its own database's list: the whole string by its case- and punctuation-insensitive form, else each ``; ``-separated part the same
+way, else the part is resolved by ``CROSSWALK`` (a typo, an encoding loss, a journal abbreviation, or, for two papers, a different year
+in the list) or declared in ``UNRESOLVED`` (no list entry). Any other part raises, and so does any included-but-uncited list entry not
+declared in ``INCLUDED_UNUSED``. A list entry links to a reference only when exactly one reference string resolves to it as a whole.
+``study_marked_excluded`` goes on facts citing an entry whose database status is not ``included`` (``KNOWN_USED_BUT_NOT_INCLUDED``;
+any other raises).
 
-Flags (the SCOC set plus lat_beyond_pole): zero_value, coords_missing, lat_lon_zero, coords_approximate (Location =
-approximated), depth_missing, method_missing (no sampling gear), duplicate_source_row (every member of a
-group of rows identical in ALL columns of that file), converted_by_source (BenBIO ``converted data``),
-study_marked_excluded, habitat_from_scope (the row has a Depth range label).
+Flags: zero_value, coords_missing, lat_lon_zero, lat_beyond_pole, coords_approximate (Location = approximated), depth_missing,
+method_missing (no sampling gear), duplicate_source_row (every member of a group of rows identical in all columns of that file),
+converted_by_source (BenBIO ``converted data``), study_marked_excluded, habitat_from_scope (the row has a Depth range label).
 
 Usage:
     python -I extract.py --access-date YYYY-MM-DD

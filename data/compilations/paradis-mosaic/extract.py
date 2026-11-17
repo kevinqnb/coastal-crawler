@@ -1,80 +1,75 @@
 #!/usr/bin/env python3
 """MOSAIC v2.0 (Paradis et al.) PostgreSQL dump -> compilation-contract tables.
 
-Paradis, S. et al. (2023): Modern Ocean Sediment Archive and Inventory of Carbon (MOSAIC), v2.0.
-doi:10.5281/zenodo.8322094; ESSD preprint essd-2023-158; CC BY 4.0 (``docs/README.md``). The file we hold is
-``Datasets/mosaic_ESSD``: a PostgreSQL custom-format archive of the database ``mosaic_2_ESSD`` (archive created
-2023-04-25, i.e. before the Zenodo v2.0 release of 2023-09-06).
+Paradis, S. et al. (2023): Modern Ocean Sediment Archive and Inventory of Carbon (MOSAIC), v2.0. doi:10.5281/zenodo.8322094; ESSD preprint
+essd-2023-158; CC BY 4.0 (``docs/README.md``). The file we hold is ``Datasets/mosaic_ESSD``, a PostgreSQL custom-format archive of the
+database ``mosaic_2_ESSD`` (created 2023-04-25, before the Zenodo v2.0 release of 2023-09-06).
 
-READING THE DUMP. A ``pg_restore`` binary new enough for the archive version is needed and its path is a REQUIRED argument
-(``--pg-restore``): this script does not look one up and does not gate on a version number. It runs
-``pg_restore --list`` (the archive header must say ``dbname: mosaic_2_ESSD`` and ``created at 2023-04-25``) and
-``pg_restore --data-only -f <file>`` (plain-text ``COPY`` blocks), raises if either exits non-zero or writes to
-stderr, and then raises unless the COPY blocks are exactly the 27 expected tables with the expected row counts
-(``EXPECTED_ROWS``) and the expected column lists of the tables read here. The COPY text format is decoded in full
+READING THE DUMP. A ``pg_restore`` binary new enough for the archive version is needed, and its path is a REQUIRED argument
+(``--pg-restore``). This script does not look one up and does not gate on a version number. It runs ``pg_restore --list`` (the header must
+say ``dbname: mosaic_2_ESSD`` and ``created at 2023-04-25``) and ``pg_restore --data-only -f <file>`` (plain-text ``COPY`` blocks), and
+raises if either exits non-zero or writes to stderr. It then raises unless the COPY blocks are exactly the 27 expected tables with the
+expected row counts (``EXPECTED_ROWS``) and the expected column lists of the tables read here. The COPY text format is decoded in full
 (``\\N`` is NULL only as the whole field; ``\\\\ \\n \\t \\r \\b \\f \\v``, octal and hex escapes).
 
-GRAIN. One fact per NON-NULL VALUE CELL of ``sample_composition`` (every value column) and of ``sample_sediment_properties``
-(dry bulk density, porosity, water content, gravel/sand/silt/clay/mud, mean/median/mode grain size). A cell is
-identified by (table, sample_id, material_analyzed_id, replicate, column). The other 11 value tables (stable isotopes,
-14C, biomarkers, rock-eval, ...), sediment ``surface_area`` and ``cumulative_dry_mass_g_cm2`` are NOT loaded (counted per
-column in ``extract_report.json``). ``spatial_ref_sys`` is empty.
+GRAIN. One fact per NON-NULL VALUE CELL of ``sample_composition`` (every value column) and of ``sample_sediment_properties`` (dry bulk
+density, porosity, water content, gravel, sand, silt, clay, mud, mean, median and mode grain size). A cell is identified by (table,
+sample_id, material_analyzed_id, replicate, column). The other 11 value tables (stable isotopes, 14C, biomarkers, rock-eval, ...), sediment
+``surface_area`` and ``cumulative_dry_mass_g_cm2`` are NOT loaded (counted per column in ``extract_report.json``).
 
-LINKING A CELL TO ITS METADATA. ``sample_metadata`` has one row per (sample, material, analysis, replicate, article,
-contact); its ``sample_analysis_id`` is the analysis (column) named in ``sample_analysis_description``. A value cell's
-metadata rows are the rows with the same (sample_id, material_analyzed_id, sample_analysis_id of the column,
-replicate). They give the article(s), ``method``, ``method_details`` and ``sample_analysis_calculated``.
-  * no such row -> the cell is skipped, reason ``no_metadata_row`` (no article can be attached; the replicate numbering of the
-    value table and of ``sample_metadata`` disagree for these cells; nothing is borrowed from another replicate);
-  * several rows with different articles -> composite ``reference_key`` ``article:<a>+article:<b>`` (sorted), one
-    citation row per article (plan 3.4);
-  * several rows that disagree on method / method_details / calculated -> ``method_status`` =
-    ``ambiguous_duplicate_method_id``, technique NULL, every row in ``method.params``.
-``method_status``: ``matched`` (method known), ``method_id_null`` (``method`` = ``_unknown``: technique NULL),
-``ambiguous_duplicate_method_id`` (above). ``technique`` = ``method``; ``method_details`` is in ``params``.
+LINKING A CELL TO ITS METADATA. ``sample_metadata`` has one row per (sample, material, analysis, replicate, article, contact). Its
+``sample_analysis_id`` is the analysis (column) named in ``sample_analysis_description``. A value cell's metadata rows are those with the
+same (sample_id, material_analyzed_id, sample_analysis_id of the column, replicate). They give the article(s), ``method``,
+``method_details`` and ``sample_analysis_calculated``.
+  * No such row: the cell is skipped with reason ``no_metadata_row`` (the replicate numbering of the value table and the metadata
+    disagree, and nothing is borrowed from another replicate).
+  * Several rows with different articles: a composite ``reference_key`` ``article:<a>+article:<b>`` (sorted), with one citation row per
+    article.
+  * Several rows that disagree on method, method_details or calculated: ``method_status`` = ``ambiguous_duplicate_method_id``, technique
+    NULL, every row in ``method.params``.
+``method_status`` is ``matched`` (method known), ``method_id_null`` (``method`` = ``_unknown``, technique NULL) or
+``ambiguous_duplicate_method_id`` (above). technique is ``method``, and ``method_details`` is in ``params``.
 
-ERRORS. Each ``*_error`` column has its own analysis id and metadata, and the source's descriptions (``DatasetS2.csv``,
-the Excel template README) say only "Error of ..." - never SD or SE. Decision (owner): DEFAULT TO SD. The error is stored in
-``fact.sd`` (``se`` stays NULL), the fact gets the flag ``error_type_missing``, ``method.notes`` says "error column assumed to
-be a standard deviation; the source does not state SD or SE", and ``method.params`` keeps ``error_value``, ``error_column``,
-``error_meaning`` (unstated) of the fact's own method row. An error
-cell whose value cell is blank or skipped is skipped, reason ``error_without_fact``.
+ERRORS. Each ``*_error`` column has its own analysis id and metadata. The source's descriptions (``DatasetS2.csv``, the Excel template
+README) say only "Error of ...", never SD or SE. Decision (owner): DEFAULT TO SD. The error is stored in ``fact.sd`` (``se`` stays NULL),
+the fact gets the flag ``error_type_missing``, ``method.notes`` says "error column assumed to be a standard deviation; the source does not
+state SD or SE", and ``method.params`` keeps ``error_value``, ``error_column`` and ``error_meaning`` (unstated). An error cell whose value
+cell is blank or skipped is skipped with reason ``error_without_fact``.
 
-ATTRIBUTES. ``mosaic_*`` (see ``compilation_vocab.ATTRIBUTES``): organic carbon, total carbon, TIC, CaCO3, LOI organic matter,
-total nitrogen, OC:TN, dry bulk density, porosity, water content (C1); gravel/sand/silt/clay(<4 um and <2 um)/mud, mean/
-median/mode grain size (G1); organic and inorganic nitrogen, OC:ON, total and organic P, total S, biogenic silica (SiO2,
-opal) as ``other``. Units are the source's (``sample_analysis_units``), verbatim: ``%``, ``g·cm-3``, ``-`` (porosity),
-``µm`` (U+00B5). Blank unit (OC:TN, OC:ON ratios) -> ``(blank in source)``. ``clay_%_2microm`` has unit ``µm`` in the dump and
-in DatasetS2 although it is a percentage content (its description is "Content of clay (< 2 um)", DatasetS1 sums it with the
-other percentages to 100): declared as ``%`` (a documented correction of an obvious source error; the raw unit is in params).
+ATTRIBUTES. ``mosaic_*`` (see ``compilation_vocab.ATTRIBUTES``): organic carbon, total carbon, TIC, CaCO3, LOI organic matter, total
+nitrogen, OC:TN, dry bulk density, porosity and water content (C1); gravel, sand, silt, clay (<4 um and <2 um), mud and mean, median and
+mode grain size (G1); organic and inorganic nitrogen, OC:ON, total and organic P, total S and biogenic silica (SiO2, opal) as ``other``.
+Units are the source's (``sample_analysis_units``), verbatim: ``%``, ``g·cm-3``, ``-`` (porosity) and ``µm`` (U+00B5). A blank unit (OC:TN
+and OC:ON ratios) gives ``(blank in source)``. ``clay_%_2microm`` has unit ``µm`` in the dump and DatasetS2 although it is a percentage
+content (its description is "Content of clay (< 2 um)", and DatasetS1 sums it with the other percentages to 100). It is declared ``%``, a
+documented correction of an obvious source error, with the raw unit in params.
 
-MATERIAL ANALYSED. ``material_analyzed_id`` 1 is bulk sediment. Every other material (size or density fraction, TOC, ...) is
-loaded but the fact gets the flag ``non_bulk_material`` and the material label is in ``method.params`` and the method key.
-Material ``surface_area`` (108 organic-carbon values of 0.009-0.07 in a ``%`` column; the quantity is not a bulk percentage)
-is skipped, reason ``material_unit_unclear``.
+MATERIAL ANALYSED. ``material_analyzed_id`` 1 is bulk sediment. Every other material (size or density fraction, ...) is loaded, but its
+facts get ``non_bulk_material``, and the material label is in ``method.params`` and the method key. Material ``surface_area`` (organic-carbon
+values of 0.009 to 0.07 in a ``%`` column, which is not a bulk percentage) is skipped with reason ``material_unit_unclear``.
 
-LOCATIONS (``geopoints``, one per core that has a fact). lat/lon; ``site_name`` = core_name; ``water_body`` = ``seas``;
-``bioregion`` = Longhurst province; ``geomorphic_setting`` = ``geomorphological_site`` raw (label map: shelf, estuary, fjord
-only). DEPTH: ``water_depth_m`` is loaded ONLY where ``water_depth_source_id`` = 1 (given in the manuscript); id 2 (extracted
-from GEBCO 2020, derived) is not loaded (plan rule 3.5). HABITAT: raw ``habitat_type`` = ``marine sediment core`` (-> Subtidal
-soft sediment by dataset scope) only for cores whose loaded depth is >= the REQUIRED ``--min-subtidal-depth-m``; NULL for
-shallower cores and for cores with no loaded depth. Facts at such locations get ``habitat_from_scope``. ``position_method``
-records ``georeferenced_coordinates`` (1 = obtained by georeferencing a map, 0 = from the source; tutorial wording).
+LOCATIONS (``geopoints``, one per core that has a fact): lat and lon, site_name is core_name, water_body is ``seas``, bioregion is the
+Longhurst province, and geomorphic_setting is ``geomorphological_site`` raw (label map: shelf, estuary and fjord only). DEPTH:
+``water_depth_m`` is loaded ONLY where ``water_depth_source_id`` = 1 (given in the manuscript). Id 2 (extracted from GEBCO 2020, derived)
+is not loaded (plan rule 3.5). HABITAT: raw ``habitat_type`` = ``marine sediment core`` (Subtidal soft sediment by dataset scope) only for
+cores whose loaded depth is >= the REQUIRED ``--min-subtidal-depth-m``. It is NULL for shallower cores and for cores with no loaded depth.
+Facts at labelled locations get ``habitat_from_scope``. ``position_method`` records ``georeferenced_coordinates`` (1 = obtained by
+georeferencing a map, 0 = from the source).
 
-SAMPLES (``samples``, one per sample that has a fact): depth_min/max = upper/bottom depth, representative depth = the
-source's ``sample_depth_average_cm`` (kept as given; it is not always the midpoint). Sampling year and month from the core:
-``sampling_year``/``sampling_month`` columns; where the year (month) is NULL and ``sampling_date`` is present it is taken from
-the date. Cores where the two disagree are listed in the report (the columns win).
+SAMPLES (``samples``, one per sample that has a fact): depth_min and depth_max are the upper and bottom depth, and the representative depth
+is the source's ``sample_depth_average_cm`` (kept as given, and not always the midpoint). Sampling year and month come from the core's
+``sampling_year`` and ``sampling_month`` columns. Where one is NULL and ``sampling_date`` is present, it is taken from the date. Cores where
+the two disagree are listed in the report (the columns win).
 
-REFERENCES: ``reference_key`` = ``article:<article_id>`` (own id; composite ``a+b`` for cells with several articles);
-citation: DOI (as stored), title, year, authors from ``authorship`` ordered by ``author_id`` (the dump has no author position).
+REFERENCES: ``reference_key`` is ``article:<article_id>`` (the dump's id; composite ``a+b`` for cells with several articles). The citation has
+the DOI (as stored), title, year and authors from ``authorship`` ordered by ``author_id`` (the dump has no author position).
 
-FLAGS: zero_value, negative_value, outside_source_qc_range (outside the min/max of DatasetS1 for that column),
-calculated_by_source (any metadata row says the value was calculated), replicate (replicate number > 1), non_bulk_material,
-habitat_from_scope, year_missing, depth_missing (no upper, bottom or average depth). Nothing is changed or dropped.
+FLAGS: zero_value, negative_value, outside_source_qc_range (outside the min or max of DatasetS1 for that column), calculated_by_source (any
+metadata row says the value was calculated), replicate (replicate number > 1), non_bulk_material, habitat_from_scope, year_missing,
+depth_missing, error_type_missing. Nothing is changed or dropped.
 
-PROVENANCE: ``source_row_ref`` = ``mosaic_ESSD[<table>]#data_row=<0-based row of that table's COPY block in pg_restore
---data-only order>:<column>``.
+PROVENANCE: ``source_row_ref`` = ``mosaic_ESSD[<table>]#data_row=<0-based row of that table's COPY block in pg_restore --data-only
+order>:<column>``.
 
 Usage:
     python -I extract.py --access-date YYYY-MM-DD --pg-restore /path/to/pg_restore --min-subtidal-depth-m 1

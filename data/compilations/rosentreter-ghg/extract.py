@@ -1,17 +1,15 @@
 #!/usr/bin/env python3
 """Rosentreter et al. coastal greenhouse-gas flux database -> compilation-contract tables.
 
-Rosentreter, J.A., Laruelle, G.G., Bange, H.W., Bianchi, T.S., Busecke, J.J.M., Cai, W.-J., et al. (2023):
-Coastal GHG data base (Rosentreter et al. 2023). figshare, doi:10.6084/m9.figshare.22351267.v1 (paper:
-Nature Climate Change, 2023). Raw file (this directory): one workbook with a ``Metadata`` sheet (column
-legend, incl. the ``type`` code lists), six data sheets and ``Surface_areas``.
+Rosentreter, J.A., Laruelle, G.G., Bange, H.W., Bianchi, T.S., Busecke, J.J.M., Cai, W.-J., et al. (2023): Coastal GHG data base
+(Rosentreter et al. 2023). figshare, doi:10.6084/m9.figshare.22351267.v1 (paper: Nature Climate Change, 2023). Raw file (this
+directory): one workbook with a ``Metadata`` sheet (column legend, including the ``type`` code lists), six data sheets and
+``Surface_areas``.
 
-Grain: ONE FACT PER DATA ROW (every row of the six data sheets has exactly one flux; asserted). Values are
-carried exactly as reported, in the unit written in the flux column header (asserted equal to the declared
-unit after whitespace normalisation). The file does not state a sign convention; the vegetation CO2 sheet is
-mostly negative (uptake by the ecosystem), so positive is read as a flux to the atmosphere, but that is an
-inference, not a statement of the source. Nothing is converted or capped; negative values are real fluxes and
-are not flagged.
+Grain: one fact per data row (every row of the six data sheets has exactly one flux, asserted), in the unit written in the flux column
+header (asserted equal to the declared unit after whitespace normalisation). The file states no sign convention. The vegetation CO2
+sheet is mostly negative (uptake), so positive is read as a flux to the atmosphere, which is an inference. Nothing is converted or
+capped, and negative values are real fluxes and not flagged.
 
 Sheet -> attribute (type/subfield, unit from the header):
   Estuaries_CO2           ghg_co2_estuary      C8 co2_flux   g CO2 m2 d-1
@@ -20,45 +18,36 @@ Sheet -> attribute (type/subfield, unit from the header):
   Coastal_vegetation_CO2  ghg_co2_vegetation   C8 co2_flux   g C m2 yr-1
   Coastal_vegetation_CH4  ghg_ch4_vegetation   C8 ch4_flux   mg CH4 m2 d-1
   Coastal_vegetation_N2O  ghg_n2o_vegetation   C8 n2o_flux   mg N2O m2 d-1
-Estuary and vegetation fluxes are separate attributes because the exchange interface differs (water-air over
-estuary water vs ecosystem-atmosphere exchange over vegetated coast); the CO2 vegetation unit is per year and
-per C, the others per day.
+Estuary and vegetation fluxes are separate attributes because the exchange interface differs (water-air over estuary water versus
+ecosystem-atmosphere exchange over vegetated coast). Vegetation CO2 is per year and per C, and the others are per day.
 
-Locations: ``type`` codes are decoded from the Metadata sheet's own legend (read and asserted, not hardcoded):
-estuary 1 Tidal systems and deltas, 2 Lagoons, 3 Fjords -> ``geomorphic_setting`` (raw); vegetation 1
-Mangroves, 2 Saltmarshes, 3 Seagrasses -> ``habitat_type`` (raw). Estuary sheets (water-air exchange over
-estuary water) get ``habitat_type`` = the constant ``water column`` (the sheet's scope; flag
-``habitat_from_scope``), vegetation sheets get the decoded vegetation label (a source label, no scope flag).
-``site_name`` = the stripped ``site_name``; ``location_key`` = lat | long | site_name | habitat_type |
-geomorphic_setting, so a site in the CO2, CH4 and N2O estuary sheets is one location. ``region`` (the RECCAP2
-region code) is a column that is not loaded; it is recoverable through ``source_row_ref``.
+Locations: ``type`` codes are decoded from the Metadata sheet's own legend (read and asserted, not hardcoded). Estuary: 1 Tidal systems
+and deltas, 2 Lagoons, 3 Fjords, as ``geomorphic_setting`` (raw). Vegetation: 1 Mangroves, 2 Saltmarshes, 3 Seagrasses, as
+``habitat_type`` (raw). Estuary sheets get ``habitat_type`` = the constant ``water column`` (the sheet's scope, flag
+``habitat_from_scope``). Vegetation sheets get the decoded label (a source label, no scope flag). site_name is the stripped
+``site_name``, and location_key = lat | long | site_name | habitat_type | geomorphic_setting, so one site in the CO2, CH4 and N2O estuary
+sheets is one location. ``region`` (the RECCAP2 code) is not loaded and is recoverable through ``source_row_ref``.
 
-Samples: one per data row (keyed sheet:row). The file states values are "averaged per site over
-spatiotemporal gradients" for every row, so there is no year, depth or taxon.
+Samples: one per data row (keyed sheet:row). The file says values are "averaged per site over spatiotemporal gradients", so there is no
+year, depth or taxon.
 
-Methods: the source gives no method per row; one ``method_dim`` row per attribute, ``method_id_null``;
-``params`` records the interface, the source column header and the Metadata statement. The all-rows
-statement that values are averages per site is a property of the whole file, so it is recorded here and in
-the README and not as a per-fact flag (the registered ``source_site_averaged`` means an average over sites).
+Methods: none per row, so one method row per attribute (method_id_null). ``params`` records the interface, the source column header and
+the Metadata statement. The statement that values are site averages applies to the whole file, so it is recorded here and in the README,
+not as a per-fact flag (the registered ``source_site_averaged`` means an average over sites).
 
-References: ``reference`` (author-year text, free-form) and ``full_citation`` (Nature-style entries
-joined by ``; ``). The same ``reference`` string can stand for several different papers, so the study is
-identified by the full citations: ``full_citation`` (whitespace-normalised) is split on ``; `` into one entry
-per cited paper; a piece with a DOI (``doi:10...`` / ``doi.org/10...``) gets ``doi:<lower-case doi>``, else
-``ref:<piece text>``; a row citing several papers gets the piece keys joined by ``+`` (rule 3.4), with one
-citation row per piece. The number of pieces must equal the number of papers named in ``reference``
-(``count_papers``: ``;`` parts, a year list ``(2010,2012)`` counting each year); the nine ``reference`` strings
-where the free text and the split disagree are declared in ``DECLARED_PIECES`` with the mode that resolves them
-(``split`` = use the split and assert its length, ``whole`` = keep the whole text as one piece) and the set of
-disagreeing strings must equal the declared set exactly. ``pers_comm`` marks a row whose ``reference`` says
-``pers. comm.`` (the Metadata says such data were personal communications in 2020 and have been published
-since 2021; the full citation is then the published source).
+References: ``reference`` (free author-year text) and ``full_citation`` (Nature-style entries joined by ``; ``). The same ``reference``
+string can stand for different papers, so the study is identified by the full citations. ``full_citation`` (whitespace-normalised) is
+split on ``; `` into one piece per paper. A piece with a DOI (``doi:10...`` or ``doi.org/10...``) gets ``doi:<lower-case doi>``, else
+``ref:<piece text>``. A row citing several papers gets the piece keys joined by ``+``, with one citation row per piece. The piece count
+must equal the number of papers ``reference`` names (``count_papers``: ``;`` parts, with a year list ``(2010,2012)`` counting each year).
+The nine strings where the two disagree are declared in ``DECLARED_PIECES`` with the mode that resolves them (``split``: use the split
+and assert its length; ``whole``: keep the text as one piece), and the disagreeing set must equal the declared set exactly.
+``pers_comm`` marks a row whose ``reference`` says ``pers. comm.`` (the Metadata says such data have since been published).
 
-Flags (informational; nothing is changed or dropped): zero_value; coords_integer_degree (both coordinates
-whole degrees); pers_comm; habitat_from_scope (estuary sheets); duplicate_source_row (rows identical in ALL
-columns of their sheet).
+Flags (nothing is changed or dropped): zero_value; coords_integer_degree (both coordinates whole degrees); pers_comm;
+habitat_from_scope (estuary sheets); duplicate_source_row (rows identical in all columns of their sheet).
 
-Provenance: ``source_row_ref`` = ``<file>[<sheet>]#data_row=<0-based data row>:<attribute>``.
+Provenance: ``source_row_ref`` = ``<file>[<sheet>]#data_row=<0-based row>:<attribute>``.
 
 Usage:
     python -I extract.py --access-date YYYY-MM-DD

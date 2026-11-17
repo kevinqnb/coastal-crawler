@@ -1,86 +1,54 @@
 #!/usr/bin/env python3
-"""Foster et al. seagrass biomass / production / structure dataset -> compilation-contract tables.
+"""Foster et al. seagrass biomass, production and structure dataset -> compilation-contract tables.
 
-Foster, N., Gomis, E., Montemayor, D. et al. (2025). Global patterns and drivers of
-seagrass biomass, net primary production and meadow structure [Dataset]. Dryad,
-doi:10.5061/dryad.kprr4xhh1. Raw file (this directory):
-``Dataset_ecological_biomass_complete.csv`` (a meta-analysis table: one row per
-study x site x genus x year).
+Foster, N., Gomis, E., Montemayor, D. et al. (2025). Global patterns and drivers of seagrass biomass, net primary production
+and meadow structure. Dryad, doi:10.5061/dryad.kprr4xhh1. Raw file (this directory): ``Dataset_ecological_biomass_complete.csv``
+(a meta-analysis table, one row per study, site, genus and year).
 
-Grain: ONE FACT PER NON-BLANK SEAGRASS MEASUREMENT. A row holding k of the 11 measurement
-columns becomes k facts. Values are carried exactly as reported, in the units of the
-column header / the dataset README (asserted via the header text). Nothing is converted
-or capped; no threshold is applied to any attribute.
+Grain: one fact per non-blank measurement cell. A row with k of the 11 measurement columns gives k facts. Values are carried as
+reported, in the units of the column header or the dataset README (asserted from the header text). Nothing is converted or capped.
 
 Attributes (source column -> attribute, units_raw):
-  Above/Below/Total.biomass..g.DW.m.2.        -> seagrass_biomass_above/_below/_total   g DW m-2
-  Shoot.density..no..shoots.m.2.              -> seagrass_shoot_density                 shoots m-2
-  Leaf.density..no..leaves.m.2.               -> seagrass_leaf_density                  leaves m-2
-  Percent.cover....                           -> seagrass_percent_cover                 %  (kept as a percentage)
-  Above/Below/Total/Shoot/Leaf.production.. . -> seagrass_production_above/_below/_total/_shoot/_leaf   g DW m-2 d-1
+  Above/Below/Total.biomass..g.DW.m.2.       -> seagrass_biomass_above/_below/_total   g DW m-2
+  Shoot.density..no..shoots.m.2.             -> seagrass_shoot_density                 shoots m-2
+  Leaf.density..no..leaves.m.2.              -> seagrass_leaf_density                  leaves m-2
+  Percent.cover....                          -> seagrass_percent_cover                 %
+  Above/Below/Total/Shoot/Leaf.production..  -> seagrass_production_above/_below/_total/_shoot/_leaf   g DW m-2 d-1
 
-Measurement types (``compilation_vocab.ATTRIBUTES``; ``fact.measurement_type`` /
-``subfield``): biomass above/below/total -> B2 above_ground_biomass / below_ground_biomass /
-total_biomass; shoot density -> B3 shoot_or_stem_density; leaf density -> B3 leaf_density
-(declared extension); percent cover -> B3 percent_cover; production above/below ->
-B6 above_ground_npp / below_ground_npp; production total/shoot/leaf -> B6 total_npp /
-shoot_production / leaf_production (declared extensions). Production is per DAY here
-(``g DW m-2 d-1``) where the standard B6 lists per year: carried as reported. Standard labels:
-habitat = Seagrass meadow (from the constant ``seagrass``), setting = estuary for
-``Geotype`` Estuarine (Coastal -> blank), via ``compilation_label_maps.csv``.
+Types and subfields (``compilation_vocab.ATTRIBUTES``): biomass above, below, total -> B2 above_ground_biomass,
+below_ground_biomass, total_biomass. Shoot density -> B3 shoot_or_stem_density. Leaf density -> B3 leaf_density (extension).
+Percent cover -> B3 percent_cover. Production above, below -> B6 above_ground_npp, below_ground_npp. Production total, shoot, leaf ->
+B6 total_npp, shoot_production, leaf_production (extensions). Production is per day here, where the standard B6 lists per year,
+and is carried as reported. Standard labels via ``compilation_label_maps.csv``: habitat is Seagrass meadow (from the constant
+``seagrass``) and setting is estuary for ``Geotype`` Estuarine (Coastal stays blank).
 
-NOT LOADED (deliberate): the 19 ``BO22_*`` columns are Bio-ORACLE gridded
-model/satellite climatology looked up at each coordinate (2000-2014), not seagrass
-measurements and not study results. They are asserted to be present and are listed in
-``extract_report.json``; they create no facts. They can be added later as a
-modelled-data attribute family.
+NOT LOADED: the 19 ``BO22_*`` columns are a Bio-ORACLE model and satellite climatology (2000 to 2014) looked up at each
+coordinate, not seagrass measurements. They are asserted present and listed in ``extract_report.json``, and create no facts.
 
-Fail loud. The only exclusion is a row with none of the 11 measurement columns filled
-(reason ``no_seagrass_measurement``, listed in ``skip_report.jsonl``). Row accounting is
-asserted: source rows = rows with facts + excluded rows, and fact count = non-blank
-measurement cells.
+Exclusions: only a row with none of the 11 measurement columns filled (``no_seagrass_measurement``). Row accounting is asserted:
+source rows = rows with facts + excluded rows, and facts = non-blank measurement cells.
 
-Standardisation / derived-field rules (the raw value is recoverable via
-``fact.source_row_ref`` = ``<file>#data_row=<0-based>:<attribute>``):
-  * Strings are whitespace-stripped (the file starts with a UTF-8 BOM, removed); the
-    literal ``NA`` and blank become NULL (``NA`` only occurs in Year.of.sampling).
-  * latitude/longitude are the source decimal degrees, unchanged (asserted to lie in
-    [-90, 90] / [-180, 180]).
-  * habitat_type = constant ``seagrass`` (every row is a seagrass record by the dataset's
-    scope; not a per-row source label). geomorphic_setting = the source ``Geotype``
-    label (``Coastal`` / ``Estuarine``), raw. bioregion = ``Bioregion`` (Short et al.
-    2007 seagrass bioregions, per the dataset README); marine_ecoregion = ``ECOREGION``
-    (undocumented in the dataset README; the names look like the Marine Ecoregions of
-    the World, which is presumed, not stated by the source). site_name, country,
-    water_body, salinity_class, position_* and elevation are NULL (not in the source).
-  * location_key = lat | lon | Geotype | Bioregion | ECOREGION (floats by repr), so
-    coordinates carrying conflicting labels stay separate locations.
-  * sample: one per ``Unique.ID`` (the grain of a source row). taxon = ``Genera`` (raw;
-    ``Mixed`` is kept as a label), taxon_rank = ``genus`` for the 12 genera and
-    ``mixed`` for ``Mixed``; an unknown genus raises. sampling_year = Year.of.sampling
-    (``NA`` -> NULL, flag ``year_missing``); month and depth are NULL (sediment depth
-    is not defined for these quantities; depth_notes says so).
-  * method: the source gives no method information, so there is one method row per
-    attribute with ``method_status = method_id_null`` and ``params`` = the source
-    column. For the three ``*_total`` attributes params also says the source README
-    states totals are the sum of above+below when not reported, so reported and
-    summed totals are not distinguishable.
-  * reference_key: ``doi:<doi>`` when the row's DOI cell is a DOI (bare, or a
-    https://(dx.)doi.org/ URL; all whitespace inside the cell removed, lower-cased),
-    otherwise ``ref:<Reference string>``. A DOI cell that is free text (a full
-    citation) or blank falls back to the Reference string. No manual crosswalk:
-    one paper with two DOI forms is two references, one DOI under two Reference
-    strings is one reference (one citation row per distinct Reference string).
-    citation: bibliography_id = the Reference string, doi = the normalised DOI,
-    year = last 4-digit 19xx/20xx in the Reference string; title/authors NULL.
-    The counts of references that mix DOI and non-DOI rows are in extract_report.json.
+Derived-field rules (the raw value is recoverable via ``fact.source_row_ref`` = ``<file>#data_row=<0-based>:<attribute>``):
+  * Strings are whitespace-stripped (the file starts with a UTF-8 BOM, removed). ``NA`` and blank become NULL (``NA`` occurs only
+    in Year.of.sampling).
+  * latitude and longitude are the source decimal degrees, asserted in range.
+  * habitat_type is the constant ``seagrass`` (the dataset's scope, not a per-row label). geomorphic_setting is ``Geotype`` (raw),
+    bioregion is ``Bioregion`` (Short et al. 2007 per the dataset README) and marine_ecoregion is ``ECOREGION`` (undocumented; the
+    names look like Marine Ecoregions of the World, which is presumed, not stated). Other location fields are NULL.
+  * location_key = lat | lon | Geotype | Bioregion | ECOREGION, so coordinates with conflicting labels stay separate.
+  * sample: one per ``Unique.ID``. taxon is ``Genera`` (raw), with rank ``genus`` for the 12 genera and ``mixed`` for ``Mixed``.
+    An unknown genus raises. sampling_year is Year.of.sampling (``NA`` gives NULL and ``year_missing``). Month and depth are NULL.
+  * method: no method information, so one row per attribute with method_id_null and ``params`` = the source column. For the three
+    ``*_total`` attributes params adds that the source README says totals are above + below when not reported, so reported and
+    summed totals cannot be told apart.
+  * reference_key: ``doi:<doi>`` when the DOI cell is a DOI (bare or a doi.org URL, whitespace removed, lower-cased), otherwise
+    ``ref:<Reference string>``. A free-text or blank DOI cell falls back to the string. There is no manual crosswalk: one paper with
+    two DOI forms is two references, and one DOI under two strings is one reference. Citation: bibliography_id is the string, doi the
+    normalised DOI, and year the last 4-digit year in the string. Title and authors are NULL.
 
-Flags (informational; nothing is changed or dropped): habitat_from_scope (every fact: habitat is
-the dataset's scope, seagrass, not a per-row label), year_missing,
-duplicate_source_row (every member of a group of rows identical in all columns except
-Unique.ID, BO22 columns included), total_ne_sum_of_parts (on every fact of a
-biomass or production triple whose above, below and total are all present and where
-total differs from above+below by more than ``--sum-rel-tol`` relative AND
+Flags (nothing is changed or dropped): habitat_from_scope (every fact), year_missing, duplicate_source_row (every member of a group
+of rows identical except Unique.ID, BO22 columns included), total_ne_sum_of_parts (every fact of a biomass or production triple whose
+above, below and total are all present and where total differs from above + below by more than ``--sum-rel-tol`` relative AND
 ``--sum-abs-tol`` absolute).
 
 Usage:

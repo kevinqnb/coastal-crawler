@@ -1,46 +1,41 @@
 #!/usr/bin/env python3
 """Cloern et al. (2014) supplement Table S1 -> compilation-contract tables.
 
-Cloern, J.E., Foster, S.Q., Kleckner, A.E. (2014): Phytoplankton primary production in the world's estuarine-coastal
-ecosystems. Biogeosciences 11, 2477-2501, doi:10.5194/bg-11-2477-2014; supplement
-doi:10.5194/bg-11-2477-2014-supplement (CC BY 3.0). Raw file (this directory): ``bg-11-2477-2014-supplement.pdf``
-(19 PDF pages): page 1 front matter, pages 2-7 Table S1 (a ruled table, read with pdfplumber), pages 8-19 the
-supplement's own reference list (144 paragraphs, no DOIs in most).
+Cloern, J.E., Foster, S.Q., Kleckner, A.E. (2014): Phytoplankton primary production in the world's estuarine-coastal ecosystems.
+Biogeosciences 11, 2477-2501, doi:10.5194/bg-11-2477-2014; supplement doi:10.5194/bg-11-2477-2014-supplement (CC BY 3.0). Raw file (this
+directory): ``bg-11-2477-2014-supplement.pdf`` (19 pages): page 1 front matter, pages 2 to 7 Table S1 (a ruled table, read with
+pdfplumber), and pages 8 to 19 the supplement's own reference list (no DOIs in most).
 
-Grain: ONE FACT PER TABLE ROW (ecosystem x measure x method), attribute ``cloern_appp_median`` (B8
-``depth_integrated_primary_production``): the median annual phytoplankton primary production (APPP) of the ``n`` annual
-measurements the authors pooled for that ecosystem and measure type. ``n`` is the fact's ``n``; the fact is flagged
-``source_median`` on every row (the column header says "Median APPP"; for ``n`` = 1 the median is the one measurement).
-The measure (GPP gross / NPP net / U unreported) and the method (14C, O2, 13C, O2 & 14C) are the method row (``technique``
-= the raw method label, ``params.measure`` the raw measure code with its meaning); they are not separate attributes.
-Declared unit: ``g C m-2 yr-1`` = the column header ``g C m-2 yr-1`` with the PDF's rendering artifacts removed (soft
-hyphen U+00AD and the U+2010 hyphen that the PDF emits after the hyphen-minus: ``m-<U+00AD><U+2010>2`` is ``m-2``); the
-extract asserts the header cell reduces to exactly that string.
+Grain: one fact per table row (ecosystem x measure x method), attribute ``cloern_appp_median`` (B8 ``depth_integrated_primary_production``).
+The value is the median annual phytoplankton primary production (APPP) of the ``n`` annual measurements the authors pooled for that
+ecosystem and measure type. ``n`` is the fact's ``n``, and every fact is flagged ``source_median`` (the header says "Median APPP"; for
+``n`` = 1 the median is the one measurement). The measure (GPP gross, NPP net, U unreported) and the method (14C, O2, 13C, O2 & 14C) are
+the method row: technique is the raw method label and ``params.measure`` the raw measure code with its meaning. They are not separate
+attributes. The declared unit ``g C m-2 yr-1`` is the column header with the PDF's rendering artifacts removed (a soft hyphen U+00AD and the
+U+2010 hyphen the PDF emits after the hyphen-minus), and the extract asserts the header cell reduces to exactly that string.
 
-Raw-file anomalies (all asserted, none silent): (1) the table has 163 data rows, not the plan's ~250; (2) the ``n`` column
-sums to 1,147, not the 1,148 of the table caption and abstract text ("computed from 1148 measurements made in 131
-estuarine-coastal ecosystems"): the source is one short of its own caption, verified by two independent readings of the
-page (pdfplumber table cells, and the word-position tally in ``verify_table.py``); the extract asserts 1,147 and carries
-the caption's 1,148 only in the report; (3) 131 distinct ecosystem names, counting ``Chesapeake Bay 1960s`` (a separate
-name in the source) apart from ``Chesapeake Bay``; (4) one negative value (Scheldt Estuary NPP, -105; the sign is printed in
-the source): kept, flagged ``negative_value``.
+Source anomalies (asserted, none silent): (1) the table has 163 data rows, not the plan's ~250. (2) The ``n`` column sums to 1,147, not the
+1,148 of the table caption ("computed from 1148 measurements made in 131 estuarine-coastal ecosystems"). The source is one short of its own
+caption, verified by two independent readings of the page (pdfplumber cells and the word-position tally in ``verify_table.py``). The extract
+asserts 1,147 and carries the caption's 1,148 only in the report. (3) There are 131 distinct ecosystem names, counting ``Chesapeake Bay
+1960s`` (a separate name in the source) apart from ``Chesapeake Bay``. (4) One negative value (Scheldt Estuary NPP, -105, the sign printed in
+the source) is kept and flagged ``negative_value``.
 
-Locations: one per ecosystem name (the source has no coordinates and none are guessed): ``site_name`` = ecosystem,
-``country`` = the source's COUNTRY string (whitespace-normalised, e.g. ``DENMARK/ SWEDEN``), ``bioregion`` = the source's
-Region (``Baltic``, ``Europe``...: continental labels, not Short et al.). ``habitat_type`` = ``water column`` for every row
-(label map: Water column), a habitat from scope, so every fact carries ``habitat_from_scope``.
+Locations: one per ecosystem name. The source has no coordinates and none are guessed. site_name is the ecosystem, country is the source's
+COUNTRY string (whitespace-normalised, e.g. ``DENMARK/ SWEDEN``) and bioregion is the source's Region (continental labels such as ``Baltic``
+and ``Europe``, not Short et al.). habitat_type is ``water column`` for every row (label map: Water column), a habitat from scope, so every
+fact carries ``habitat_from_scope``.
 
-References: the cell holds in-text ``(Author, year)`` citations, some ``(A) cited in (B)`` (the first is the study, the
-others are the secondary source: flag ``cited_secondary``) and some personal communications (text before/after the
-citation; flag ``pers_comm``; the communication itself is not a paper, so it has no citation row). Each cited item is matched
-to the supplement's own reference list by an automatic exact rule (first-author surname + year, accent- and case-folded,
-plus structural checks) and, where that is not unique or not right, by the explicit ``CROSSWALK`` below; any item that
-matches neither raises, and every CROSSWALK entry must be used. ``reference_key`` of a row = ``+``-joined keys of the
-cited papers (one ``citation`` row per paper, ``<key>|<k>``); a paper's key is ``doi:<bare doi>`` when its list entry prints a
-DOI, else ``ref:<authors part of the entry> <year>``. The list entry has no separable title: ``citation.title`` holds
-the entry text after the first ``: `` (title and publication details as printed), ``citation.authors`` the text before it.
-List entries no table row cites are not loaded (reported). The parsed list (``references_parsed.csv``), the crosswalk
-(``reference_crosswalk.csv``) and the table rows (``table_s1_rows.csv``) are checked in beside this file for review.
+References: the cell holds in-text ``(Author, year)`` citations. Some are ``(A) cited in (B)`` (the first is the study and the others are
+the secondary source, flag ``cited_secondary``), and some name a personal communication (flag ``pers_comm``; the communication is not a
+paper, so it has no citation row). Each cited item is matched to the supplement's own reference list by an automatic exact rule (first-author
+surname + year, accent- and case-folded, plus structural checks) and, where that is not unique or not right, by the explicit ``CROSSWALK``
+below. An item that matches neither raises, and every CROSSWALK entry must be used. A row's reference_key is the ``+``-joined keys of the
+cited papers, with one citation row per paper (``<key>|<k>``). A paper's key is ``doi:<bare doi>`` when its list entry prints a DOI, else
+``ref:<authors part of the entry> <year>``. A list entry has no separable title, so ``citation.title`` holds the text after the first ``: ``
+and ``citation.authors`` the text before it. List entries no row cites are not loaded (reported). The parsed list
+(``references_parsed.csv``), the crosswalk (``reference_crosswalk.csv``) and the table rows (``table_s1_rows.csv``) are checked in beside
+this file for review.
 
 Provenance: ``source_row_ref`` = ``<file>#pdf_page=<1-based PDF page>:table_row=<0-based data row on that page>:cloern_appp_median``.
 

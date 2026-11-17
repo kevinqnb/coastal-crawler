@@ -1,58 +1,51 @@
 #!/usr/bin/env python3
-"""Davis et al. spatiotemporal drivers of hydrochemical ecosystem calcification and organic productivity (meta-data) -> contract tables.
+"""Davis et al. reef calcification and organic productivity (meta-data) -> compilation-contract tables.
 
-Davis, K., Colefax, A., Tucker, J., Kelaher, B., Santos, I. (2021): Spatiotemporal drivers of hydrochemical ecosystem
-calcification and organic productivity: the meta-data. SEANOE, doi:10.17882/80022 ("last version", quality-controlled).
-Raw file (this directory): ``89830.xlsx``, sheet ``Metadata1`` (the sheet ``_xltb_storage_`` is junk and not read).
-Layout asserted: row 1 = legend, row 2 = headers, row 3 = "how data were used" per column, 116 data rows from sheet row 4
-to 119, nothing below, nothing in columns AR to AV. Cells hold formulas (e.g. ``=6.875*24``); the CACHED values
-are read (a formula with no cached value raises).
+Davis, K., Colefax, A., Tucker, J., Kelaher, B., Santos, I. (2021): Spatiotemporal drivers of hydrochemical ecosystem calcification and
+organic productivity: the meta-data. SEANOE, doi:10.17882/80022 ("last version", quality-controlled). Raw file (this directory):
+``89830.xlsx``, sheet ``Metadata1`` (the sheet ``_xltb_storage_`` is junk and not read). Layout asserted: row 1 is a legend, row 2 the
+headers, row 3 "how data were used" per column, then 116 data rows (sheet rows 4 to 119), nothing below and nothing in columns AR to AV.
+Cells hold formulas (e.g. ``=6.875*24``). The CACHED values are read, and a formula with no cached value raises.
 
-Grain: ONE FACT PER NON-BLANK NUMERIC VALUE CELL of four columns; units are the header's own spelling and values are
-carried as given:
-  Gnet (mmol m-2 d-1)    davis_gnet            B7 net_ecosystem_calcification   mmol m-2 d-1   (116)
-  Pnet (mmol m-2 d-1)    davis_pnet            B5 net_ecosystem_production      mmol m-2 d-1   (105)
-  % coral cover          davis_coral_cover     B4 live_hard_coral_cover         %              (95)
-  % Coralline            davis_coralline_cover B4 turf_cca_invertebrate_cover   %              (31)
-The sheet does not say whether Pnet is on an O2 or a C basis; the unit string is kept verbatim.
-Not loaded (counts in the report): ``% calcifiers`` (= coral + coralline, derived by the authors), PAR (the authors:
-not used, too many reporting units), avg and Stdev of Omega-aragonite and Temp Stdev (phase 2), NO3 and PO4 (no
-units in the sheet), TA:DIC slope, ``Net dissolution at Night?``, ``Decade Studied``. Context: ``Temp avg`` ->
-``sample.water_temperature_c`` (no unit in the sheet; the slot is degC, so degC is assumed), ``Depth`` ->
-``location.water_depth_m``.
+Grain: one fact per non-blank numeric value cell of four columns, in the header's own unit spelling, as given:
+  Gnet (mmol m-2 d-1)    davis_gnet            B7 net_ecosystem_calcification   mmol m-2 d-1
+  Pnet (mmol m-2 d-1)    davis_pnet            B5 net_ecosystem_production      mmol m-2 d-1
+  % coral cover          davis_coral_cover     B4 live_hard_coral_cover         %
+  % Coralline            davis_coralline_cover B4 turf_cca_invertebrate_cover   %
+The sheet does not say whether Pnet is on an O2 or a C basis, so the unit string is kept verbatim.
+Not loaded (counts in the report): ``% calcifiers`` (coral + coralline, derived by the authors), PAR (the authors: not used, too many
+reporting units), aragonite saturation (avg and Stdev) and Temp Stdev (phase 2), NO3 and PO4 (no units in the sheet), TA:DIC slope,
+``Net dissolution at Night?`` and ``Decade Studied``. Context: ``Temp avg`` goes to ``sample.water_temperature_c`` (no unit in the sheet,
+so degC is assumed) and ``Depth`` to ``location.water_depth_m``.
 
-Errors. ``Gnet error`` + its ``error type`` -> ``sd`` / ``se`` of the Gnet fact; ``Pnet error`` + its ``error type``
--> the Pnet fact. Explicit table: ``SE``, ``se`` -> se; ``SD``, ``SD `` -> sd; ``EP-SE`` -> se plus flag
-``error_propagated`` (error-propagated SE). ``S`` (could be SE or SD) and an error value with NO type are treated as
-not stated: the user's rule (2026-11-17) is to default to SD, flag it, note it, so the value goes in ``sd``, the fact gets
-``error_type_missing`` and its method row carries ``notes`` = ``SD_ASSUMED_NOTE``, with the value also in params; an
-unlisted type raises. A negative error value is kept as given and
-flagged ``negative_sd`` (the Pnet errors of the Kinsey 1977 rows are signed). ``% Coral Error`` has no type column: its
-value goes to the params of the cover fact's method row, not to sd/se.
+Errors: ``Gnet error`` and its ``error type`` give ``sd`` or ``se`` of the Gnet fact, and likewise for Pnet. Explicit table: ``SE`` and
+``se`` give se, ``SD`` and ``SD `` give sd, and ``EP-SE`` gives se plus ``error_propagated``. ``S`` (could be SE or SD) and an error value
+with NO type are not stated. By the user's rule (default to SD, flag it, note it) the value goes in ``sd``, the fact gets
+``error_type_missing`` and its method row carries ``notes`` = ``SD_ASSUMED_NOTE``, with the value also in params. An unlisted type raises.
+A negative error value is kept as given and flagged ``negative_sd`` (the Pnet errors of the Kinsey 1977 rows are signed). ``% Coral Error``
+has no type column, so its value goes to the params of the cover fact's method row, not to sd or se.
 
-Colour provenance (flags). Font colour of the VALUE cell, read against the legend in row 1: purple (rgb FF7030A0, the colour of
-the "Data were calculated from information provided" legend text) -> ``calculated_by_source``; blue (theme 4, the colour of
-"Data were sourced from other literature compilations") -> ``secondary_source``; black / none -> no flag. Any other font
-colour on a loaded cell is not in the legend: no flag, counted in the report. (Cell FILLS mark "used in Fig. 3 / 4", not
-provenance, and are not read.)
+Colour provenance (flags): the font colour of the VALUE cell, read against the legend in row 1. Purple (rgb FF7030A0, "Data were
+calculated from information provided") gives ``calculated_by_source``, blue (theme 4, "Data were sourced from other literature
+compilations") gives ``secondary_source``, and black or none gives no flag. Any other font colour on a loaded cell is not in the legend:
+no flag, counted in the report. Cell FILLS mark "used in Fig. 3 / 4", not provenance, and are not read.
 
-Locations: ``location_key`` = Location | Country | lat | lon | Reef Type | Depth | Reef state | Health. ``habitat_type`` and
-``geomorphic_setting`` = ``Reef Type`` (whitespace normalised; case variants such as ``reef flat`` / ``Reef flat``
-are separate label-map rows). ``modification_status`` = raw ``reef state: <text>`` and ``health: <text>`` (none mapped).
-Lat / Long are numbers, apart from 2 text latitudes (``-28.5``) and one longitude written ``149.9 W`` (a trailing
-N/S/E/W sets the sign: W and S negative; a letter on an already signed value raises). Wave action, season, heat type, the
-two ``Method`` columns, night measured, duration, timescale, site returned, TA:DIC slope and the notes go to params.
+Locations: location_key = Location | Country | lat | lon | Reef Type | Depth | Reef state | Health. habitat_type and geomorphic_setting are
+``Reef Type`` (whitespace normalised; case variants such as ``reef flat`` and ``Reef flat`` are separate label-map rows).
+modification_status is the raw ``reef state: <text>`` and ``health: <text>`` (none mapped). Lat and Long are numbers, apart from 2 text
+latitudes and one longitude written ``149.9 W`` (a trailing N, S, E or W sets the sign, and a letter on an already signed value raises).
+Wave action, season, heat type, the two ``Method`` columns, night measured, duration, timescale, site returned, TA:DIC slope and the
+notes go to params.
 
-Samples: one per row (``row<i>``, i = 0-based data row = sheet row - 4); ``sampling_year`` = ``Year Studied`` (6 blank: flag
-``year_missing``).
+Samples: one per row (``row<i>``, i = sheet row - 4). sampling_year is ``Year Studied`` (blank gives ``year_missing``).
 
-Methods: for the rate attributes (Gnet, Pnet) one row per distinct (attribute, technique, params); ``technique`` = the first
-``Method`` column (raw: L, E, S, CV, OTAA, C, chamber, ...), the second (grouped: FL, S, CV, OTAA, GF) is in params. Cover
-facts carry one ``method_id_null`` row each (the % coral cover facts per row, holding ``% Coral Error`` in params).
+Methods: for Gnet and Pnet, one row per distinct (attribute, technique, params). technique is the first ``Method`` column (raw: L, E, S,
+CV, OTAA, C, chamber, ...), and the second (grouped: FL, S, CV, OTAA, GF) is in params. Cover facts carry one method_id_null row each (the
+coral cover facts per row, holding ``% Coral Error`` in params).
 
-References: ``Short Reference`` (author, year, journal text; 53 distinct after whitespace normalisation) -> ``ref:<string>``;
-the sheet has no reference list, so the citation carries only ``bibliography_id`` = the string and ``year`` = ``Year Pub``
-(asserted single-valued per string); the later DOI-resolution job resolves them.
+References: ``Short Reference`` (author, year, journal text) gives ``ref:<string>``. The sheet has no reference list, so the citation holds
+only ``bibliography_id`` = the string and ``year`` = ``Year Pub`` (asserted single-valued per string). The DOI-resolution job resolves them
+later.
 
 Provenance: ``source_row_ref`` = ``89830.xlsx[Metadata1]#data_row=<0-based data row>:<attribute>``.
 

@@ -1,67 +1,49 @@
 #!/usr/bin/env python3
 """SCOC database v1 -> compilation-contract tables.
 
-Stratmann, T., Soetaert, K., Wei, C.-L. et al. (2022). The SCOC database - a large,
-open and global database with sediment community oxygen consumption rates.
-Dryad, doi:10.5061/dryad.25nd083. Raw files (this directory):
-``SCOC_database_version_1.csv`` (measurements) and
-``List_of_studies_version_1.csv`` (screening record of every candidate study).
+Stratmann, T., Soetaert, K., Wei, C.-L. et al. (2022). The SCOC database: a large, open and global database with sediment
+community oxygen consumption rates. Dryad, doi:10.5061/dryad.25nd083. Raw files (this directory):
+``SCOC_database_version_1.csv`` (measurements) and ``List_of_studies_version_1.csv`` (screening record of every candidate
+study).
 
-Grain: ONE FACT PER DATA ROW = one sediment community oxygen consumption rate at one
-station. Values are carried exactly as reported, in the source's units
-(``mmol O2 m-2 d-1``, read from the column header and asserted). Suspicious values
-are FLAGGED in ``fact.flags``, never changed or dropped.
+Grain: one fact per data row (one community oxygen consumption rate at one station), in the source's units
+(``mmol O2 m-2 d-1``, read from the column header and asserted). Values are carried as reported. Suspicious values are flagged
+in ``fact.flags``, never changed or dropped.
 
-Attribute (from the TOU/DOU/AOU column; different quantities, never mixed), all
-measurement type B5 (benthic metabolism); ``fact.subfield`` in brackets:
+Attributes (from the TOU, DOU or AOU column; different quantities, never mixed), all type B5 with the subfield in brackets:
   TOU -> scoc_tou (total oxygen uptake) [total_o2_uptake]
   DOU -> scoc_dou (diffusive oxygen uptake) [diffusive_o2_uptake]
-  AOU -> scoc_aou (advective oxygen uptake) [advective_o2_uptake; a declared extension
-         of the standard B5 subfields]
-  NA  -> scoc_unspecified (20 rows, all one study; flux type not stated) [NULL subfield]
-         + flag ``flux_type_missing``.
-Plus ONE G1 fact per data row with a median grain size: scoc_median_grain_size
-[median_grain_size], units ``um`` (the source header's "?m" is a mangled micro sign), its
-own method row per study (no method information), flags = the row's location/duplicate/
-study flags (+ ``zero_value`` if 0).
-Standard labels (habitat, setting) come from ``compilation_label_maps.csv``: habitat = subtidal soft
-sediment for every ``Depth range`` label; setting shelf / open ocean for the shelf and
-abyssal labels, blank for near-shore and slope.
+  AOU -> scoc_aou (advective oxygen uptake) [advective_o2_uptake, a declared extension subfield]
+  NA  -> scoc_unspecified (20 rows of one study, flux type not stated) [NULL subfield], with the flag ``flux_type_missing``
+Plus one G1 fact per row with a median grain size: scoc_median_grain_size [median_grain_size], in ``um`` (the header's "?m" is
+a mangled micro sign), with its own method row per study (no method information).
 
-Fail loud. The only exclusion is a row whose every field is blank (reason
-``empty_row``, listed in ``skip_report.jsonl``); a row that is only partly blank
-raises. Row accounting is asserted: source rows = facts + excluded rows.
+Standard labels come from ``compilation_label_maps.csv``: habitat is subtidal soft sediment for every ``Depth range`` label.
+Setting is shelf or open ocean for the shelf and abyssal labels, and blank for near-shore and slope.
 
-Standardisation / derived-field rules (the raw value is recoverable through
-``fact.source_row_ref``):
-  * Strings are whitespace-stripped; the literals ``NA`` / ``Na`` and blank become NULL.
-    ``not investigated`` is kept as a label (it is information, not missing).
-  * longitude: if > 180 (source mixes 0-360 and +-180) subtract 360 using exact decimal
-    arithmetic; flag ``lon_wrapped``. latitude and longitude are otherwise unchanged.
-  * water_depth_m = Depth (m), unchanged (positive down); elevation is NULL.  ``habitat_type`` = the source's ``Depth range``
-    label (a depth class, kept raw); ``water_body`` = ``Ocean``; ``site_name`` = ``Region``.
-    ``position_method`` = the source's ``Location`` label (exact / approximated location).
-  * No country / admin_division is parsed out of ``Region``.
-  * sample: one row per data row (the flux is for the whole community at the sediment
-    surface, so there is no sediment depth interval); sediment type and the
+Exclusions: only a row whose every field is blank (``empty_row``). A partly blank row raises. Row accounting is asserted:
+source rows = facts + excluded rows.
+
+Derived-field rules (the raw value is recoverable through ``fact.source_row_ref``):
+  * Strings are whitespace-stripped, and ``NA``, ``Na`` and blank become NULL. ``not investigated`` is kept as a label.
+  * longitude: above 180 (the source mixes 0 to 360 and -180 to 180) subtract 360 with exact decimal arithmetic and flag
+    ``lon_wrapped``. Latitude is unchanged.
+  * water_depth_m is Depth (m), positive down, unchanged. Elevation is NULL.
+  * habitat_type is the ``Depth range`` label (a depth class, kept raw), water_body is ``Ocean``, site_name is ``Region`` and
+    position_method is ``Location`` (exact or approximated). No country is parsed out of ``Region``.
+  * sample: one per data row. The flux is for the whole community, so there is no sediment depth interval. Sediment type and the
     photosynthetic-sediment label are sample columns.
-  * method: technique = measuring device; in_situ_ex_situ and light_dark raw labels.
-    ``method_status`` is ``matched`` when device and in/ex-situ are present and
-    ``method_id_null`` when both are NA (the source has no method id at all).
-  * reference_key = the sorted ``+``-joined keys of the list-of-studies entries a data
-    row's reference string resolves to. A data reference string matches a study-list
-    entry when their case- and punctuation-insensitive forms are equal; the residual
-    mismatches are resolved by ``CROSSWALK`` below (asserted to cover exactly the
-    mismatches, so a new mismatch raises).  Study keys are ``study_<0-based list row>``.
-  * study_screening: all list-of-studies rows, raw labels; ``reference_key`` is NULL for
-    studies with no facts.
+  * method: technique is the measuring device, and in_situ_ex_situ and light_dark are raw labels. method_status is ``matched``
+    when device and in/ex situ are present and ``method_id_null`` when both are NA (the source has no method id).
+  * reference_key is the sorted ``+``-joined keys of the study-list entries a row's reference string resolves to. A string
+    matches an entry when their case- and punctuation-insensitive forms are equal. The remaining mismatches are resolved by
+    ``CROSSWALK`` below, asserted to cover exactly the mismatches, so a new one raises. Study keys are ``study_<0-based list row>``.
+  * study_screening: all list rows with raw labels. ``reference_key`` is NULL for studies with no facts.
 
-Flags: zero_value, lon_wrapped, lat_lon_zero, coords_missing, coords_approximate,
-depth_missing, method_missing, flux_type_missing, study_marked_excluded (the cited study is
-not `included` in the study list; 1 known row), duplicate_source_row (every member of
-a group of fully identical source rows), habitat_from_scope (the location has a Depth range
-label, and every label maps to Subtidal soft sediment by the dataset's scope: SCOC is sediment;
-on the oxygen-uptake and the grain-size facts alike).
+Flags: zero_value, lon_wrapped, lat_lon_zero, coords_missing, coords_approximate, depth_missing, method_missing,
+flux_type_missing, study_marked_excluded (the cited study is not `included` in the list), duplicate_source_row (every member of
+a group of identical rows), habitat_from_scope (every ``Depth range`` label maps to subtidal soft sediment by the dataset's
+scope, on oxygen and grain-size facts alike).
 
 Usage:
     python extract.py --access-date YYYY-MM-DD
