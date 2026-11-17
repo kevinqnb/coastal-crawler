@@ -241,7 +241,8 @@ TABLES: dict[str, Table] = {
             _s("light_dark"),
             _s("incubation_type"),  # raw: intact core / in situ chamber / slurry ...
             _s("experimental_status"),  # raw: control / treatment / natural ...
-            _s("params"),  # JSON text
+            _s("params"),  # JSON text: structured method details and original values
+            _s("notes"),  # free text: the source's own comments about this method / these rows, verbatim
         ),
         ("source_key", "method_key"),
         (FK(("source_key",), "source"),),
@@ -314,6 +315,7 @@ _LIST_COLS = {
 # still demand the full column set). Extend this list, with a reason, only for a nullable column.
 OPTIONAL_COLUMNS: dict[str, tuple[str, ...]] = {
     "fact": ("value_comparator",),  # inequality sign of a censored value (e.g. "<0.02")
+    "method": ("notes",),  # the source's free-text comments, verbatim (params stays structured)
 }
 
 
