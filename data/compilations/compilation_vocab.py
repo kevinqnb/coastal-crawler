@@ -213,6 +213,23 @@ for _sol, (_t, _sub) in _RAY_TYPES.items():
         ATTRIBUTES[f"ray_oyster_{_sol}"] = _d(_t, {_sub}, {"µmol ind−1 h−1"})
 
 
+# --- group 4 (water-column sources: tang, shao, mouw, francesco, jorgensen) -----------------------------------
+# J1 attributes are shared by several compilations, so this block adds a J1 attribute or unit string by MERGING
+# into any existing declaration instead of replacing it (the branches of other groups can add the same attribute).
+def _g4_declare_j1(attr: str, subfield: str, *units: str) -> None:
+    old = ATTRIBUTES.get(attr)
+    if old is not None and (old.measurement_type != "J1" or old.subfields != frozenset({subfield})):
+        raise VocabError(f"{attr}: already declared with a different type or subfield")
+    ATTRIBUTES[attr] = _d("J1", {subfield}, (set(old.units) if old else set()) | set(units))
+
+
+_g4_declare_j1("water_nitrite", "nitrite", "μM")  # Tang (U+03BC, header spelling)
+# Tang et al. volumetric nitrification rates (two sheets -> two attributes)
+ATTRIBUTES["tang_ammonia_oxidation"] = _d("C5", {"ammonia_oxidation"}, {"nmol N L-1 d-1"})
+ATTRIBUTES["tang_nitrite_oxidation"] = _d("C5", {"nitrite_oxidation"}, {"nmol N L-1 d-1"})
+# Tang J1 values reuse water_ammonium / water_nitrate / water_o2 (same "μM" string as Chang)
+
+
 def check_attribute_decls() -> None:
     """Self-consistency of the declarations above (run by the tests)."""
     for attr, d in ATTRIBUTES.items():
