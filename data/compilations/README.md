@@ -249,9 +249,40 @@ The kind comes from the strongest evidence available: OpenAlex's work type, then
 prefix, then narrow wording in the label. It stays `unknown` when none applies. Companion-paper candidates (`paper_candidate_*`) are only shown when
 the title, an author and the year all agree. They are never in `doi_resolved`.
 
-Facts by `best_status` (2026-11-17): `paper_doi` 352,418 (50.7%), `not_a_paper` 126,869 (18.2%), `dataset_doi` 97,041 (14.0%),
-`unidentified` 89,397 (12.9%), `no_citation_record` 12,576 (1.8%), `paper_openalex_only` 11,922 (1.7%), `paper_doi_missing` 5,330 (0.8%),
-`doi_kind_unknown` 36.
+### Counts by status (2026-11-17)
+
+A citation is **viable for a pilot extraction** when it is `paper_doi` or `paper_openalex_only`: 4,223 of 5,916 citations (71.4%).
+
+| `doi_status` / `best_status` | Citations | References | Measurements |
+|---|---|---|---|
+| **`paper_doi`**: a paper, thesis, report or book with a trusted DOI | 4,126 (69.7%) | 3,898 (73.8%) | 352,418 (50.7%) |
+| **`paper_openalex_only`**: a real paper whose OpenAlex record has no DOI (use `openalex_id`) | 97 (1.6%) | 88 (1.7%) | 11,922 (1.7%) |
+| `dataset_doi`: the DOI points at a dataset, not a paper | 526 (8.9%) | 218 (4.1%) | 97,041 (14.0%) |
+| `not_a_paper`: a website, database, personal communication, unpublished work, or a dataset with no DOI | 150 (2.5%) | 130 (2.5%) | 126,869 (18.2%) |
+| `unidentified`: cannot tell what it is (usually an author-year label with no text) | 584 (9.9%) | 540 (10.2%) | 89,397 (12.9%) |
+| `paper_doi_missing`: the evidence says it is a paper, but no DOI was found | 429 (7.3%) | 403 (7.6%) | 5,330 (0.8%) |
+| `no_citation_record`: facts whose reference has no citation row (Mouw ID 2) | n/a | 1 | 12,576 (1.8%) |
+| `doi_kind_unknown`: OpenAlex types the work as "other" or a conference abstract | 4 | 2 | 36 |
+| **Total** | 5,916 | 5,280 | 695,589 |
+
+- **Missing information** (`unidentified` + `paper_doi_missing`) is 1,013 citations and 94,727 measurements (13.6%). **Not a paper**
+  (`dataset_doi` + `not_a_paper`) is 676 citations and 223,910 measurements (32.2%).
+- The 4,126 `paper_doi` citations point at **2,989 distinct paper DOIs**, because many citations repeat a paper. By evidence: 1,806 title search,
+  1,496 stored DOI verified by title, 657 stored DOI verified by author and year only, 89 trimmed-title search, 78 bibliography. Exclude
+  `stored_doi:verified_author_year` in `doi_resolution_source` if you want title-level evidence only.
+- A reference can have several citations. `best_status` is the best status among them, and `paper_dois` lists every paper DOI.
+
+```sql
+-- the papers to download: one row per DOI
+SELECT DISTINCT unnest(paper_dois) AS doi FROM reference_source_status WHERE best_status = 'paper_doi';
+
+-- measurements that have a paper pointer
+SELECT * FROM measurement_source_status WHERE best_status IN ('paper_doi', 'paper_openalex_only');
+
+-- per citation: the DOI, how it was found, and what kind of thing it is
+SELECT c.citation_id, c.doi_resolved, c.openalex_id, c.doi_resolution_source, s.reference_kind, s.kind_basis, s.doi_status
+FROM citation_dim c JOIN citation_source_status s USING (citation_id);
+```
 
 ## Still to do
 
