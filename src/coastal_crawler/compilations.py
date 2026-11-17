@@ -338,10 +338,15 @@ def empty_table(name: str) -> pd.DataFrame:
     return pd.DataFrame({c: pd.Series(dtype=object) for c in TABLES[name].col_names})
 
 
-def write_extracted(tables: dict[str, pd.DataFrame], out_dir: Path) -> None:
-    """Add the derived labels, validate, then write one parquet per table."""
-    tables = add_derived_labels(fill_optional_columns(tables))
-    validate_tables(tables)
+def write_extracted(
+    tables: dict[str, pd.DataFrame], out_dir: Path, allow_factless: frozenset[str] = frozenset()
+) -> None:
+    """Add the derived labels, validate, then write one parquet per table.
+
+    ``allow_factless``: see :func:`validate_tables`.
+    """
+    tables = add_derived_labels(fill_optional_columns(tables), allow_factless)
+    validate_tables(tables, allow_factless)
     out_dir.mkdir(parents=True, exist_ok=True)
     for name, spec in TABLES.items():
         df = tables[name][spec.col_names]
@@ -354,7 +359,9 @@ def write_extracted(tables: dict[str, pd.DataFrame], out_dir: Path) -> None:
         os.replace(tmp, out_dir / f"{name}.parquet")
 
 
-def add_derived_labels(tables: dict[str, pd.DataFrame]) -> dict[str, pd.DataFrame]:
+def add_derived_labels(
+    tables: dict[str, pd.DataFrame], allow_factless: frozenset[str] = frozenset()
+) -> dict[str, pd.DataFrame]:
     """Return ``tables`` with location's label columns derived from the label maps.
 
     An extract.py supplies the raw labels only; supplying a derived column raises.
@@ -366,13 +373,17 @@ def add_derived_labels(tables: dict[str, pd.DataFrame]) -> dict[str, pd.DataFram
     if len(tables["source"]) != 1:
         raise ContractError("an extract.py must produce exactly 1 source row")
     src = tables["source"]["source_key"].iloc[0]
-    derived = vocab.derive_location_labels(loc, src, vocab.load_label_maps())
+    derived = vocab.derive_location_labels(
+        loc, src, vocab.load_label_maps(), allow_factless=src in allow_factless
+    )
     out = dict(tables)
     out["location"] = pd.concat([loc, derived], axis=1)
     return out
 
 
-def read_extracted(in_dir: Path) -> dict[str, pd.DataFrame]:
+def read_extracted(
+    in_dir: Path, allow_factless: frozenset[str] = frozenset()
+) -> dict[str, pd.DataFrame]:
     """Read every contract table from ``in_dir``; type-check against the contract."""
     out: dict[str, pd.DataFrame] = {}
     for name, spec in TABLES.items():
@@ -390,12 +401,14 @@ def read_extracted(in_dir: Path) -> dict[str, pd.DataFrame]:
         df = con.execute(f"SELECT * FROM read_parquet('{path}')").df()
         con.close()
         out[name] = df
-    validate_tables(out)
+    validate_tables(out, allow_factless)
     # the label map may have changed since extract.py ran: stale parquet must not build
     src = out["source"]["source_key"].iloc[0]
     loc = out["location"]
     raw = loc.drop(columns=vocab.DERIVED_LOCATION_COLUMNS)
-    fresh = vocab.derive_location_labels(raw, src, vocab.load_label_maps())
+    fresh = vocab.derive_location_labels(
+        raw, src, vocab.load_label_maps(), allow_factless=src in allow_factless
+    )
     for c in vocab.DERIVED_LOCATION_COLUMNS:
         a = [list(x) if c == "modification_class" else (None if pd.isna(x) else x) for x in loc[c]]
         b = [list(x) if c == "modification_class" else (None if pd.isna(x) else x) for x in fresh[c]]
@@ -437,8 +450,14 @@ def _py(v: object, table: str, col: str) -> object:
     return v
 
 
-def validate_tables(tables: dict[str, pd.DataFrame]) -> None:
-    """Assert the contract: columns, NOT NULLs, key uniqueness, FK integrity."""
+def validate_tables(
+    tables: dict[str, pd.DataFrame], allow_factless: frozenset[str] = frozenset()
+) -> None:
+    """Assert the contract: columns, NOT NULLs, key uniqueness, FK integrity.
+
+    ``allow_factless`` names sources (``--allow-factless``) that may have an empty fact
+    table (e.g. a reference-list-only compilation). A named source that has facts raises.
+    """
     for name, spec in TABLES.items():
         if name not in tables:
             raise ContractError(f"missing table {name!r}")
@@ -473,7 +492,12 @@ def validate_tables(tables: dict[str, pd.DataFrame]) -> None:
             raise ContractError(f"{name}: source_key differs from source table")
         for fk in spec.fks:
             _check_fk(tables, name, fk)
-    if len(tables["fact"]) == 0:
+    if src in allow_factless:
+        if len(tables["fact"]) != 0:
+            raise ContractError(
+                f"{src}: named in --allow-factless but has {len(tables['fact'])} fact rows"
+            )
+    elif len(tables["fact"]) == 0:
         raise ContractError("fact table is empty")
     try:
         vocab.check_facts(tables["fact"])
@@ -709,9 +733,20 @@ def write_duckdb(
         raise
 
 
-def build_compilations(extracted_dirs: list[Path], out_path: Path) -> dict[str, int]:
-    """Read each extract.py output dir, build global tables, write the DuckDB file."""
-    per_source = [read_extracted(d) for d in extracted_dirs]
+def build_compilations(
+    extracted_dirs: list[Path], out_path: Path, allow_factless: frozenset[str] = frozenset()
+) -> dict[str, int]:
+    """Read each extract.py output dir, build global tables, write the DuckDB file.
+
+    ``allow_factless``: source_keys exempt from the empty-fact-table check and from the
+    habitat-label-map requirement (only when their location table is empty); each must be
+    one of the sources being built and must have no facts.
+    """
+    per_source = [read_extracted(d, allow_factless) for d in extracted_dirs]
+    built = {t["source"]["source_key"].iloc[0] for t in per_source}
+    unknown = allow_factless - built
+    if unknown:
+        raise ContractError(f"--allow-factless names sources not being built: {sorted(unknown)}")
     glob = assign_global_keys(per_source)
     expected = sum(len(t["fact"]) for t in per_source)
     if len(glob["fact"]) != expected:

@@ -24,9 +24,13 @@ from coastal_crawler.compilations import build_compilations
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", type=Path, required=True)
+    ap.add_argument(
+        "--allow-factless", action="append", default=[], metavar="SOURCE_KEY",
+        help="source_key allowed to have no facts (repeatable); raises if it has any",
+    )
     ap.add_argument("extracted_dirs", type=Path, nargs="+")
     args = ap.parse_args()
-    counts = build_compilations(args.extracted_dirs, args.out)
+    counts = build_compilations(args.extracted_dirs, args.out, frozenset(args.allow_factless))
     print(json.dumps(counts, indent=2))
 
 

@@ -212,6 +212,10 @@ for _sol, (_t, _sub) in _RAY_TYPES.items():
     if _sol not in ("co2", "si"):  # the oyster sheet has no CO2 or Si columns
         ATTRIBUTES[f"ray_oyster_{_sol}"] = _d(_t, {_sub}, {"µmol ind−1 h−1"})
 
+# Cloern et al. 2014 (Biogeosciences 11, Table S1): median annual phytoplankton primary production (APPP) per
+# ecosystem and measure type. Unit = the column header "g C m-2 yr-1" with the PDF's soft hyphen / U+2010 artifacts removed.
+ATTRIBUTES["cloern_appp_median"] = _d("B8", {"depth_integrated_primary_production"}, {"g C m-2 yr-1"})
+
 
 def check_attribute_decls() -> None:
     """Self-consistency of the declarations above (run by the tests)."""
@@ -432,11 +436,17 @@ def _map_scalar(raw: pd.Series, mapping: dict[str, str | None], what: str) -> pd
     return pd.Series([None if pd.isna(v) else mapping[v] for v in raw], index=raw.index, dtype=object)
 
 
-def derive_location_labels(location: pd.DataFrame, source_key: str, maps: LabelMaps) -> pd.DataFrame:
-    """The five derived label columns for a location table (aligned to its index)."""
+def derive_location_labels(
+    location: pd.DataFrame, source_key: str, maps: LabelMaps, allow_factless: bool = False
+) -> pd.DataFrame:
+    """The five derived label columns for a location table (aligned to its index).
+
+    ``allow_factless`` (the build's explicit ``--allow-factless`` for this source) waives the
+    "no habitat label map declared" error, and only when the location table is empty.
+    """
     out = pd.DataFrame(index=location.index)
     feeders = {m: [k for k in maps if k[0] == source_key and k[2] == m] for m in _MAPPED_VOCAB}
-    if not feeders["habitat"]:
+    if not feeders["habitat"] and not (allow_factless and len(location) == 0):
         raise VocabError(f"{source_key}: no habitat label map declared")
     for mc in ("habitat", "setting", "salinity_zone"):
         col = pd.Series([None] * len(location), index=location.index, dtype=object)
