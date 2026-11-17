@@ -191,7 +191,8 @@ def test_registries_known_answer():
           "sd_converted_from_se", "converted_by_source", "potential_rate", "calculated_by_source"}
     assert (built | c2) <= set(v.FLAGS)
     assert {"depthseries_core_not_in_cores", "empty_row", "no_seagrass_measurement",
-            "below_detection_limit", "not_measured", "units_missing", "no_density"} == set(v.SKIP_REASONS)
+            "below_detection_limit", "not_measured", "units_missing", "no_density",
+            "unparseable_value"} == set(v.SKIP_REASONS)
     for name, doc in {**v.FLAGS, **v.SKIP_REASONS}.items():
         assert name.islower() and name.replace("_", "").isalnum() and doc.strip()
 
