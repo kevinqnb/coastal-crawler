@@ -114,7 +114,7 @@ def test_factless_build_needs_the_flag(tmp_path):
     ents = rb.parse_entries(["Adame, M. F., and J. Herrera. 2013. T. J 1:1-2.", "Almeida, R. 2005. Ecologia. Dissertation. U."])
     tables, report = rb.build_tables(ents, "2026-11-15")
     assert report["facts"] == 0 and report["references"] == 2 and report["citations"] == 2
-    assert tables["source"].license.isna().all()
+    assert list(tables["source"].license) == ["CC BY 3.0"]
     with pytest.raises(VocabError, match="no habitat label map declared"):  # the first of the two exemptions to be refused
         write_extracted(tables, tmp_path / "no")
     out = tmp_path / "ex"

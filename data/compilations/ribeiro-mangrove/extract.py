@@ -52,7 +52,7 @@ SOURCE_KEY = "ribeiro-mangrove"
 SOURCE_NAME = "Ribeiro et al. 2019 Appendix S1: studies used to build the neotropical mangrove litterfall model (reference list only)"
 SOURCE_DOI = "10.1002/ecs2.2841"
 SOURCE_VERSION = "Ecosphere 10(8) e02841, Appendix S1 (PDF created 2019-07-23); no version number exists"
-SOURCE_LICENSE = None  # the PDF states none; the plan says "per Ecosphere (verify)" and no lookup was possible
+SOURCE_LICENSE = "CC BY 3.0"  # decided by the user; the PDF itself states no license
 DATA_FILE = "ecs22841-sup-0001-appendixs1.pdf"
 CITATION = (
     "Ribeiro, R.A., Rovai, A.S., Twilley, R.R., Castaneda-Moya, E. (2019): Spatial variability of mangrove primary "
@@ -158,7 +158,7 @@ def build_tables(entries: list[dict], access_date: str) -> tuple[dict[str, pd.Da
         "source_key": SOURCE_KEY, "name": SOURCE_NAME, "version": SOURCE_VERSION, "doi": SOURCE_DOI,
         "access_date": access_date, "license": SOURCE_LICENSE,
         "notes": CITATION + ". Reference list only; no measurements (Tables S1 and S2 are the authors' model output and are not "
-                 "loaded). The PDF states no license; none is recorded.",
+                 "loaded). The PDF states no license; CC BY 3.0 is the license decided for it.",
     }])
     reference = pd.DataFrame({"source_key": SOURCE_KEY, "reference_key": keys})
     citation = pd.DataFrame({

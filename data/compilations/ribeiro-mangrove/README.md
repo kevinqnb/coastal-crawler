@@ -6,9 +6,7 @@ the neotropics.* Ecosphere 10(8), e02841, https://doi.org/10.1002/ecs2.2841. App
 
 - **Version:** none exists; `Ecosphere 10(8) e02841, Appendix S1 (PDF created 2019-07-23)` is recorded (the creation date is the
   PDF's own metadata).
-- **Access date:** 2026-11-15. **License:** **not recorded** (NULL). The PDF states none; the plan said "per Ecosphere (verify)" and
-  no lookup was possible in this session. To be filled by the reconciler once the Ecosphere / Wiley license for Appendix S1 is
-  checked.
+- **Access date:** 2026-11-15. **License:** CC BY 3.0 (decided by the user; the PDF itself states none).
 - **Raw file:** 13 PDF pages: page 1 front matter (authors and affiliations), page 2 Tables S1 (AIC model coefficients) and S2
   (ANOVA) of the authors' litterfall model, pages 3-13 "List of studies used to build the litterfall model for mangroves in the
   neotropics".
